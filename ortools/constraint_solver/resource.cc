@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 // This file contains implementations of several resource constraints.
 // The implemented constraints are:
 // * Disjunctive: forces a set of intervals to be non-overlapping
@@ -22,21 +21,21 @@
 // on a set of interval variables.
 
 #include <algorithm>
-#include <unordered_map>
 #include <queue>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
-#include "ortools/base/stringprintf.h"
-#include "ortools/base/join.h"
-#include "ortools/base/join.h"
-#include "ortools/base/stl_util.h"
 #include "ortools/base/mathutil.h"
+#include "ortools/base/stl_util.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/bitset.h"
@@ -116,8 +115,8 @@ struct CumulativeTask {
   void WhenAnything(Demon* const demon) { interval->WhenAnything(demon); }
 
   std::string DebugString() const {
-    return StringPrintf("Task{ %s, demand: %" GG_LL_FORMAT "d }",
-                        interval->DebugString().c_str(), demand);
+    return absl::StrFormat("Task{ %s, demand: %d }", interval->DebugString(),
+                           demand);
   }
 
   IntervalVar* interval;
@@ -145,9 +144,8 @@ struct VariableCumulativeTask {
   }
 
   std::string DebugString() const {
-    return StringPrintf("Task{ %s, demand: %s }",
-                        interval->DebugString().c_str(),
-                        demand->DebugString().c_str());
+    return absl::StrFormat("Task{ %s, demand: %s }", interval->DebugString(),
+                           demand->DebugString());
   }
 
   IntervalVar* const interval;
@@ -177,11 +175,6 @@ struct ThetaNode {
     // our case, we use StartMin() + DurationMin() for the earliest completion
     // time of a task, which should not break any assumptions, but may give
     // bounds that are too loose.
-    // LOG_IF_FIRST_N(WARNING,
-    //                (interval->DurationMin() != interval->DurationMax()), 1)
-    //     << "You are using the Theta-tree on tasks having variable durations. "
-    //        "This may lead to unexpected results, such as discarding valid "
-    //        "solutions or allowing invalid ones.";
   }
 
   void Compute(const ThetaNode& left, const ThetaNode& right) {
@@ -195,7 +188,7 @@ struct ThetaNode {
   }
 
   std::string DebugString() const {
-    return StrCat("ThetaNode{ p = ", total_processing,
+    return absl::StrCat("ThetaNode{ p = ", total_processing,
                         ", e = ", total_ect < 0LL ? -1LL : total_ect, " }");
   }
 
@@ -451,7 +444,7 @@ class NotLast {
   NotLast(Solver* const solver, const std::vector<IntervalVar*>& intervals,
           bool mirror, bool strict);
 
-  ~NotLast() { STLDeleteElements(&by_start_min_); }
+  ~NotLast() { gtl::STLDeleteElements(&by_start_min_); }
 
   bool Propagate();
 
@@ -551,7 +544,9 @@ class EdgeFinderAndDetectablePrecedences {
   EdgeFinderAndDetectablePrecedences(Solver* const solver,
                                      const std::vector<IntervalVar*>& intervals,
                                      bool mirror, bool strict);
-  ~EdgeFinderAndDetectablePrecedences() { STLDeleteElements(&by_start_min_); }
+  ~EdgeFinderAndDetectablePrecedences() {
+    gtl::STLDeleteElements(&by_start_min_);
+  }
   int64 size() const { return by_start_min_.size(); }
   IntervalVar* interval(int index) { return by_start_min_[index]->interval; }
   void UpdateEst();
@@ -919,11 +914,10 @@ class RankedPropagator : public Constraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf(
+    return absl::StrFormat(
         "RankedPropagator([%s], nexts = [%s], intervals = [%s])",
-        partial_sequence_.DebugString().c_str(),
-        JoinDebugStringPtr(nexts_, ", ").c_str(),
-        JoinDebugStringPtr(intervals_, ", ").c_str());
+        partial_sequence_.DebugString(), JoinDebugStringPtr(nexts_, ", "),
+        JoinDebugStringPtr(intervals_, ", "));
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -1071,8 +1065,8 @@ class FullDisjunctiveConstraint : public DisjunctiveConstraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("FullDisjunctiveConstraint([%s], %i)",
-                        JoinDebugStringPtr(intervals_, ", ").c_str(), strict_);
+    return absl::StrFormat("FullDisjunctiveConstraint([%s], %i)",
+                           JoinDebugStringPtr(intervals_, ", "), strict_);
   }
 
   const std::vector<IntVar*>& nexts() const override { return nexts_; }
@@ -1142,8 +1136,7 @@ class FullDisjunctiveConstraint : public DisjunctiveConstraint {
       if (var->MayBePerformed()) {
         const int64 duration_min = var->DurationMin();
         time_slacks_[i + 1] = s->MakeIntVar(
-            duration_min, horizon,
-            StringPrintf("time_slacks(%" GG_LL_FORMAT "d)", i + 1));
+            duration_min, horizon, absl::StrFormat("time_slacks(%d)", i + 1));
         // TODO(user): Check SafeStartExpr();
         time_cumuls_[i + 1] = var->SafeStartExpr(var->StartMin())->Var();
         if (var->DurationMax() != duration_min) {
@@ -1152,7 +1145,7 @@ class FullDisjunctiveConstraint : public DisjunctiveConstraint {
         }
       } else {
         time_slacks_[i + 1] = s->MakeIntVar(
-            0, horizon, StringPrintf("time_slacks(%" GG_LL_FORMAT "d)", i + 1));
+            0, horizon, absl::StrFormat("time_slacks(%d)", i + 1));
         time_cumuls_[i + 1] = s->MakeIntConst(horizon);
       }
     }
@@ -1408,8 +1401,8 @@ class EdgeFinder : public Constraint {
         has_zero_demand_tasks_(true) {}
 
   ~EdgeFinder() override {
-    STLDeleteElements(&tasks_);
-    STLDeleteValues(&update_map_);
+    gtl::STLDeleteElements(&tasks_);
+    gtl::STLDeleteValues(&update_map_);
   }
 
   void Post() override {
@@ -1442,7 +1435,7 @@ class EdgeFinder : public Constraint {
 
  private:
   UpdatesForADemand* GetOrMakeUpdate(int64 demand_min) {
-    UpdatesForADemand* update = FindPtrOrNull(update_map_, demand_min);
+    UpdatesForADemand* update = gtl::FindPtrOrNull(update_map_, demand_min);
     if (update == nullptr) {
       update = new UpdatesForADemand(tasks_.size());
       update_map_[demand_min] = update;
@@ -1653,12 +1646,10 @@ class EdgeFinder : public Constraint {
   // Stack of updates to the new start min to do.
   std::vector<std::pair<IntervalVar*, int64>> start_min_update_;
 
-  typedef std::unordered_map<int64, UpdatesForADemand*> UpdateMap;
-
   // update_map_[d][i] is an integer such that if a task
   // whose demand is d cannot end before by_end_max_[i], then it cannot start
   // before update_map_[d][i].
-  UpdateMap update_map_;
+  absl::flat_hash_map<int64, UpdatesForADemand*> update_map_;
 
   // Has one task a demand min == 0
   Rev<bool> has_zero_demand_tasks_;
@@ -1722,7 +1713,7 @@ class CumulativeTimeTable : public Constraint {
     profile_unique_time_.reserve(profile_max_size);
   }
 
-  ~CumulativeTimeTable() override { STLDeleteElements(&by_start_min_); }
+  ~CumulativeTimeTable() override { gtl::STLDeleteElements(&by_start_min_); }
 
   void InitialPropagate() override {
     BuildProfile();
@@ -1922,7 +1913,7 @@ class TimeTableSync : public Constraint {
     demands_.reserve(num_tasks_);
   }
 
-  ~TimeTableSync() override { STLDeleteElements(&tasks_); }
+  ~TimeTableSync() override { gtl::STLDeleteElements(&tasks_); }
 
   void InitialPropagate() override {
     // Reset data structures.
@@ -2230,9 +2221,9 @@ class CumulativeConstraint : public Constraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("CumulativeConstraint([%s], %s)",
-                        JoinDebugString(tasks_, ", ").c_str(),
-                        capacity_->DebugString().c_str());
+    return absl::StrFormat("CumulativeConstraint([%s], %s)",
+                           JoinDebugString(tasks_, ", "),
+                           capacity_->DebugString());
   }
 
  private:
@@ -2278,7 +2269,7 @@ class CumulativeConstraint : public Constraint {
       if (high_demand_intervals.size() >= 2) {
         // If there are less than 2 such intervals, the constraint would do
         // nothing
-        std::string seq_name = StrCat(name(), "-HighDemandSequence");
+        std::string seq_name = absl::StrCat(name(), "-HighDemandSequence");
         constraint = solver()->MakeDisjunctiveConstraint(high_demand_intervals,
                                                          seq_name);
       }
@@ -2369,7 +2360,8 @@ class VariableDemandCumulativeConstraint : public Constraint {
   VariableDemandCumulativeConstraint(Solver* const s,
                                      const std::vector<IntervalVar*>& intervals,
                                      const std::vector<IntVar*>& demands,
-                                     IntVar* const capacity, const std::string& name)
+                                     IntVar* const capacity,
+                                     const std::string& name)
       : Constraint(s),
         capacity_(capacity),
         intervals_(intervals),
@@ -2418,9 +2410,9 @@ class VariableDemandCumulativeConstraint : public Constraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("VariableDemandCumulativeConstraint([%s], %s)",
-                        JoinDebugString(tasks_, ", ").c_str(),
-                        capacity_->DebugString().c_str());
+    return absl::StrFormat("VariableDemandCumulativeConstraint([%s], %s)",
+                           JoinDebugString(tasks_, ", "),
+                           capacity_->DebugString());
   }
 
  private:
@@ -2467,7 +2459,8 @@ class VariableDemandCumulativeConstraint : public Constraint {
       if (high_demand_intervals.size() >= 2) {
         // If there are less than 2 such intervals, the constraint would do
         // nothing
-        const std::string seq_name = StrCat(name(), "-HighDemandSequence");
+        const std::string seq_name =
+            absl::StrCat(name(), "-HighDemandSequence");
         constraint = solver()->MakeStrictDisjunctiveConstraint(
             high_demand_intervals, seq_name);
       }
@@ -2612,7 +2605,8 @@ Constraint* Solver::MakeCumulative(const std::vector<IntervalVar*>& intervals,
 
 Constraint* Solver::MakeCumulative(const std::vector<IntervalVar*>& intervals,
                                    const std::vector<int64>& demands,
-                                   IntVar* const capacity, const std::string& name) {
+                                   IntVar* const capacity,
+                                   const std::string& name) {
   CHECK_EQ(intervals.size(), demands.size());
   for (int i = 0; i < intervals.size(); ++i) {
     CHECK_GE(demands[i], 0);
@@ -2623,7 +2617,8 @@ Constraint* Solver::MakeCumulative(const std::vector<IntervalVar*>& intervals,
 
 Constraint* Solver::MakeCumulative(const std::vector<IntervalVar*>& intervals,
                                    const std::vector<int>& demands,
-                                   IntVar* const capacity, const std::string& name) {
+                                   IntVar* const capacity,
+                                   const std::string& name) {
   return MakeCumulative(intervals, ToInt64Vector(demands), capacity, name);
 }
 
@@ -2649,7 +2644,8 @@ Constraint* Solver::MakeCumulative(const std::vector<IntervalVar*>& intervals,
 
 Constraint* Solver::MakeCumulative(const std::vector<IntervalVar*>& intervals,
                                    const std::vector<IntVar*>& demands,
-                                   IntVar* const capacity, const std::string& name) {
+                                   IntVar* const capacity,
+                                   const std::string& name) {
   CHECK_EQ(intervals.size(), demands.size());
   for (int i = 0; i < intervals.size(); ++i) {
     CHECK_GE(demands[i]->Min(), 0);

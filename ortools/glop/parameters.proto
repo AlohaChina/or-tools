@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -22,8 +22,19 @@ syntax = "proto2";
 
 package operations_research.glop;
 
-// next id = 57
+// next id = 59
 message GlopParameters {
+
+  // Supported algorithms for scaling:
+  // EQUILIBRATION - progressive scaling by row and column norms until the
+  // marginal difference passes below a threshold.
+  // LINEAR_PROGRAM - finding optimal scale factors using
+  // a linear program in the log scale.
+  enum ScalingAlgorithm {
+    DEFAULT = 0;
+    EQUILIBRATION = 1;
+    LINEAR_PROGRAM = 2;
+  }
 
   // Like a Boolean with an extra value to let the algorithm decide what is the
   // best choice.
@@ -68,8 +79,15 @@ message GlopParameters {
     // GLPK uses by default. Both algorithm produce a triangular initial basis,
     // however the heuristics used are not exactly the same.
     TRIANGULAR = 2;
+
+    // Use a version of Maros's triangular feasibility crash
+    // https://books.google.fr/books?isbn=1461502578
+    // Chapter 9.8.2.1
+    MAROS = 3;
   }
 
+
+  optional ScalingAlgorithm scaling_method = 57 [default = EQUILIBRATION];
 
   // PricingRule to use during the feasibility phase.
   optional PricingRule feasibility_rule = 1 [default = STEEPEST_EDGE];
@@ -88,11 +106,13 @@ message GlopParameters {
   // the second paper from Ping-Qi Pan cited in primal_pricing.h
   optional bool use_nested_pricing = 5 [default = true];
 
-  // We estimate the factorization accuracy of B using the solution of the
-  // LeftSolve() that we need to compute during the pricing step. If our
-  // accuracy tests fall below this threshold, launch a refactorization.
-  // TODO(user): implement this.
-  optional double refactorization_threshold = 6 [default = 1e-8];
+  // We estimate the factorization accuracy of B during each pivot by using
+  // the fact that we can compute the pivot coefficient in two ways:
+  // - From direction[leaving_row].
+  // - From update_row[entering_column].
+  // If the two values have a relative difference above this threshold, we
+  // trigger a refactorization.
+  optional double refactorization_threshold = 6 [default = 1e-9];
 
   // We estimate the accuracy of the iteratively computed reduced costs. If
   // it falls below this threshold, we reinitialize them from scratch. Note
@@ -126,11 +146,11 @@ message GlopParameters {
   //
   // Note that this value can temporarily increase during the execution of the
   // algorithm if the estimated precision of the reduced costs is higher than
-  // this tolerance. Note also that we always scale the costs so that the
-  // maximum cost magnitude is 1.0 (in the presolve step).
+  // this tolerance. Note also that we scale the costs (in the presolve step) so
+  // that the cost magnitude range contains one.
   //
   // This is also known as the optimality tolerance in other solvers.
-  optional double dual_feasibility_tolerance = 11 [default = 1e-10];
+  optional double dual_feasibility_tolerance = 11 [default = 1e-8];
 
   // During the primal simplex (resp. dual simplex), the coefficients of the
   // direction (resp. update row) with a magnitude lower than this threshold are
@@ -225,6 +245,10 @@ message GlopParameters {
   // don't move the primal/dual values within their bounds and leave them
   // untouched.
   optional bool provide_strong_optimal_guarantee = 24 [default = true];
+
+  // If true, the internal API will change the return status to imprecise if the
+  // solution does not respect the internal tolerances.
+  optional bool change_status_to_imprecise = 58 [default = true];
 
   // When the solution of phase II is imprecise, we re-run the phase II with the
   // opposite algorithm from that imprecise solution (i.e., if primal or dual
@@ -356,15 +380,6 @@ message GlopParameters {
   // Number of threads in the OMP parallel sections. If left to 1, the code will
   // not create any OMP threads and will remain single-threaded.
   optional int32 num_omp_threads = 44 [default = 1];
-
-  // Whether or not use Solow-Halim preprocessor. It tries to begin the phase 1
-  // with a closer point to the optimal solution.
-  //
-  // Reference: Improving the Efficiency of the Simplex Algorithm Based on a
-  // Geometric Explanation of Phase 1
-  // https://weatherhead.case.edu/faculty/research/library/detail?id=12128593921
-  // DOI: 10.1504/IJOR.2009.025701
-  optional bool use_solowhalim = 46 [default = false];
 
   // When this is true, then the costs are randomly perturbed before the dual
   // simplex is even started. This has been shown to improve the dual simplex

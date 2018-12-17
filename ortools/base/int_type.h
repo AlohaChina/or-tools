@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -145,7 +145,6 @@
 #define OR_TOOLS_BASE_INT_TYPE_H_
 
 #include <stddef.h>
-#include <unordered_map>
 #include <iosfwd>
 #include <ostream>  // NOLINT
 

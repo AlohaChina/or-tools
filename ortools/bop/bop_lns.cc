@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,10 +17,10 @@
 #include <string>
 #include <vector>
 
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/stringprintf.h"
+#include "absl/memory/memory.h"
 #include "google/protobuf/text_format.h"
 #include "ortools/base/cleanup.h"
+#include "ortools/base/commandlineflags.h"
 #include "ortools/base/stl_util.h"
 #include "ortools/glop/lp_solver.h"
 #include "ortools/lp_data/lp_print_utils.h"
@@ -70,13 +70,13 @@ BopOptimizerBase::Status BopCompleteLNSOptimizer::SynchronizeIfNeeded(
   state_update_stamp_ = problem_state.update_stamp();
 
   // Load the current problem to the solver.
-  sat_solver_.reset(new sat::SatSolver());
+  sat_solver_ = absl::make_unique<sat::SatSolver>();
   const BopOptimizerBase::Status status =
       LoadStateProblemToSatSolver(problem_state, sat_solver_.get());
   if (status != BopOptimizerBase::CONTINUE) return status;
 
   // Add the constraint that forces the solver to look for a solution
-  // at a distance <= num_relaxed_vars from the curent one. Note that not all
+  // at a distance <= num_relaxed_vars from the current one. Note that not all
   // the terms appear in this constraint.
   //
   // TODO(user): if the current solution didn't change, there is no need to
@@ -127,10 +127,11 @@ BopOptimizerBase::Status BopCompleteLNSOptimizer::Optimize(
 
   CHECK(sat_solver_ != nullptr);
   const double initial_dt = sat_solver_->deterministic_time();
-  auto advance_dt = ::operations_research::util::MakeCleanup([initial_dt, this, &time_limit]() {
-    time_limit->AdvanceDeterministicTime(sat_solver_->deterministic_time() -
-                                         initial_dt);
-  });
+  auto advance_dt = ::operations_research::util::MakeCleanup(
+      [initial_dt, this, &time_limit]() {
+        time_limit->AdvanceDeterministicTime(sat_solver_->deterministic_time() -
+                                             initial_dt);
+      });
 
   // Set the parameters for this run.
   // TODO(user): Because of this, we actually loose the perfect continuity
@@ -144,7 +145,7 @@ BopOptimizerBase::Status BopCompleteLNSOptimizer::Optimize(
 
   sat_solver_->SetParameters(sat_params);
   const sat::SatSolver::Status sat_status = sat_solver_->Solve();
-  if (sat_status == sat::SatSolver::MODEL_SAT) {
+  if (sat_status == sat::SatSolver::FEASIBLE) {
     SatAssignmentToBopSolution(sat_solver_->Assignment(),
                                &learned_info->solution);
     return BopOptimizerBase::SOLUTION_FOUND;
@@ -239,8 +240,8 @@ BopOptimizerBase::Status BopAdaptiveLNSOptimizer::Optimize(
 
   // Set-up a sat_propagator_ cleanup task to catch all the exit cases.
   const double initial_dt = sat_propagator_->deterministic_time();
-  auto sat_propagator_cleanup =
-      ::operations_research::util::MakeCleanup([initial_dt, this, &learned_info, &time_limit]() {
+  auto sat_propagator_cleanup = ::operations_research::util::MakeCleanup(
+      [initial_dt, this, &learned_info, &time_limit]() {
         if (!sat_propagator_->IsModelUnsat()) {
           sat_propagator_->SetAssumptionLevel(0);
           sat_propagator_->RestoreSolverToAssumptionLevel();
@@ -298,7 +299,7 @@ BopOptimizerBase::Status BopAdaptiveLNSOptimizer::Optimize(
           sat_propagator_->CurrentDecisionLevel());
 
       const sat::SatSolver::Status status = sat_propagator_->Solve();
-      if (status == sat::SatSolver::MODEL_SAT) {
+      if (status == sat::SatSolver::FEASIBLE) {
         adaptive_difficulty_.IncreaseParameter();
         SatAssignmentToBopSolution(sat_propagator_->Assignment(),
                                    &learned_info->solution);
@@ -385,7 +386,7 @@ BopOptimizerBase::Status BopAdaptiveLNSOptimizer::Optimize(
     // Solve the local problem.
     const sat::SatSolver::Status status = sat_solver.Solve();
     time_limit->AdvanceDeterministicTime(sat_solver.deterministic_time());
-    if (status == sat::SatSolver::MODEL_SAT) {
+    if (status == sat::SatSolver::FEASIBLE) {
       // We found a solution! abort now.
       SatAssignmentToBopSolution(sat_solver.Assignment(),
                                  &learned_info->solution);
@@ -434,7 +435,7 @@ void ObjectiveBasedNeighborhood::GenerateNeighborhood(
   std::vector<sat::Literal> candidates =
       ObjectiveVariablesAssignedToTheirLowCostValue(problem_state,
                                                     objective_terms_);
-  std::random_shuffle(candidates.begin(), candidates.end(), *random_);
+  std::shuffle(candidates.begin(), candidates.end(), *random_);
 
   // We will use the sat_propagator to fix some variables as long as the number
   // of propagated variables in the solver is under our target.
@@ -464,7 +465,7 @@ void ConstraintBasedNeighborhood::GenerateNeighborhood(
   const int num_constraints = problem.constraints_size();
   std::vector<int> ct_ids(num_constraints, 0);
   for (int ct_id = 0; ct_id < num_constraints; ++ct_id) ct_ids[ct_id] = ct_id;
-  std::random_shuffle(ct_ids.begin(), ct_ids.end(), *random_);
+  std::shuffle(ct_ids.begin(), ct_ids.end(), *random_);
 
   // Mark that we want to relax all the variables of these constraints as long
   // as the number of relaxed variable is lower than our difficulty target.

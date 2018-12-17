@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -18,6 +18,7 @@
 #endif
 #endif
 #if defined(_MSC_VER)
+#include <Winsock2.h>
 #include <windows.h>
 #define PATH_MAX 4096
 #else
@@ -78,7 +79,8 @@ int32 ACMRandom::HostnamePidTimeSeed() {
   }
   const int namelen = strlen(name);
   for (size_t i = 0; i < sizeof(uint32) * 3; ++i) {
-    name[namelen + i] = '\0';  // so we mix 0's once we get to end-of-std::string
+    name[namelen + i] =
+        '\0';  // so we mix 0's once we get to end-of-std::string
   }
 #if defined(__GNUC__)
   uint32 a = getpid();

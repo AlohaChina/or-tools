@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,9 +16,10 @@
 #include <iostream>  // NOLINT
 
 #include <string>
+#include "absl/strings/str_format.h"
+#include "absl/synchronization/mutex.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/flatzinc/logging.h"
@@ -52,8 +53,8 @@ void MonoThreadReporting::OnSatSolution(int thread_id,
   IncrementSolutions();
 }
 
-void MonoThreadReporting::OnOptimizeSolution(int thread_id, int64 value,
-                                             const std::string& solution_string) {
+void MonoThreadReporting::OnOptimizeSolution(
+    int thread_id, int64 value, const std::string& solution_string) {
   best_objective_ = value;
   if (ShouldPrintAllSolutions() || MaxNumSolutions() > 1) {
     Print(thread_id, solution_string);
@@ -63,7 +64,8 @@ void MonoThreadReporting::OnOptimizeSolution(int thread_id, int64 value,
   IncrementSolutions();
 }
 
-void MonoThreadReporting::Log(int thread_id, const std::string& final_output) const {
+void MonoThreadReporting::Log(int thread_id,
+                              const std::string& final_output) const {
   FZLOG << final_output << FZENDL;
 }
 
@@ -102,8 +104,8 @@ SilentMonoThreadReporting::SilentMonoThreadReporting(bool print_all,
 
 SilentMonoThreadReporting::~SilentMonoThreadReporting() {}
 
-void SilentMonoThreadReporting::Init(int thread_id, const std::string& init_string) {
-}
+void SilentMonoThreadReporting::Init(int thread_id,
+                                     const std::string& init_string) {}
 
 void SilentMonoThreadReporting::Log(int thread_id,
                                     const std::string& final_output) const {}
@@ -131,8 +133,7 @@ class MtOptimizeVar : public OptimizeVar {
       if (verbose_) {
         report_->Log(
             thread_id_,
-            StringPrintf("Polling improved objective %" GG_LL_FORMAT "d",
-                         polled_best));
+            absl::StrFormat("Polling improved objective %d", polled_best));
       }
       best_ = polled_best;
     }
@@ -190,7 +191,7 @@ MultiThreadReporting::MultiThreadReporting(bool print_all, int num_solutions,
 MultiThreadReporting::~MultiThreadReporting() {}
 
 void MultiThreadReporting::Init(int thread_id, const std::string& init_string) {
-  MutexLock lock(&mutex_);
+  absl::MutexLock lock(&mutex_);
   if (thread_id == 0) {
     FZLOG << init_string << FZENDL;
   }
@@ -200,7 +201,7 @@ void MultiThreadReporting::Init(int thread_id, const std::string& init_string) {
 }
 
 void MultiThreadReporting::OnSearchStart(int thread_id, Type type) {
-  MutexLock lock(&mutex_);
+  absl::MutexLock lock(&mutex_);
   if (type_ == UNDEF) {
     type_ = type;
     if (type_ == MAXIMIZE) {
@@ -213,7 +214,7 @@ void MultiThreadReporting::OnSearchStart(int thread_id, Type type) {
 
 void MultiThreadReporting::OnSatSolution(int thread_id,
                                          const std::string& solution_string) {
-  MutexLock lock(&mutex_);
+  absl::MutexLock lock(&mutex_);
   if (NumSolutions() < MaxNumSolutions() || ShouldPrintAllSolutions()) {
     if (verbose_) {
       LogNoLock(thread_id, "solution found");
@@ -224,9 +225,9 @@ void MultiThreadReporting::OnSatSolution(int thread_id,
   IncrementSolutions();
 }
 
-void MultiThreadReporting::OnOptimizeSolution(int thread_id, int64 value,
-                                              const std::string& solution_string) {
-  MutexLock lock(&mutex_);
+void MultiThreadReporting::OnOptimizeSolution(
+    int thread_id, int64 value, const std::string& solution_string) {
+  absl::MutexLock lock(&mutex_);
   if (!should_finish_) {
     switch (type_) {
       case MINIMIZE: {
@@ -234,10 +235,8 @@ void MultiThreadReporting::OnOptimizeSolution(int thread_id, int64 value,
           best_objective_ = value;
           IncrementSolutions();
           if (verbose_) {
-            LogNoLock(
-                thread_id,
-                StringPrintf("solution found with value %" GG_LL_FORMAT "d",
-                             value));
+            LogNoLock(thread_id,
+                      absl::StrFormat("solution found with value %d", value));
           }
           if (ShouldPrintAllSolutions() || MaxNumSolutions() > 1) {
             Print(thread_id, solution_string);
@@ -253,10 +252,8 @@ void MultiThreadReporting::OnOptimizeSolution(int thread_id, int64 value,
           best_objective_ = value;
           IncrementSolutions();
           if (verbose_) {
-            LogNoLock(
-                thread_id,
-                StringPrintf("solution found with value %" GG_LL_FORMAT "d",
-                             value));
+            LogNoLock(thread_id,
+                      absl::StrFormat("solution found with value %d", value));
           }
           if (ShouldPrintAllSolutions() || MaxNumSolutions() > 1) {
             Print(thread_id, solution_string);
@@ -273,29 +270,30 @@ void MultiThreadReporting::OnOptimizeSolution(int thread_id, int64 value,
   }
 }
 
-void MultiThreadReporting::Log(int thread_id, const std::string& message) const {
-  MutexLock lock(&mutex_);
+void MultiThreadReporting::Log(int thread_id,
+                               const std::string& message) const {
+  absl::MutexLock lock(&mutex_);
   FZLOG << message << FZENDL;
 }
 
-void MultiThreadReporting::Print(int thread_id, const std::string& message) const {
+void MultiThreadReporting::Print(int thread_id,
+                                 const std::string& message) const {
   std::cout << message << std::endl;
 }
 bool MultiThreadReporting::ShouldFinish() const {
-  MutexLock lock(&mutex_);
+  absl::MutexLock lock(&mutex_);
   return should_finish_;
 }
 
 void MultiThreadReporting::OnSearchEnd(int thread_id, bool interrupted) {
-  MutexLock lock(&mutex_);
+  absl::MutexLock lock(&mutex_);
   if (verbose_) {
     LogNoLock(thread_id, "exiting");
   }
   if (!last_solution_.empty()) {
     if (verbose_) {
-      LogNoLock(last_thread_,
-                StringPrintf("solution found with value %" GG_LL_FORMAT "d",
-                             best_objective_));
+      LogNoLock(last_thread_, absl::StrFormat("solution found with value %d",
+                                              best_objective_));
     }
     Print(thread_id, last_solution_);
     last_solution_.clear();
@@ -307,7 +305,7 @@ void MultiThreadReporting::OnSearchEnd(int thread_id, bool interrupted) {
 }
 
 int64 MultiThreadReporting::BestSolution() const {
-  MutexLock lock(&mutex_);
+  absl::MutexLock lock(&mutex_);
   return best_objective_;
 }
 
@@ -323,11 +321,12 @@ SearchLimit* MultiThreadReporting::CreateLimit(Solver* s, int thread_id) const {
 }
 
 bool MultiThreadReporting::Interrupted() const {
-  MutexLock lock(&mutex_);
+  absl::MutexLock lock(&mutex_);
   return interrupted_;
 }
 
-void MultiThreadReporting::LogNoLock(int thread_id, const std::string& message) {
+void MultiThreadReporting::LogNoLock(int thread_id,
+                                     const std::string& message) {
   FZLOG << "%%  thread " << thread_id << ": " << message << FZENDL;
 }
 

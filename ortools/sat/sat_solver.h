@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -20,33 +20,31 @@
 #define OR_TOOLS_SAT_SAT_SOLVER_H_
 
 #include <functional>
-#include <unordered_map>
 #include <limits>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/types/span.h"
+#include "ortools/base/hash.h"
+#include "ortools/base/int_type.h"
+#include "ortools/base/int_type_indexed_vector.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
 #include "ortools/base/timer.h"
-#include "ortools/base/span.h"
-#include "ortools/base/int_type.h"
-#include "ortools/base/int_type_indexed_vector.h"
-#include "ortools/base/hash.h"
 #include "ortools/sat/clause.h"
-#include "ortools/sat/drat.h"
+#include "ortools/sat/drat_proof_handler.h"
 #include "ortools/sat/model.h"
 #include "ortools/sat/pb_constraint.h"
+#include "ortools/sat/restart.h"
 #include "ortools/sat/sat_base.h"
+#include "ortools/sat/sat_decision.h"
 #include "ortools/sat/sat_parameters.pb.h"
-#include "ortools/util/bitset.h"
-#include "ortools/util/random_engine.h"
-#include "ortools/util/running_stat.h"
 #include "ortools/util/stats.h"
 #include "ortools/util/time_limit.h"
-#include "ortools/base/adjustable_priority_queue.h"
 
 namespace operations_research {
 namespace sat {
@@ -66,8 +64,10 @@ class SatSolver {
   // Parameters management. Note that calling SetParameters() will reset the
   // value of many heuristics. For instance:
   // - The restart strategy will be reinitialized.
-  // - The random seed will be reset to the value given in parameters.
-  // - The time limit will be reset and counted from there.
+  // - The random seed and random generator will be reset to the value given in
+  //   parameters.
+  // - The global TimeLimit singleton will be reset and time will be
+  //   counted from this call.
   void SetParameters(const SatParameters& parameters);
   const SatParameters& parameters() const;
 
@@ -103,7 +103,7 @@ class SatSolver {
   // be UNSAT.
   //
   // TODO(user): Rename this to AddClause().
-  bool AddProblemClause(const std::vector<Literal>& literals);
+  bool AddProblemClause(absl::Span<const Literal> literals);
 
   // Adds a pseudo-Boolean constraint to the problem. Returns false if the
   // problem is detected to be UNSAT. If the constraint is always true, this
@@ -128,38 +128,38 @@ class SatSolver {
   // Thanks to this function, a client can safely ignore the return value of any
   // Add*() functions. If one of them return false, then IsModelUnsat() will
   // return true.
+  //
+  // TODO(user): Rename to ModelIsUnsat().
   bool IsModelUnsat() const { return is_model_unsat_; }
 
   // Adds and registers the given propagator with the sat solver. Note that
-  // during propagation, they will be called in the order they where added.
+  // during propagation, they will be called in the order they were added.
   void AddPropagator(SatPropagator* propagator);
   void AddLastPropagator(SatPropagator* propagator);
   void TakePropagatorOwnership(std::unique_ptr<SatPropagator> propagator) {
     owned_propagators_.push_back(std::move(propagator));
   }
 
-  // Gives a hint so the solver tries to find a solution with the given literal
-  // set to true. Currently this take precedence over the phase saving heuristic
-  // and a variable with a preference will always be branched on according to
-  // this preference.
+  // Wrapper around the same functions in SatDecisionPolicy.
   //
-  // The weight is used as a tie-breaker between variable with the same
-  // activities. Larger weight will be selected first. A weight of zero is the
-  // default value for the other variables.
-  //
-  // Note(user): Having a lot of different weights may slow down the priority
-  // queue operations if there is millions of variables.
-  void SetAssignmentPreference(Literal literal, double weight);
-
-  // Returns the vector of the current assignment preferences.
-  std::vector<std::pair<Literal, double>> AllPreferences() const;
-
-  // Reinitializes the decision heuristics (which variables to choose with which
-  // polarity) according to the current parameters. Note that this also resets
-  // the activity of the variables to 0.
-  void ResetDecisionHeuristic();
+  // TODO(user): Clean this up by making clients directly talk to
+  // SatDecisionPolicy.
+  void SetAssignmentPreference(Literal literal, double weight) {
+    decision_policy_->SetAssignmentPreference(literal, weight);
+  }
+  std::vector<std::pair<Literal, double>> AllPreferences() const {
+    return decision_policy_->AllPreferences();
+  }
+  void ResetDecisionHeuristic() {
+    return decision_policy_->ResetDecisionHeuristic();
+  }
   void ResetDecisionHeuristicAndSetAllPreferences(
-      const std::vector<std::pair<Literal, double>>& prefs);
+      const std::vector<std::pair<Literal, double>>& prefs) {
+    decision_policy_->ResetDecisionHeuristic();
+    for (const std::pair<Literal, double> p : prefs) {
+      decision_policy_->SetAssignmentPreference(p.first, p.second);
+    }
+  }
 
   // Solves the problem and returns its status.
   // An empty problem is considered to be SAT.
@@ -171,23 +171,19 @@ class SatSolver {
   // to Solve() was interrupted by a conflict or time limit, calling this again
   // will resume the search exactly as it would have continued.
   //
-  // Note that if a time limit has been defined earlier, using the SAT
-  // parameters or the SolveWithTimeLimit() method, it is still in use in this
-  // solve. To override the timelimit one should reset the parameters or use the
-  // SolveWithTimeLimit() with a new time limit.
+  // Note that this will use the TimeLimit singleton, so the time limit
+  // will be counted since the last time TimeLimit was reset, not from
+  // the start of this function.
   enum Status {
     ASSUMPTIONS_UNSAT,
-    MODEL_UNSAT,
-    MODEL_SAT,
+    INFEASIBLE,
+    FEASIBLE,
     LIMIT_REACHED,
   };
   Status Solve();
 
-  // Same as Solve(), but with a given time limit. Note that this is slightly
-  // redundant with the max_time_in_seconds() and
-  // max_time_in_deterministic_seconds() parameters, but because SetParameters()
-  // resets more than just the time limit, it is useful to have this more
-  // specific api.
+  // Same as Solve(), but with a given time limit. Note that this will not
+  // update the TimeLimit singleton, but only the passed object instead.
   Status SolveWithTimeLimit(TimeLimit* time_limit);
 
   // Simple interface to solve a problem under the given assumptions. This
@@ -201,15 +197,13 @@ class SatSolver {
   // Solve().
   //
   // If, given these assumptions, the model is UNSAT, this returns the
-  // ASSUMPTIONS_UNSAT status. MODEL_UNSAT is reserved for the case where the
+  // ASSUMPTIONS_UNSAT status. INFEASIBLE is reserved for the case where the
   // model is proven to be unsat without any assumptions.
   //
   // If ASSUMPTIONS_UNSAT is returned, it is possible to get a "core" of unsat
   // assumptions by calling GetLastIncompatibleDecisions().
   Status ResetAndSolveWithGivenAssumptions(
       const std::vector<Literal>& assumptions);
-  Status ResetAndSolveWithGivenAssumptions(
-      const std::vector<Literal>& assumptions, TimeLimit* time_limit);
 
   // Changes the assumption level. All the decisions below this level will be
   // treated as assumptions by the next Solve(). Note that this may impact some
@@ -251,7 +245,7 @@ class SatSolver {
 
   // This function starts by calling EnqueueDecisionAndBackjumpOnConflict(). If
   // there is no conflict, it stops there. Otherwise, it tries to reapply all
-  // the decisions that where backjumped over until the first one that can't be
+  // the decisions that were backjumped over until the first one that can't be
   // taken because it is incompatible. Note that during this process, more
   // conflicts may happen and the trail may be backtracked even further.
   //
@@ -259,8 +253,7 @@ class SatSolver {
   // of the old stack. Note that decisions that are now consequence of the ones
   // before them will no longer be decisions.
   //
-  // Note(user): This function can be called with an already assigned literal,
-  // in which case, it will just do nothing.
+  // Note(user): This function can be called with an already assigned literal.
   int EnqueueDecisionAndBacktrackOnConflict(Literal true_literal);
 
   // Tries to enqueue the given decision and performs the propagation.
@@ -285,15 +278,37 @@ class SatSolver {
   // or re-enqueue any assumptions that may have been backtracked over due to
   // conflits resolution. In both cases, the propagation is finished.
   //
-  // Note that this may prove the model to be UNSAT (check IsModelUnsat()).
-  void RestoreSolverToAssumptionLevel();
+  // Note that this may prove the model to be UNSAT or ASSUMPTION_UNSAT in which
+  // case it will return false.
+  bool RestoreSolverToAssumptionLevel();
+
+  // Advanced usage. Finish the progation if it was interupted. Note that this
+  // might run into conflict and will propagate again until a fixed point is
+  // reached or the model was proven UNSAT. Returns IsModelUnsat().
+  bool FinishPropagation();
+
+  // Changes the assumptions level and the current solver assumptions. Returns
+  // false if the model is UNSAT or ASSUMPTION_UNSAT, true otherwise.
+  bool ResetWithGivenAssumptions(const std::vector<Literal>& assumptions);
+
+  // Advanced usage. If the decision level is smaller than the assumption level,
+  // this will try to reapply all assumptions. Returns true if this was doable,
+  // otherwise returns false in which case the model is either UNSAT or
+  // ASSUMPTION_UNSAT.
+  bool ReapplyAssumptionsIfNeeded();
+
+  // Helper functions to get the correct status when one of the functions above
+  // returns false.
+  Status UnsatStatus() const {
+    return IsModelUnsat() ? INFEASIBLE : ASSUMPTIONS_UNSAT;
+  }
 
   // Extract the current problem clauses. The Output type must support the two
   // functions:
   //  - void AddBinaryClause(Literal a, Literal b);
-  //  - void AddClause(gtl::Span<Literal> clause);
+  //  - void AddClause(absl::Span<const Literal> clause);
   //
-  // TODO(user): also copy the learned clauses?
+  // TODO(user): also copy the removable clauses?
   template <typename Output>
   void ExtractClauses(Output* out) {
     CHECK(!IsModelUnsat());
@@ -305,15 +320,14 @@ class SatSolver {
     if (num_processed_fixed_variables_ < trail_->Index()) {
       ProcessNewlyFixedVariables();
     }
-    DeleteDetachedClauses();
+    clauses_propagator_.DeleteDetachedClauses();
 
     // Note(user): Putting the binary clauses first help because the presolver
     // currently process the clauses in order.
-    binary_implication_graph_.ExtractAllBinaryClauses(out);
-    for (SatClause* clause : clauses_) {
-      if (!clause->IsRedundant()) {
-        out->AddClause(
-            gtl::Span<Literal>(clause->begin(), clause->Size()));
+    binary_implication_graph_->ExtractAllBinaryClauses(out);
+    for (SatClause* clause : clauses_propagator_.AllClausesInCreationOrder()) {
+      if (!clauses_propagator_.IsRemovable(clause)) {
+        out->AddClause(clause->AsSpan());
       }
     }
   }
@@ -359,7 +373,10 @@ class SatSolver {
   // Returns true iff the loaded problem only contains clauses.
   bool ProblemIsPureSat() const { return problem_is_pure_sat_; }
 
-  void SetDratWriter(DratWriter* drat_writer) { drat_writer_ = drat_writer; }
+  void SetDratProofHandler(DratProofHandler* drat_proof_handler) {
+    drat_proof_handler_ = drat_proof_handler;
+    clauses_propagator_.SetDratProofHandler(drat_proof_handler_);
+  }
 
   // This function is here to deal with the case where a SAT/CP model is found
   // to be trivially UNSAT while the user is constructing the model. Instead of
@@ -374,8 +391,9 @@ class SatSolver {
     // The new clause should not propagate.
     CHECK(!trail_->Assignment().LiteralIsFalse(a));
     CHECK(!trail_->Assignment().LiteralIsFalse(b));
-    binary_implication_graph_.AddBinaryClauseDuringSearch(a, b, trail_);
-    if (binary_implication_graph_.NumberOfImplications() == 1) {
+    const bool init = binary_implication_graph_->NumberOfImplications() == 0;
+    binary_implication_graph_->AddBinaryClauseDuringSearch(a, b, trail_);
+    if (init) {
       // This is needed because we just added the first binary clause.
       InitializePropagators();
     }
@@ -384,6 +402,19 @@ class SatSolver {
   // Performs propagation of the recently enqueued elements.
   // Mainly visible for testing.
   bool Propagate();
+
+  // This must be called at level zero. It will spend the given num decision and
+  // use propagation to try to minimize some clauses from the database.
+  void MinimizeSomeClauses(int decisions_budget);
+
+  // Advance the given time limit with all the deterministic time that was
+  // elapsed since last call.
+  void AdvanceDeterministicTime(TimeLimit* limit) {
+    const double current = deterministic_time();
+    limit->AdvanceDeterministicTime(
+        current - deterministic_time_at_last_advanced_time_limit_);
+    deterministic_time_at_last_advanced_time_limit_ = current;
+  }
 
  private:
   // Calls Propagate() and returns true if no conflict occurred. Otherwise,
@@ -400,7 +431,7 @@ class SatSolver {
 
   // See SaveDebugAssignment(). Note that these functions only consider the
   // variables at the time the debug_assignment_ was saved. If new variables
-  // where added since that time, they will be considered unassigned.
+  // were added since that time, they will be considered unassigned.
   bool ClauseIsValidUnderDebugAssignement(
       const std::vector<Literal>& clause) const;
   bool PBConstraintIsValidUnderDebugAssignment(
@@ -423,12 +454,12 @@ class SatSolver {
   // backjumps. In this case, we will simply keep reapplying decisions from the
   // last one backtracked over and so on.
   //
-  // Returns MODEL_STAT if no conflict occurred, MODEL_UNSAT if the model was
+  // Returns FEASIBLE if no conflict occurred, INFEASIBLE if the model was
   // proven unsat and ASSUMPTION_UNSAT otherwise. In the last case the first non
   // taken old decision will be propagated to false by the ones before.
   //
   // first_propagation_index will be filled with the trail index of the first
-  // newly propagated literal, or with -1 if MODEL_UNSAT is returned.
+  // newly propagated literal, or with -1 if INFEASIBLE is returned.
   Status ReapplyDecisionsUpTo(int level, int* first_propagation_index);
 
   // Returns false if the thread memory is over the limit.
@@ -469,7 +500,7 @@ class SatSolver {
   // Returns true iff the clause is the reason for an assigned variable.
   //
   // TODO(user): With our current data structures, we could also return true
-  // for clauses that where just used as a reason (like just before an untrail).
+  // for clauses that were just used as a reason (like just before an untrail).
   // This may be beneficial, but should properly be defined so that we can
   // have the same behavior if we change the implementation.
   bool ClauseIsUsedAsReason(SatClause* clause) const {
@@ -479,8 +510,8 @@ class SatSolver {
            ReasonClauseOrNull(var) == clause;
   }
 
-  // Add a problem clause. Not that the clause is assumed to be "cleaned", that
-  // is no duplicate variables (not strictly required) and not empty.
+  // Add a problem clause. The clause is assumed to be "cleaned", that is no
+  // duplicate variables (not strictly required) and not empty.
   bool AddProblemClauseInternal(const std::vector<Literal>& literals);
 
   // This is used by all the Add*LinearConstraint() functions. It detects
@@ -493,8 +524,10 @@ class SatSolver {
   // Backtrack(). The backtrack is such that after it is applied, all the
   // literals of the learned close except one will be false. Thus the last one
   // will be implied True. This function also Enqueue() the implied literal.
-  void AddLearnedClauseAndEnqueueUnitPropagation(
-      const std::vector<Literal>& literals, bool must_be_kept);
+  //
+  // Returns the LBD of the clause.
+  int AddLearnedClauseAndEnqueueUnitPropagation(
+      const std::vector<Literal>& literals, bool is_redundant);
 
   // Creates a new decision which corresponds to setting the given literal to
   // True and Enqueue() this change.
@@ -509,26 +542,19 @@ class SatSolver {
   // Update the propagators_ list with the relevant propagators.
   void InitializePropagators();
 
-  // Asks for the next decision to branch upon. This shouldn't be called if
-  // there is no active variable (i.e. unassigned variable).
-  Literal NextBranch();
-
   // Unrolls the trail until a given point. This unassign the assigned variables
   // and add them to the priority queue with the correct weight.
   void Untrail(int target_trail_index);
 
-  // Deletes all the clauses that are detached.
-  void DeleteDetachedClauses();
-
   // Simplifies the problem when new variables are assigned at level 0.
   void ProcessNewlyFixedVariables();
 
-  // Compute an initial variable ordering.
-  void InitializeVariableOrdering();
+  // Output to the DRAT proof handler any newly fixed variables.
+  void ProcessNewlyFixedVariablesForDratProof();
 
   // Returns the maximum trail_index of the literals in the given clause.
   // All the literals must be assigned. Returns -1 if the clause is empty.
-  int ComputeMaxTrailIndex(gtl::Span<Literal> clause) const;
+  int ComputeMaxTrailIndex(absl::Span<const Literal> clause) const;
 
   // Computes what is known as the first UIP (Unique implication point) conflict
   // clause starting from the failing clause. For a definition of UIP and a
@@ -618,71 +644,37 @@ class SatSolver {
   // it if needed. Also updates the learned clause limit for the next cleanup.
   void CleanClauseDatabaseIfNeeded();
 
-  // Bumps the activity of all variables appearing in the conflict.
-  // See VSIDS decision heuristic: Chaff: Engineering an Efficient SAT Solver.
-  // M.W. Moskewicz et al. ANNUAL ACM IEEE DESIGN AUTOMATION CONFERENCE 2001.
-  //
-  // The second argument implements the Glucose strategy to reward good
-  // variables. Variables from the last decision level and with a reason of LBD
-  // lower than this limit and learned are bumped twice. Note that setting
-  // bump_again_lbd_limit to 0 disable this feature.
-  void BumpVariableActivities(const std::vector<Literal>& literals,
-                              int bump_again_lbd_limit);
-
-  // Rescales activity value of all variables when one of them reached the max.
-  void RescaleVariableActivities(double scaling_factor);
-
-  // Updates the increment used for activity bumps. This is basically the same
-  // as decaying all the variable activities, but it is a lot more efficient.
-  void UpdateVariableActivityIncrement();
-
-  // Activity managment for clauses. This work the same way at the ones for
+  // Activity management for clauses. This work the same way at the ones for
   // variables, but with different parameters.
   void BumpReasonActivities(const std::vector<Literal>& literals);
   void BumpClauseActivity(SatClause* clause);
   void RescaleClauseActivities(double scaling_factor);
   void UpdateClauseActivityIncrement();
 
-  // Reinitializes the polarity of all the variables with an index greater than
-  // or equal to the given one.
-  void ResetPolarity(BooleanVariable from);
-
-  // Init restart period.
-  void InitRestart();
-
   std::string DebugString(const SatClause& clause) const;
   std::string StatusString(Status status) const;
   std::string RunningStatisticsString() const;
+
+  // Marks as "non-deletable" all clauses that were used to infer the given
+  // variable. The variable must be currently assigned.
+  void KeepAllClauseUsedToInfer(BooleanVariable variable);
+
+  // Use propagation to try to minimize the given clause. This is really similar
+  // to MinimizeCoreWithPropagation(). It must be called when the current
+  // decision level is zero. Note that because this do a small tree search, it
+  // will impact the variable/clauses activities and may add new conflicts.
+  void TryToMinimizeClause(SatClause* clause);
 
   // This is used by the old non-model constructor.
   Model* model_;
   std::unique_ptr<Model> owned_model_;
 
-  BooleanVariable num_variables_;
-
-  // All the clauses managed by the solver (initial and learned). This vector
-  // has ownership of the pointers. We currently do not use
-  // std::unique_ptr<SatClause> because it can't be used with some STL
-  // algorithms like std::partition.
-  //
-  // Note that the unit clauses are not kept here and if the parameter
-  // treat_binary_clauses_separately is true, the binary clause are not kept
-  // here either.
-  std::vector<SatClause*> clauses_;
-
-  // Clause information used for the clause database management.
-  // Note that only the clauses that can be removed need to appear here.
-  struct ClauseInfo {
-    double activity = 0.0;
-    int32 lbd = 0;
-    bool protected_during_next_cleanup = false;
-  };
-  std::unordered_map<SatClause*, ClauseInfo> clauses_info_;
+  BooleanVariable num_variables_ = BooleanVariable(0);
 
   // Internal propagators. We keep them here because we need more than the
   // SatPropagator interface for them.
+  BinaryImplicationGraph* binary_implication_graph_;
   LiteralWatchers clauses_propagator_;
-  BinaryImplicationGraph binary_implication_graph_;
   PbConstraints pb_constraints_;
 
   // Ordered list of propagators used by Propagate()/Untrail().
@@ -699,8 +691,12 @@ class SatSolver {
   bool track_binary_clauses_;
   BinaryClauseManager binary_clauses_;
 
-  // The solver trail.
+  // Pointers to singleton Model objects.
   Trail* trail_;
+  TimeLimit* time_limit_;
+  SatParameters* parameters_;
+  RestartPolicy* restart_;
+  SatDecisionPolicy* decision_policy_;
 
   // Used for debugging only. See SaveDebugAssignment().
   VariablesAssignment debug_assignment_;
@@ -709,50 +705,48 @@ class SatSolver {
   // current_decision_level_). The vector is of size num_variables_ so it can
   // store all the decisions. This is done this way because in some situation we
   // need to remember the previously taken decisions after a backtrack.
-  int current_decision_level_;
+  int current_decision_level_ = 0;
   std::vector<Decision> decisions_;
 
   // The trail index after the last Backtrack() call or before the last
   // EnqueueNewDecision() call.
-  int last_decision_or_backtrack_trail_index_;
+  int last_decision_or_backtrack_trail_index_ = 0;
 
   // The assumption level. See SolveWithAssumptions().
-  int assumption_level_;
+  int assumption_level_ = 0;
 
   // The size of the trail when ProcessNewlyFixedVariables() was last called.
   // Note that the trail contains only fixed literals (that is literals of
   // decision levels 0) before this point.
-  int num_processed_fixed_variables_;
-  double deterministic_time_of_last_fixed_variables_cleanup_;
+  int num_processed_fixed_variables_ = 0;
+  double deterministic_time_of_last_fixed_variables_cleanup_ = 0.0;
+
+  // Used in ProcessNewlyFixedVariablesForDratProof().
+  int drat_num_processed_fixed_variables_ = 0;
 
   // Tracks various information about the solver progress.
   struct Counters {
-    int64 num_branches;
-    int64 num_random_branches;
-    int64 num_failures;
+    int64 num_branches = 0;
+    int64 num_failures = 0;
 
     // Minimization stats.
-    int64 num_minimizations;
-    int64 num_literals_removed;
+    int64 num_minimizations = 0;
+    int64 num_literals_removed = 0;
 
     // PB constraints.
-    int64 num_learned_pb_literals_;
+    int64 num_learned_pb_literals = 0;
 
     // Clause learning /deletion stats.
-    int64 num_literals_learned;
-    int64 num_literals_forgotten;
-    int64 num_subsumed_clauses;
+    int64 num_literals_learned = 0;
+    int64 num_literals_forgotten = 0;
+    int64 num_subsumed_clauses = 0;
 
-    Counters()
-        : num_branches(0),
-          num_random_branches(0),
-          num_failures(0),
-          num_minimizations(0),
-          num_literals_removed(0),
-          num_learned_pb_literals_(0),
-          num_literals_learned(0),
-          num_literals_forgotten(0),
-          num_subsumed_clauses(0) {}
+    // TryToMinimizeClause() stats.
+    int64 minimization_num_clauses = 0;
+    int64 minimization_num_decisions = 0;
+    int64 minimization_num_true = 0;
+    int64 minimization_num_subsumed = 0;
+    int64 minimization_num_removed_literals = 0;
   };
   Counters counters_;
 
@@ -761,112 +755,14 @@ class SatSolver {
 
   // This is set to true if the model is found to be UNSAT when adding new
   // constraints.
-  bool is_model_unsat_;
-
-  // Parameters.
-  SatParameters parameters_;
-
-  // Variable ordering (priority will be adjusted dynamically). queue_elements_
-  // holds the elements used by var_ordering_ (it uses pointers).
-  //
-  // Note that we recover the variable that a WeightedVarQueueElement refers to
-  // by its position in the queue_elements_ vector, and we can recover the later
-  // using (pointer - &queue_elements_[0]).
-  struct WeightedVarQueueElement {
-    WeightedVarQueueElement() : heap_index(-1), tie_breaker(0.0), weight(0.0) {}
-
-    // Interface for the AdjustablePriorityQueue.
-    void SetHeapIndex(int h) { heap_index = h; }
-    int GetHeapIndex() const { return heap_index; }
-
-    // Priority order. The AdjustablePriorityQueue returns the largest element
-    // first.
-    //
-    // Note(user): We used to also break ties using the variable index, however
-    // this has two drawbacks:
-    // - On problem with many variables, this slow down quite a lot the priority
-    //   queue operations (which do as little work as possible and hence benefit
-    //   from having the majority of elements with a priority of 0).
-    // - It seems to be a bad heuristics. One reason could be that the priority
-    //   queue will automatically diversify the choice of the top variables
-    //   amongst the ones with the same priority.
-    //
-    // Note(user): For the same reason as explained above, it is probably a good
-    // idea not to have too many different values for the tie_breaker field. I
-    // am not even sure we should have such a field...
-    bool operator<(const WeightedVarQueueElement& other) const {
-      return weight < other.weight ||
-             (weight == other.weight && (tie_breaker < other.tie_breaker));
-    }
-
-    int32 heap_index;
-    float tie_breaker;
-
-    // TODO(user): Experiment with float. In the rest of the code, we use
-    // double, but maybe we don't need that much precision. Using float here may
-    // save memory and make the PQ operations faster.
-    double weight;
-  };
-  COMPILE_ASSERT(sizeof(WeightedVarQueueElement) == 16,
-                 ERROR_WeightedVarQueueElement_is_not_well_compacted);
-
-  bool var_ordering_is_initialized_;
-  AdjustablePriorityQueue<WeightedVarQueueElement> var_ordering_;
-  ITIVector<BooleanVariable, WeightedVarQueueElement> queue_elements_;
-
-  // This is used for the branching heuristic described in "Learning Rate Based
-  // Branching Heuristic for SAT solvers", J.H.Liang, V. Ganesh, P. Poupart,
-  // K.Czarnecki, SAT 2016.
-  //
-  // The entries are sorted by trail index, and one can get the number of
-  // conflicts during which a variable at a given trail index i was assigned by
-  // summing the entry.count for all entries with a trail index greater than i.
-  struct NumConflictsStackEntry {
-    int trail_index;
-    int64 count;
-  };
-  std::vector<NumConflictsStackEntry> num_conflicts_stack_;
-
-  // Whether the priority of the given variable needs to be updated in
-  // var_ordering_. Note that this is only accessed for assigned variables and
-  // that for efficiency it is indexed by trail indices. If
-  // pq_need_update_for_var_at_trail_index_[trail_->Info(var).trail_index] is
-  // true when we untrail var, then either var need to be inserted in the queue,
-  // or we need to notify that its priority has changed.
-  BitQueue64 pq_need_update_for_var_at_trail_index_;
+  bool is_model_unsat_ = false;
 
   // Increment used to bump the variable activities.
-  double variable_activity_increment_;
   double clause_activity_increment_;
-
-  // Stores variable activity and the number of time each variable was "bumped".
-  // The later is only used with the ERWA heuristic.
-  ITIVector<BooleanVariable, double> activities_;
-  ITIVector<BooleanVariable, int64> num_bumps_;
-
-  // Used by NextBranch() to choose the polarity of the next decision. For the
-  // phase saving, the last polarity is stored in trail_->Info(var).
-  bool decision_heuristic_is_initialized_;
-  ITIVector<BooleanVariable, bool> var_use_phase_saving_;
-  ITIVector<BooleanVariable, bool> var_polarity_;
-  ITIVector<BooleanVariable, double> weighted_sign_;
-
-  // If true, leave the initial variable activities to their current value.
-  bool leave_initial_activities_unchanged_;
 
   // This counter is decremented each time we learn a clause that can be
   // deleted. When it reaches zero, a clause cleanup is triggered.
-  int num_learned_clause_before_cleanup_;
-
-  // Conflicts credit to create until the next restart.
-  int conflicts_until_next_restart_;
-  int restart_count_;
-  int luby_count_;
-
-  // Conflicts credit until the next strategy change.
-  int conflicts_until_next_strategy_change_;
-  int strategy_change_conflicts_;
-  int strategy_counter_;
+  int num_learned_clause_before_cleanup_ = 0;
 
   // Temporary members used during conflict analysis.
   SparseBitset<BooleanVariable> is_marked_;
@@ -891,12 +787,16 @@ class SatSolver {
   std::vector<Literal> extra_reason_literals_;
   std::vector<SatClause*> subsumed_clauses_;
 
+  // When true, temporarily disable the deletion of clauses that are not needed
+  // anymore. This is a hack for TryToMinimizeClause() because we use
+  // propagation in this function which might trigger a clause database
+  // deletion, but we still want the pointer to the clause we wants to minimize
+  // to be valid until the end of that function.
+  bool block_clause_deletion_ = false;
+
   // "cache" to avoid inspecting many times the same reason during conflict
   // analysis.
   VariableWithSameReasonIdentifier same_reason_identifier_;
-
-  // A random number generator.
-  mutable random_engine_t random_;
 
   // Temporary vector used by AddProblemClause().
   std::vector<LiteralWithCoeff> tmp_pb_constraint_;
@@ -907,49 +807,19 @@ class SatSolver {
   // The current pseudo-Boolean conflict used in PB conflict analysis.
   MutableUpperBoundedLinearConstraint pb_conflict_;
 
-  // Running average used by some restart algorithms.
-  RunningAverage dl_running_average_;
-  RunningAverage lbd_running_average_;
-  RunningAverage trail_size_running_average_;
-
-  // The solver time limit.
-  std::unique_ptr<TimeLimit> time_limit_;
-
   // The deterministic time when the time limit was updated.
   // As the deterministic time in the time limit has to be advanced manually,
   // it is necessary to keep track of the last time the time was advanced.
-  double deterministic_time_at_last_advanced_time_limit_;
+  double deterministic_time_at_last_advanced_time_limit_ = 0;
 
   // This is true iff the loaded problem only contains clauses.
   bool problem_is_pure_sat_;
 
-  DratWriter* drat_writer_;
+  DratProofHandler* drat_proof_handler_;
 
   mutable StatsGroup stats_;
   DISALLOW_COPY_AND_ASSIGN(SatSolver);
 };
-
-// Returns the ith element of the strategy S^univ proposed by M. Luby et al. in
-// Optimal Speedup of Las Vegas Algorithms, Information Processing Letters 1993.
-// This is used to decide the number of conflicts allowed before the next
-// restart. This method, used by most SAT solvers, is usually referenced as
-// Luby.
-// Returns 2^{k-1} when i == 2^k - 1
-//    and  SUniv(i - 2^{k-1} + 1) when 2^{k-1} <= i < 2^k - 1.
-// The sequence is defined for i > 0 and starts with:
-//   {1, 1, 2, 1, 1, 2, 4, 1, 1, 2, 1, 1, 2, 4, 8, ...}
-inline int SUniv(int i) {
-  DCHECK_GT(i, 0);
-  while (i > 2) {
-    const int most_significant_bit_position =
-        MostSignificantBitPosition64(i + 1);
-    if ((1 << most_significant_bit_position) == i + 1) {
-      return 1 << (most_significant_bit_position - 1);
-    }
-    i -= (1 << most_significant_bit_position) - 1;
-  }
-  return 1;
-}
 
 // ============================================================================
 // Model based functions.
@@ -970,9 +840,10 @@ inline std::function<void(Model*)> CardinalityConstraint(
     int64 lower_bound, int64 upper_bound,
     const std::vector<Literal>& literals) {
   return [=](Model* model) {
-    std::vector<LiteralWithCoeff> cst(literals.size());
+    std::vector<LiteralWithCoeff> cst;
+    cst.reserve(literals.size());
     for (int i = 0; i < literals.size(); ++i) {
-      cst[i] = LiteralWithCoeff(literals[i], 1);
+      cst.emplace_back(literals[i], 1);
     }
     model->GetOrCreate<SatSolver>()->AddLinearConstraint(
         /*use_lower_bound=*/true, Coefficient(lower_bound),
@@ -984,8 +855,9 @@ inline std::function<void(Model*)> ExactlyOneConstraint(
     const std::vector<Literal>& literals) {
   return [=](Model* model) {
     std::vector<LiteralWithCoeff> cst;
+    cst.reserve(literals.size());
     for (const Literal l : literals) {
-      cst.push_back(LiteralWithCoeff(l, Coefficient(1)));
+      cst.emplace_back(l, Coefficient(1));
     }
     model->GetOrCreate<SatSolver>()->AddLinearConstraint(
         /*use_lower_bound=*/true, Coefficient(1),
@@ -997,8 +869,9 @@ inline std::function<void(Model*)> AtMostOneConstraint(
     const std::vector<Literal>& literals) {
   return [=](Model* model) {
     std::vector<LiteralWithCoeff> cst;
+    cst.reserve(literals.size());
     for (const Literal l : literals) {
-      cst.push_back(LiteralWithCoeff(l, Coefficient(1)));
+      cst.emplace_back(l, Coefficient(1));
     }
     model->GetOrCreate<SatSolver>()->AddLinearConstraint(
         /*use_lower_bound=*/false, Coefficient(0),
@@ -1010,8 +883,9 @@ inline std::function<void(Model*)> ClauseConstraint(
     const std::vector<Literal>& literals) {
   return [=](Model* model) {
     std::vector<LiteralWithCoeff> cst;
+    cst.reserve(literals.size());
     for (const Literal l : literals) {
-      cst.push_back(LiteralWithCoeff(l, Coefficient(1)));
+      cst.emplace_back(l, Coefficient(1));
     }
     model->GetOrCreate<SatSolver>()->AddLinearConstraint(
         /*use_lower_bound=*/true, Coefficient(1),
@@ -1047,6 +921,22 @@ inline std::function<void(Model*)> ReifiedBoolOr(
     // All false => r false.
     clause.push_back(r.Negated());
     model->Add(ClauseConstraint(clause));
+  };
+}
+
+// enforcement_literals => clause.
+inline std::function<void(Model*)> EnforcedClause(
+    absl::Span<const Literal> enforcement_literals,
+    absl::Span<const Literal> clause) {
+  return [=](Model* model) {
+    std::vector<Literal> tmp;
+    for (const Literal l : enforcement_literals) {
+      tmp.push_back(l.Negated());
+    }
+    for (const Literal l : clause) {
+      tmp.push_back(l);
+    }
+    model->Add(ClauseConstraint(tmp));
   };
 }
 

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -103,7 +103,8 @@ struct SparsePermutation::Iterator {
 
   Iterator() {}
   Iterator(const std::vector<int>::const_iterator& b,
-           const std::vector<int>::const_iterator& e) : begin_(b), end_(e) {}
+           const std::vector<int>::const_iterator& e)
+      : begin_(b), end_(e) {}
 
   std::vector<int>::const_iterator begin() const { return begin_; }
   std::vector<int>::const_iterator end() const { return end_; }

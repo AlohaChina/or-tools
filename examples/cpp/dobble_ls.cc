@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 
 // This problem is inspired by the Dobble game (aka Spot-It in the
 // USA).  In this game, we have 57 cards, 57 symbols, and 8 symbols
@@ -33,14 +32,13 @@
 #include <algorithm>
 #include <vector>
 
-#include "ortools/base/commandlineflags.h"
+#include "absl/strings/str_format.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/integral_types.h"
-#include "ortools/base/stringprintf.h"
 #include "ortools/base/map_util.h"
+#include "ortools/base/random.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/bitset.h"
-#include "ortools/base/random.h"
 
 DEFINE_int32(symbols_per_card, 8, "Number of symbols per card.");
 DEFINE_int32(ls_seed, 1,
@@ -642,7 +640,8 @@ void SolveDobble(int num_cards, int num_symbols, int num_symbols_per_card) {
   std::vector<std::vector<IntVar*> > card_symbol_vars(num_cards);
   std::vector<IntVar*> all_card_symbol_vars;
   for (int card_index = 0; card_index < num_cards; ++card_index) {
-    solver.MakeBoolVarArray(num_symbols, StringPrintf("card_%i_", card_index),
+    solver.MakeBoolVarArray(num_symbols,
+                            absl::StrFormat("card_%i_", card_index),
                             &card_symbol_vars[card_index]);
     for (int symbol_index = 0; symbol_index < num_symbols; ++symbol_index) {
       all_card_symbol_vars.push_back(
@@ -751,12 +750,12 @@ void SolveDobble(int num_cards, int num_symbols, int num_symbols_per_card) {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags( &argc, &argv, true);
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
   // These constants comes directly from the dobble game.
   // There are actually 55 cards, but we can create up to 57 cards.
   const int kSymbolsPerCard = FLAGS_symbols_per_card;
   const int kCards = kSymbolsPerCard * (kSymbolsPerCard - 1) + 1;
   const int kSymbols = kCards;
   operations_research::SolveDobble(kCards, kSymbols, kSymbolsPerCard);
-  return 0;
+  return EXIT_SUCCESS;
 }

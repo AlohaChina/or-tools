@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,11 +14,11 @@
 #ifndef OR_TOOLS_BASE_TYPEID_H_
 #define OR_TOOLS_BASE_TYPEID_H_
 
-namespace operations_research {
+namespace gtl {
 template <typename T>
 inline size_t FastTypeId() {
   static char d;
   return reinterpret_cast<size_t>(&d);
 }
-}  // namespace operations_research
+}  // namespace gtl
 #endif  // OR_TOOLS_BASE_TYPEID_H_

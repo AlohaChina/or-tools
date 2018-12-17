@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -28,13 +28,19 @@
 // - examples/csharp/cslinearprogramming.cs
 // - examples/csharp/csintegerprogramming.cs
 
-%include "ortools/base/base.i"
+%include "enums.swg"
+%include "stdint.i"
 %include "std_vector.i"
+
+%include "ortools/base/base.i"
 
 %{
 #include "ortools/linear_solver/linear_solver.h"
 #include "ortools/linear_solver/linear_solver.pb.h"
 %}
+
+typedef int64_t int64;
+typedef uint64_t uint64;
 
 // We need to forward-declare the proto here, so that the PROTO_* macros
 // involving them work correctly. The order matters very much: this declaration
@@ -76,8 +82,8 @@ class MPSolutionResponse;
 %unignore operations_research::MPSolver::GLPK_MIXED_INTEGER_PROGRAMMING;
 %unignore operations_research::MPSolver::GUROBI_LINEAR_PROGRAMMING;
 %unignore operations_research::MPSolver::GUROBI_MIXED_INTEGER_PROGRAMMING;
-%unignore operations_research::MPSolver::SULUM_LINEAR_PROGRAMMING;
-%unignore operations_research::MPSolver::SULUM_MIXED_INTEGER_PROGRAMMING;
+%unignore operations_research::MPSolver::CPLEX_LINEAR_PROGRAMMING;
+%unignore operations_research::MPSolver::CPLEX_MIXED_INTEGER_PROGRAMMING;
 
 // Expose the MPSolver::ResultStatus enum.
 %unignore operations_research::MPSolver::ResultStatus;
@@ -112,6 +118,7 @@ class MPSolutionResponse;
 %rename (SetTimeLimit) operations_research::MPSolver::set_time_limit;
 
 // Expose some of the more advanced MPSolver API.
+%unignore operations_research::MPSolver::InterruptSolve;
 %unignore operations_research::MPSolver::SupportsProblemType;
 %unignore operations_research::MPSolver::SetSolverSpecificParametersAsString;
 %rename (WallTime) operations_research::MPSolver::wall_time;
@@ -192,7 +199,6 @@ class MPSolutionResponse;
 %unignore operations_research::MPObjective::SetOptimizationDirection;
 %unignore operations_research::MPObjective::Clear;
 %unignore operations_research::MPObjective::SetOffset;
-%unignore operations_research::MPObjective::AddOffset;
 
 // MPObjective: reader API.
 %unignore operations_research::MPObjective::Value;
@@ -210,10 +216,6 @@ class MPSolutionResponse;
 %unignore operations_research::MPSolverParameters::GetDoubleParam;
 %unignore operations_research::MPSolverParameters::SetDoubleParam;
 %unignore operations_research::MPSolverParameters::kDefaultPrimalTolerance;
-
-// We want to ignore the CoeffMap class; but since it inherits from some
-// std::unordered_map<>, swig complains about an undefined base class. Silence it.
-%warnfilter(401) CoeffMap;
 
 %include "ortools/linear_solver/linear_solver.h"
 

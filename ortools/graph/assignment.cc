@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -22,13 +22,13 @@ namespace operations_research {
 SimpleLinearSumAssignment::SimpleLinearSumAssignment() : num_nodes_(0) {}
 
 ArcIndex SimpleLinearSumAssignment::AddArcWithCost(NodeIndex left_node,
-                                                   NodeIndex righ_node,
+                                                   NodeIndex right_node,
                                                    CostValue cost) {
   const ArcIndex num_arcs = arc_cost_.size();
   num_nodes_ = std::max(num_nodes_, left_node + 1);
-  num_nodes_ = std::max(num_nodes_, righ_node + 1);
+  num_nodes_ = std::max(num_nodes_, right_node + 1);
   arc_tail_.push_back(left_node);
-  arc_head_.push_back(righ_node);
+  arc_head_.push_back(right_node);
   arc_cost_.push_back(cost);
   return num_arcs;
 }

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,22 +15,24 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <unordered_map>
 #include <limits>
 #include <numeric>
 #include <utility>
+#include "absl/container/flat_hash_map.h"
 
+#include "absl/strings/str_format.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
+#if !defined(__PORTABLE_PLATFORM__)
+#include "ortools/graph/io.h"
+#endif  // __PORTABLE_PLATFORM__
+#include "ortools/algorithms/find_graph_symmetries.h"
+#include "ortools/base/hash.h"
 #include "ortools/base/int_type.h"
 #include "ortools/base/map_util.h"
-#include "ortools/base/hash.h"
-#include "ortools/algorithms/find_graph_symmetries.h"
-#include "ortools/graph/graph.h"
-#include "ortools/graph/io.h"
 #include "ortools/graph/util.h"
+#include "ortools/port/proto_utils.h"
 #include "ortools/sat/sat_parameters.pb.h"
 
 DEFINE_string(debug_dump_symmetry_graph_to_file, "",
@@ -42,11 +44,13 @@ DEFINE_string(debug_dump_symmetry_graph_to_file, "",
 namespace operations_research {
 namespace sat {
 
+using util::RemapGraph;
+
 void ExtractAssignment(const LinearBooleanProblem& problem,
-                       const SatSolver& solver, std::vector<bool>* assignemnt) {
-  assignemnt->clear();
+                       const SatSolver& solver, std::vector<bool>* assignment) {
+  assignment->clear();
   for (int i = 0; i < problem.num_variables(); ++i) {
-    assignemnt->push_back(
+    assignment->push_back(
         solver.Assignment().LiteralIsTrue(Literal(BooleanVariable(i), true)));
   }
 }
@@ -59,7 +63,7 @@ namespace {
 // A non-empty std::string indicates an error.
 template <typename LinearTerms>
 std::string ValidateLinearTerms(const LinearTerms& terms,
-                           std::vector<bool>* variable_seen) {
+                                std::vector<bool>* variable_seen) {
   // variable_seen already has all items false and is reset before return.
   std::string err_str;
   int num_errs = 0;
@@ -67,24 +71,24 @@ std::string ValidateLinearTerms(const LinearTerms& terms,
   for (int i = 0; i < terms.literals_size(); ++i) {
     if (terms.literals(i) == 0) {
       if (++num_errs <= max_num_errs) {
-        err_str += StringPrintf("Zero literal at position %d\n", i);
+        err_str += absl::StrFormat("Zero literal at position %d\n", i);
       }
     }
     if (terms.coefficients(i) == 0) {
       if (++num_errs <= max_num_errs) {
-        err_str += StringPrintf("Literal %d has a zero coefficient\n",
-                                terms.literals(i));
+        err_str += absl::StrFormat("Literal %d has a zero coefficient\n",
+                                   terms.literals(i));
       }
     }
     const int var = Literal(terms.literals(i)).Variable().value();
     if (var >= variable_seen->size()) {
       if (++num_errs <= max_num_errs) {
-        err_str += StringPrintf("Out of bound variable %d\n", var);
+        err_str += absl::StrFormat("Out of bound variable %d\n", var);
       }
     }
     if ((*variable_seen)[var]) {
       if (++num_errs <= max_num_errs) {
-        err_str += StringPrintf("Duplicated variable %d\n", var);
+        err_str += absl::StrFormat("Duplicated variable %d\n", var);
       }
     }
     (*variable_seen)[var] = true;
@@ -96,10 +100,12 @@ std::string ValidateLinearTerms(const LinearTerms& terms,
   }
   if (num_errs) {
     if (num_errs <= max_num_errs) {
-      err_str = StringPrintf("%d validation errors:\n", num_errs) + err_str;
+      err_str = absl::StrFormat("%d validation errors:\n", num_errs) + err_str;
     } else {
-      err_str = StringPrintf("%d validation errors; here are the first %d:\n",
-                             num_errs, max_num_errs) + err_str;
+      err_str =
+          absl::StrFormat("%d validation errors; here are the first %d:\n",
+                          num_errs, max_num_errs) +
+          err_str;
     }
   }
   return err_str;
@@ -127,14 +133,16 @@ util::Status ValidateBooleanProblem(const LinearBooleanProblem& problem) {
     const LinearBooleanConstraint& constraint = problem.constraints(i);
     const std::string error = ValidateLinearTerms(constraint, &variable_seen);
     if (!error.empty()) {
-      return util::Status(util::error::INVALID_ARGUMENT,
-                          StringPrintf("Invalid constraint %i: ", i) + error);
+      return util::Status(
+          util::error::INVALID_ARGUMENT,
+          absl::StrFormat("Invalid constraint %i: ", i) + error);
     }
   }
-  const std::string error = ValidateLinearTerms(problem.objective(), &variable_seen);
+  const std::string error =
+      ValidateLinearTerms(problem.objective(), &variable_seen);
   if (!error.empty()) {
     return util::Status(util::error::INVALID_ARGUMENT,
-                        StringPrintf("Invalid objective: ") + error);
+                        absl::StrFormat("Invalid objective: ") + error);
   }
   return util::Status::OK;
 }
@@ -251,10 +259,12 @@ bool LoadAndConsumeBooleanProblem(LinearBooleanProblem* problem,
                                   SatSolver* solver) {
   const util::Status status = ValidateBooleanProblem(*problem);
   if (!status.ok()) {
-    LOG(WARNING) << "The given problem is invalid! " << status.error_message();
+    LOG(WARNING) << "The given problem is invalid! " << status.message();
   }
   if (solver->parameters().log_search_progress()) {
+#if !defined(__PORTABLE_PLATFORM__)
     LOG(INFO) << "LinearBooleanProblem memory: " << problem->SpaceUsed();
+#endif
     LOG(INFO) << "Loading problem '" << problem->name() << "', "
               << problem->num_variables() << " variables, "
               << problem->constraints_size() << " constraints.";
@@ -361,12 +371,12 @@ bool IsAssignmentValid(const LinearBooleanProblem& problem,
     }
     if (constraint.has_lower_bound() && sum < constraint.lower_bound()) {
       LOG(WARNING) << "Unsatisfied constraint! sum: " << sum << "\n"
-                   << constraint.DebugString();
+                   << ProtobufDebugString(constraint);
       return false;
     }
     if (constraint.has_upper_bound() && sum > constraint.upper_bound()) {
       LOG(WARNING) << "Unsatisfied constraint! sum: " << sum << "\n"
-                   << constraint.DebugString();
+                   << ProtobufDebugString(constraint);
       return false;
     }
   }
@@ -376,7 +386,8 @@ bool IsAssignmentValid(const LinearBooleanProblem& problem,
 // Note(user): This function makes a few assumptions about the format of the
 // given LinearBooleanProblem. All constraint coefficients must be 1 (and of the
 // form >= 1) and all objective weights must be strictly positive.
-std::string LinearBooleanProblemToCnfString(const LinearBooleanProblem& problem) {
+std::string LinearBooleanProblemToCnfString(
+    const LinearBooleanProblem& problem) {
   std::string output;
   const bool is_wcnf = (problem.objective().coefficients_size() > 0);
   const LinearObjective& objective = problem.objective();
@@ -388,13 +399,13 @@ std::string LinearBooleanProblemToCnfString(const LinearBooleanProblem& problem)
   const int first_slack_variable = problem.original_num_variables();
 
   // This will contains the objective.
-  std::unordered_map<int, int64> literal_to_weight;
+  absl::flat_hash_map<int, int64> literal_to_weight;
   std::vector<std::pair<int, int64>> non_slack_objective;
 
   // This will be the weight of the "hard" clauses in the wcnf format. It must
   // be greater than the sum of the weight of all the soft clauses, so we will
   // just set it to this sum + 1.
-  int64 hard_weigth = 1;
+  int64 hard_weight = 1;
   if (is_wcnf) {
     int i = 0;
     for (int64 weight : objective.coefficients()) {
@@ -415,23 +426,23 @@ std::string LinearBooleanProblemToCnfString(const LinearBooleanProblem& problem)
       if (Literal(signed_literal).Variable() < first_slack_variable) {
         non_slack_objective.push_back(std::make_pair(signed_literal, weight));
       }
-      hard_weigth += weight;
+      hard_weight += weight;
       ++i;
     }
-    output += StringPrintf("p wcnf %d %d %lld\n", first_slack_variable,
-                           static_cast<int>(problem.constraints_size() +
-                                            non_slack_objective.size()),
-                           hard_weigth);
+    output += absl::StrFormat("p wcnf %d %d %d\n", first_slack_variable,
+                              static_cast<int>(problem.constraints_size() +
+                                               non_slack_objective.size()),
+                              hard_weight);
   } else {
-    output += StringPrintf("p cnf %d %d\n", problem.num_variables(),
-                           problem.constraints_size());
+    output += absl::StrFormat("p cnf %d %d\n", problem.num_variables(),
+                              problem.constraints_size());
   }
 
   std::string constraint_output;
   for (const LinearBooleanConstraint& constraint : problem.constraints()) {
     if (constraint.literals_size() == 0) return "";  // Assumption.
     constraint_output.clear();
-    int64 weight = hard_weigth;
+    int64 weight = hard_weight;
     for (int i = 0; i < constraint.literals_size(); ++i) {
       if (constraint.coefficients(i) != 1) return "";  // Assumption.
       if (is_wcnf && abs(constraint.literals(i)) - 1 >= first_slack_variable) {
@@ -442,7 +453,7 @@ std::string LinearBooleanProblemToCnfString(const LinearBooleanProblem& problem)
       }
     }
     if (is_wcnf) {
-      output += StringPrintf("%lld ", weight);
+      output += absl::StrFormat("%d ", weight);
     }
     output += constraint_output + " 0\n";
   }
@@ -450,11 +461,10 @@ std::string LinearBooleanProblemToCnfString(const LinearBooleanProblem& problem)
   // Output the rest of the objective as singleton constraints.
   if (is_wcnf) {
     for (std::pair<int, int64> p : non_slack_objective) {
-      // Since it is falsifying this clause that cost "weigth", we need to take
+      // Since it is falsifying this clause that cost "weigtht", we need to take
       // its negation.
       const Literal literal(-p.first);
-      output +=
-          StringPrintf("%lld %s 0\n", p.second, literal.DebugString().c_str());
+      output += absl::StrFormat("%d %s 0\n", p.second, literal.DebugString());
     }
   }
 
@@ -495,11 +505,11 @@ class IdGenerator {
   // a new id, otherwise return the previously generated id.
   int GetId(int type, Coefficient coefficient) {
     const std::pair<int, int64> key(type, coefficient.value());
-    return LookupOrInsert(&id_map_, key, id_map_.size());
+    return gtl::LookupOrInsert(&id_map_, key, id_map_.size());
   }
 
  private:
-  std::unordered_map<std::pair<int, int64>, int> id_map_;
+  absl::flat_hash_map<std::pair<int, int64>, int> id_map_;
 };
 }  // namespace.
 
@@ -510,7 +520,7 @@ class IdGenerator {
 // output can be mapped to a symmetry of the given problem simply by taking its
 // restriction on the first 2 * num_variables nodes and interpreting its index
 // as a literal index. In a sense, a node with a low enough index #i is in
-// one-to-one correspondance with a literals #i (using the index representation
+// one-to-one correspondence with a literals #i (using the index representation
 // of literal).
 //
 // The format of the initial_equivalence_classes is the same as the one
@@ -548,7 +558,7 @@ Graph* GenerateGraphForSymmetryDetection(
   for (int i = 0; i < num_variables; ++i) {
     // We have two nodes for each variable.
     // Note that the indices are in [0, 2 * num_variables) and in one to one
-    // correspondance with the index representation of a literal.
+    // correspondence with the index representation of a literal.
     const Literal literal = Literal(BooleanVariable(i), true);
     graph->AddArc(literal.Index().value(), literal.NegatedIndex().value());
     graph->AddArc(literal.NegatedIndex().value(), literal.Index().value());
@@ -665,6 +675,7 @@ void FindLinearBooleanProblemSymmetries(
       GenerateGraphForSymmetryDetection<Graph>(problem, &equivalence_classes));
   LOG(INFO) << "Graph has " << graph->num_nodes() << " nodes and "
             << graph->num_arcs() / 2 << " edges.";
+#if !defined(__PORTABLE_PLATFORM__)
   if (!FLAGS_debug_dump_symmetry_graph_to_file.empty()) {
     // Remap the graph nodes to sort them by equivalence classes.
     std::vector<int> new_node_index(graph->num_nodes(), -1);
@@ -679,7 +690,7 @@ void FindLinearBooleanProblemSymmetries(
       new_node_index[node] = next_index_by_class[equivalence_classes[node]]++;
     }
     std::unique_ptr<Graph> remapped_graph = RemapGraph(*graph, new_node_index);
-    const util::Status status = WriteGraphToFile(
+    const util::Status status = util::WriteGraphToFile(
         *remapped_graph, FLAGS_debug_dump_symmetry_graph_to_file,
         /*directed=*/false, class_size);
     if (!status.ok()) {
@@ -687,6 +698,7 @@ void FindLinearBooleanProblemSymmetries(
                   << status;
     }
   }
+#endif  // __PORTABLE_PLATFORM__
   GraphSymmetryFinder symmetry_finder(*graph,
                                       /*is_undirected=*/true);
   std::vector<int> factorized_automorphism_group_size;
@@ -728,7 +740,7 @@ void FindLinearBooleanProblemSymmetries(
 }
 
 void ApplyLiteralMappingToBooleanProblem(
-    const ITIVector<LiteralIndex, LiteralIndex>& mapping,
+    const gtl::ITIVector<LiteralIndex, LiteralIndex>& mapping,
     LinearBooleanProblem* problem) {
   Coefficient bound_shift;
   Coefficient max_value;
@@ -818,7 +830,7 @@ void ProbeAndSimplifyProblem(SatPostsolver* postsolver,
       LOG(INFO) << "UNSAT when loading the problem.";
     }
 
-    ITIVector<LiteralIndex, LiteralIndex> equiv_map;
+    gtl::ITIVector<LiteralIndex, LiteralIndex> equiv_map;
     ProbeAndFindEquivalentLiteral(&solver, postsolver, /*drat_writer=*/nullptr,
                                   &equiv_map);
 
@@ -844,7 +856,7 @@ void ProbeAndSimplifyProblem(SatPostsolver* postsolver,
     // Remap the variables into a dense set. All the variables for which the
     // equiv_map is not the identity are no longer needed.
     BooleanVariable new_var(0);
-    ITIVector<BooleanVariable, BooleanVariable> var_map;
+    gtl::ITIVector<BooleanVariable, BooleanVariable> var_map;
     for (BooleanVariable var(0); var < solver.NumVariables(); ++var) {
       if (equiv_map[Literal(var, true).Index()] == Literal(var, true).Index()) {
         var_map.push_back(new_var);

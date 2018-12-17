@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 
 // Utility functions on IEEE floating-point numbers.
 // Implemented on float, double, and long double.
@@ -24,12 +23,9 @@
 #define OR_TOOLS_UTIL_FP_UTILS_H_
 
 #if defined(_MSC_VER)
-#pragma fenv_access (on) // NOLINT
+#pragma fenv_access(on)  // NOLINT
 #else
 #include <fenv.h>  // NOLINT
-#endif
-#if !defined(__ANDROID__) && !defined(__APPLE__) && !defined(_MSC_VER)
-#include <fpu_control.h>
 #endif
 
 #ifdef __SSE__
@@ -63,7 +59,7 @@ namespace operations_research {
 
 class ScopedFloatingPointEnv {
  public:
-  ScopedFloatingPointEnv()  {
+  ScopedFloatingPointEnv() {
 #if defined(_MSC_VER)
     // saved_control_ = _controlfp(0, 0);
 #elif defined(ARCH_K8)
@@ -104,40 +100,6 @@ class ScopedFloatingPointEnv {
 #endif
 };
 
-// The following macro does not change "var", but forces gcc to consider it
-// being modified. This can be used to avoid wrong over-optimizations by gcc.
-// See http://gcc.gnu.org/bugzilla/show_bug.cgi?id=47617 for an explanation.
-#ifdef NDEBUG
-#define TOUCH(var) asm volatile("" : "+X"(var))
-#else
-#define TOUCH(var)
-#endif
-
-#if (defined(__i386__) || defined(__x86_64__)) && defined(__linux__) && \
-    !defined(__ANDROID__)
-inline fpu_control_t GetFPPrecision() {
-  fpu_control_t status = 0;  // Initialized to zero to please memory sanitizer.
-  _FPU_GETCW(status);
-  return status & (_FPU_EXTENDED | _FPU_DOUBLE | _FPU_SINGLE);
-}
-
-
-// CPU precision control. Parameters can be:
-// _FPU_EXTENDED, _FPU_DOUBLE or _FPU_SINGLE.
-inline void SetFPPrecision(fpu_control_t precision) {
-  fpu_control_t status = 0;  // Initialized to zero to please memory sanitizer.
-  _FPU_GETCW(status);
-  TOUCH(status);
-  status &= ~(_FPU_EXTENDED | _FPU_DOUBLE | _FPU_SINGLE);
-  status |= precision;
-  _FPU_SETCW(status);
-  DCHECK_EQ(precision, GetFPPrecision());
-}
-#endif  // (defined(__i386__) || defined(__x86_64__)) && defined(__linux__) && \
-        // !defined(__ANDROID__)
-
-#undef TOUCH
-
 template <typename FloatType>
 inline bool IsPositiveOrNegativeInfinity(FloatType x) {
   return x == std::numeric_limits<FloatType>::infinity() ||
@@ -148,7 +110,7 @@ inline bool IsPositiveOrNegativeInfinity(FloatType x) {
 // tolerances.
 // Returns true if |x - y| <= a (with a being the absolute_tolerance).
 // The above case is useful for values that are close to zero.
-// Returns true if |x - y| <= std::max(|x|, |y|) * r. (with r being the relative
+// Returns true if |x - y| <= max(|x|, |y|) * r. (with r being the relative
 //                                                tolerance.)
 // The cases for infinities are treated separately to avoid generating NaNs.
 template <typename FloatType>
@@ -217,7 +179,7 @@ inline bool IsIntegerWithinTolerance(FloatType x, FloatType tolerance) {
 // Given an array of doubles, this computes a positive scaling factor such that
 // the scaled doubles can then be rounded to integers with little or no loss of
 // precision, and so that the L1 norm of these integers is <= max_sum. More
-// precisely, the following formulas will hold:
+// precisely, the following formulas will hold (x[i] is input[i], for brevity):
 // - For all i, |round(factor * x[i]) / factor  - x[i]| <= error * |x[i]|
 // - The sum over i of |round(factor * x[i])| <= max_sum.
 //
@@ -237,21 +199,21 @@ inline bool IsIntegerWithinTolerance(FloatType x, FloatType tolerance) {
 //
 // TODO(user): incorporate the gcd computation here? The issue is that I am
 // not sure if I just do factor /= gcd that round(x * factor) will be the same.
-void GetBestScalingOfDoublesToInt64(const std::vector<double>& x,
+void GetBestScalingOfDoublesToInt64(const std::vector<double>& input,
                                     int64 max_absolute_sum,
                                     double* scaling_factor,
                                     double* max_relative_coeff_error);
 
 // Same as the function above, but enforces that
-//  -  The sum over i of std::min(0, round(factor * x[i])) >= -max_sum.
-//  -  The sum over i of std::max(0, round(factor * x[i])) <= max_sum.
+//  -  The sum over i of min(0, round(factor * x[i])) >= -max_sum.
+//  -  The sum over i of max(0, round(factor * x[i])) <= max_sum.
 // For any possible values of the x[i] such that x[i] is in [lb[i], ub[i]].
 //
 // This also computes the max_scaled_sum_error which is a bound on the maximum
 // difference between the exact scaled sum and the rounded one. One needs to
 // divide this by scaling_factor to have the maximum absolute error on the
 // original sum.
-void GetBestScalingOfDoublesToInt64(const std::vector<double>& x,
+void GetBestScalingOfDoublesToInt64(const std::vector<double>& input,
                                     const std::vector<double>& lb,
                                     const std::vector<double>& ub,
                                     int64 max_absolute_sum,

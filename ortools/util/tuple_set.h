@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 
 // Set of integer tuples (fixed-size arrays, all of the same size) with
 // a basic API.
@@ -35,15 +34,15 @@
 #define OR_TOOLS_UTIL_TUPLE_SET_H_
 
 #include <algorithm>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 
+#include "ortools/base/hash.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
 #include "ortools/base/map_util.h"
-#include "ortools/base/hash.h"
 
 namespace operations_research {
 // ----- Main IntTupleSet class -----
@@ -125,7 +124,7 @@ class IntTupleSet {
     // Maps a tuple's fingerprint to the list of tuples with this
     // fingerprint, represented by their start index in the
     // flat_tuples_ vector.
-    std::unordered_map<int64, std::vector<int> > tuple_fprint_to_index_;
+    absl::flat_hash_map<int64, std::vector<int> > tuple_fprint_to_index_;
   };
 
   // Used to represent a light representation of a tuple.
@@ -133,14 +132,14 @@ class IntTupleSet {
     int index;
     IntTupleSet::Data* data;
     IndexData(int i, IntTupleSet::Data* const d) : index(i), data(d) {}
-    static bool Compare(const IndexData& tuple1, const IndexData& tuple2);
+    static bool Compare(const IndexData& a, const IndexData& b);
   };
 
   struct IndexValue {
     int index;
     int64 value;
     IndexValue(int i, int64 v) : index(i), value(v) {}
-    static bool Compare(const IndexValue& tuple1, const IndexValue& tuple2);
+    static bool Compare(const IndexValue& a, const IndexValue& b);
   };
 
   mutable Data* data_;
@@ -200,9 +199,9 @@ bool IntTupleSet::Data::Contains(const std::vector<T>& candidate) const {
     return false;
   }
   const int64 fingerprint = Fingerprint(candidate);
-  if (ContainsKey(tuple_fprint_to_index_, fingerprint)) {
+  if (gtl::ContainsKey(tuple_fprint_to_index_, fingerprint)) {
     const std::vector<int>& indices =
-        FindOrDie(tuple_fprint_to_index_, fingerprint);
+        gtl::FindOrDie(tuple_fprint_to_index_, fingerprint);
     for (int i = 0; i < indices.size(); ++i) {
       const int tuple_index = indices[i];
       for (int j = 0; j < arity_; ++j) {
@@ -276,7 +275,7 @@ inline IntTupleSet::IntTupleSet(const IntTupleSet& set) : data_(set.data_) {
 }
 
 inline IntTupleSet::~IntTupleSet() {
-  CHECK_NOTNULL(data_);
+  CHECK(data_ != nullptr);
   if (data_->RemovedSharedOwner()) {
     delete data_;
   }
@@ -359,7 +358,7 @@ inline int IntTupleSet::NumDifferentValuesInColumn(int col) const {
   if (col < 0 || col >= data_->Arity()) {
     return 0;
   }
-  std::unordered_set<int64> values;
+  absl::flat_hash_set<int64> values;
   for (int i = 0; i < data_->NumTuples(); ++i) {
     values.insert(data_->Value(i, col));
   }

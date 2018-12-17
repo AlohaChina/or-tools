@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,15 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include "ortools/graph/cliques.h"
 
 #include <algorithm>
-#include <unordered_set>
 #include <memory>
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "ortools/base/hash.h"
 
 namespace operations_research {
@@ -218,7 +217,7 @@ class FindAndEliminate {
   std::function<bool(int, int)> graph_;
   int node_count_;
   std::function<bool(const std::vector<int>&)> callback_;
-  std::unordered_set<std::pair<int, int> > visited_;
+  absl::flat_hash_set<std::pair<int, int>> visited_;
 };
 }  // namespace
 
@@ -248,7 +247,9 @@ void CoverArcsByCliques(std::function<bool(int, int)> graph, int node_count,
     return cache.GraphCallback(i, j);
   };
   std::function<bool(const std::vector<int>&)> cached_callback =
-      [&cache](const std::vector<int>& res) { return cache.SolutionCallback(res); };
+      [&cache](const std::vector<int>& res) {
+        return cache.SolutionCallback(res);
+      };
 
   for (int c = 0; c < node_count; ++c) {
     initial_candidates[c] = c;

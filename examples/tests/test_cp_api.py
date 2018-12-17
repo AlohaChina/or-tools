@@ -1,6 +1,5 @@
 # Various calls to CP api from python to verify they work.
 from ortools.constraint_solver import pywrapcp
-from ortools.constraint_solver import model_pb2
 from ortools.constraint_solver import search_limit_pb2
 
 
@@ -46,18 +45,6 @@ def test_limit():
   print(limit_proto)
   limit = solver.Limit(limit_proto)
   print(limit)
-
-
-def test_export():
-  solver = pywrapcp.Solver('test export')
-  x = solver.IntVar(1, 10, 'x')
-  ct = x.Member([1, 2, 3, 5])
-  solver.Add(ct)
-  proto = model_pb2.CPModelProto()
-  proto.model = 'wrong name'
-  solver.ExportModel(proto)
-  print(repr(proto))
-  print(str(proto))
 
 
 class SearchMonitorTest(pywrapcp.SearchMonitor):
@@ -331,6 +318,19 @@ def test_custom_decision():
   print(str(db))
   solver.Solve(db)
 
+def test_search_alldiff():
+  solver = pywrapcp.Solver('test_search_alldiff')
+  in_pos=[solver.IntVar(0,7, "%i" %i) for i in range(8)]
+  solver.Add(solver.AllDifferent(in_pos))
+  aux_phase=solver.Phase(in_pos, solver.CHOOSE_LOWEST_MIN,
+                         solver.ASSIGN_MAX_VALUE)
+  collector=solver.FirstSolutionCollector()
+  for i in range(8):
+    collector.Add(in_pos[i])
+  solver.Solve(aux_phase, [collector])
+  for i in range(8):
+    print(collector.Value(0, in_pos[i]))
+
 
 def main():
   test_member()
@@ -350,6 +350,7 @@ def main():
   test_cumulative_api()
   test_custom_decision_builder()
   test_custom_decision()
+  test_search_alldiff()
 
 
 if __name__ == '__main__':

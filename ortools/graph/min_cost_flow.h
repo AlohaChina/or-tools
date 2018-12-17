@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 
 // An implementation of a cost-scaling push-relabel algorithm for
 // the min-cost flow problem.
@@ -149,7 +148,7 @@
 // We have tried as much as possible in this implementation to keep the
 // notations and namings of the papers cited above, except for 'demand' or
 // 'balance' which have been replaced by 'supply', with the according sign
-// changes to better accomodate with the API of the rest of our tools. A demand
+// changes to better accommodate with the API of the rest of our tools. A demand
 // is denoted by a negative supply.
 //
 // TODO(user): See whether the following can bring any improvements on real-life
@@ -277,11 +276,8 @@ class SimpleMinCostFlow : public MinCostFlowBase {
   CostValue UnitCost(ArcIndex arc) const;
 
  private:
-  typedef ReverseArcStaticGraph<NodeIndex, ArcIndex> Graph;
-  enum SupplyAdjustment {
-    ADJUST,
-    DONT_ADJUST
-  };
+  typedef ::util::ReverseArcStaticGraph<NodeIndex, ArcIndex> Graph;
+  enum SupplyAdjustment { ADJUST, DONT_ADJUST };
 
   // Applies the permutation in arc_permutation_ to the given arc index.
   ArcIndex PermutedArc(ArcIndex arc);

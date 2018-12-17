@@ -1,135 +1,108 @@
-main_dir=$2
+#!/bin/bash
+# usage: ./tools/generate_deps.sh BASE base
+declare -r libname="${1}"
+declare -r main_dir="${2}"
 
-# List all files on ortools/$main_dir
-all_cc=`ls ortools/$main_dir/*.cc | grep -v test.cc`
-all_h=`ls ortools/$main_dir/*.h`
-if ls ortools/$main_dir/*proto 1> /dev/null 2>&1; then
-    all_proto=`ls ortools/$main_dir/*.proto`
-else
-    all_proto=
+# List all files on ortools/"${main_dir}"
+all_cc=( $(ls ortools/"${main_dir}"/*.cc | grep -v test.cc | LC_COLLATE=C sort -u) )
+all_h=( $(ls ortools/"${main_dir}"/*.h | LC_COLLATE=C sort -u) )
+declare -a all_proto
+if ls ortools/"${main_dir}"/*proto >& /dev/null; then
+  all_proto+=( $(ls ortools/"${main_dir}"/*.proto | LC_COLLATE=C sort -u) )
 fi
 
-# Utility functions
-function src_or_gen_dir {
-    if [[ $1 == *\.pb\.* ]]
-    then
-        echo \$\(GEN_DIR\)/$1
-    else
-        echo \$\(SRC_DIR\)/$1
+# Arguments: a list of dependencies.
+# Output: one line per dependency, listing its actual path in ortools,
+#         as understood by the Makefile (eg. using $(SRC_DIR) etc).
+#         Each line is appended with an ending '\', except the last one.
+#
+# Many kinds of input dependencies are supported:
+# - Standard files, like like "ortools/base/stringprintf.h": those will
+#   be output with the $(SRC_DIR)/ directory prefix.
+# - Generated proto file *.pb.{h,cc}: those will be output with the
+#   $(GEN_DIR)/ prefix
+# - Object files *.$O: those will be output with the $(OBJ_DIR)/ prefix.
+function print_paths {
+  is_first_line=1
+  for dep in "$@"; do
+    ((is_first_line)) || echo " \\"
+    is_first_line=0
+    local dir="\$(SRC_DIR)/"
+    [[ "${dep}" == *.pb.* ]] && dir="\$(GEN_DIR)/"
+    if [[ "${dep}" == *.\$O ]]; then
+      dir="\$(OBJ_DIR)/"
+      dep="${dep/ortools\/}"  # Remove the "ortools/" directory.
     fi
+    echo -e -n " ${dir}${dep}"
+  done
 }
 
-function print_include_list {
-    all_deps=($1)
-    last_dep=${all_deps[@]:(-1)}
-    for dep in "${all_deps[@]}"
-    do
-        if [[ $dep == $last_dep ]]
-        then
-            echo \ \ \ \ $(src_or_gen_dir $dep)
-        else
-            echo \ \ \ \ $(src_or_gen_dir $dep) \\
-        fi
-    done
+# Input: a list of file names (eg. "ortools/base/file.h").
+# Output: all the files these files depend on (given by their #include,
+#         by their "import" for proto files).
+function get_dependencies {
+   grep -e "^\(#include\|import\) \"ortools/" $* \
+     | cut -d '"' -f 2 | LC_COLLATE=C sort -u
 }
 
-function print_list_with_prefix {
-    all_files=($1)
-    last_file="${all_files[@]:(-1)}"
-    for file in "${all_files[@]}"
-    do
-        if [[ $file == $last_file ]]
-        then
-            echo "$2"$file
-        else
-            echo "$2"$file \\
-        fi
-    done
+# Input: filename sub_dir
+# Output: dependencies command for that file:
+#    objs/sub_dir/filename.o : ortools/
+function print_dependencies {
+  cmd=$(gcc -MM -MT objs/${2}/${1}.o -c ortools/${2}/${1}.cc -I. -Iortools/gen \
+        -isystem dependencies/install/include | sed -e "s/\.o:/.\$O:/g")
+  echo "${cmd} | \$(OBJ_DIR)/${2}"
 }
 
 # Generate XXX_DEPS macro
-all_deps_str=
-for dir in ${@:2}
-do
-    all_deps_str+=\ $(grep -e "^\#include \"ortools/$dir" ortools/$dir/*.h | cut -d '"' -f 2 | sort -u)
-done
-echo $1_DEPS = \\
-print_include_list "$all_deps_str"
+echo "${libname}"_DEPS = \\
+print_paths ortools/"${main_dir}"/*.h "${all_proto[@]/.proto/.pb.h}"
+echo ""
 echo
 
 # generate XXX_LIB_OBJS macro.
-# Get list of obj files to build.
-all_cc_objs_tmp=${all_cc//ortools/\$\(OBJ_DIR\)}
-all_cc_objs=${all_cc_objs_tmp//\.cc/\.\$O}
-all_proto_objs_tmp=${all_proto//ortools/\$\(OBJ_DIR\)}
-all_proto_objs=${all_proto_objs_tmp//\.proto/.pb.\$O}
-all_objs=$all_cc_objs
-all_objs+=\ $all_proto_objs
-# Print makefile macro definition.
-echo $1_LIB_OBJS = \\
-print_list_with_prefix "$all_objs" "    "
+echo "${1}_LIB_OBJS = \\"
+print_paths "${all_cc[@]/.cc/.\$O}" "${all_proto[@]/.proto/.pb.\$O}"
+echo ""
 echo
 
-# Generate dependencies for .h files
-for file in $all_h
-do
-    name=`basename $file .h`
-    # Compute dependencies.
-    all_deps_str=
-    for dir in ${@:2}
-    do
-        all_deps_str+=\ $(grep -e "^\#include \"ortools/$dir" $file | cut -d '"' -f 2 | sort -u)
-    done
-    # Print makefile command.
-    if [[ ! -z ${all_deps_str// } ]]
-    then
-        echo \$\(SRC_DIR\)/ortools/$2/$name.h: \\
-        print_include_list "$all_deps_str"
-        echo
-    fi
-done
-
 # Generate dependencies and compilation command for .cc files.
-for file in $all_cc
+for file in "${all_cc[@]}"
 do
-    name=`basename $file .cc`
-    # Compute dependencies.
-    all_deps_str=
-    for dir in ${@:2}
-    do
-        all_deps_str+=\ $(grep -e "^\#include \"ortools/$dir" $file | cut -d '"' -f 2 | sort -u)
-    done
-    # Print makefile command.
-    echo \$\(OBJ_DIR\)/$2/$name.\$O: \\
-    echo \ \ \ \ \$\(SRC_DIR\)/ortools/$2/$name.cc \\
-    print_include_list "$all_deps_str"
-    echo -e '\t'\$\(CCC\) \$\(CFLAGS\) -c \$\(SRC_DIR\)\$Sortools\$S$2\$S$name.cc \$\(OBJ_OUT\)\$\(OBJ_DIR\)\$S$2$\S$name.\$O
-    echo
+  name=$(basename "${file}" .cc)
+  # Compute dependencies.
+  print_dependencies "${name}" "${main_dir}"
+  echo -e "\t\$(CCC) \$(CFLAGS) -c \$(SRC_DIR)\$Sortools\$S${main_dir}\$S${name}.cc \$(OBJ_OUT)\$(OBJ_DIR)\$S${main_dir}\$S${name}.\$O"
+  echo
 done
 
-# Generate dependencies, compulation, and protoc command for .proto files.
-for file in $all_proto
+# Generate dependencies, compilation, and protoc command for .proto files.
+for file in "${all_proto[@]}"
 do
-    name=`basename $file .proto`
-    # Compute inter proto dependencies.
-    all_deps_str=
-    for dir in ${@:2}
-    do
-        all_deps_str+=\ $(grep -e "^\import \"ortools/$dir" $file | cut -d '"' -f 2 | sed -e "s/proto/pb.h/" | sort -u)
-    done
-    # Print makefile command.
-    echo \$\(GEN_DIR\)/ortools/$2/$name.pb.cc: \$\(SRC_DIR\)/ortools/$2/$name.proto
-    echo -e '\t'\$\(PROTOBUF_DIR\)/bin/protoc --proto_path=\$\(INC_DIR\) --cpp_out=\$\(GEN_DIR\) \$\(SRC_DIR\)/ortools/$2/$name.proto
-    echo
-    if [[ ! -z ${all_deps_str// } ]]
-    then
-        echo \$\(GEN_DIR\)/ortools/$2/$name.pb.h: \$\(GEN_DIR\)/ortools/$2/$name.pb.cc \\
-        print_include_list "$all_deps_str"
-    else
-        echo \$\(GEN_DIR\)/ortools/$2/$name.pb.h: \$\(GEN_DIR\)/ortools/$2/$name.pb.cc
-    fi
-    echo
-    echo \$\(OBJ_DIR\)/$2/$name.pb.\$O: \$\(GEN_DIR\)/ortools/$2/$name.pb.cc
-    echo -e '\t'\$\(CCC\) \$\(CFLAGS\) -c \$\(GEN_DIR\)/ortools/$2/$name.pb.cc \$\(OBJ_OUT\)\$\(OBJ_DIR\)\$S$2$\S$name.pb.\$O
-    echo
+  name=$(basename "${file}" .proto)
+  # Print makefile command for .proto.
+  echo "ortools/${main_dir}/${name}.proto: ;"
+  echo
+  # Print makefile command for .pb.cc.
+  echo -e "\$(GEN_DIR)/ortools/${main_dir}/${name}.pb.cc: \\"
+  echo -e -n " \$(SRC_DIR)/ortools/${main_dir}/${name}.proto"
+  all_deps=( $(get_dependencies "${file}") )
+  if [[ "${#all_deps[@]}" != 0 ]]; then
+    echo -e " \\"
+    print_paths "${all_deps[@]/.proto/.pb.cc}"
+  fi
+  echo -e " | \$(GEN_DIR)/ortools/${main_dir}"
+  echo -e "\t\$(PROTOC) --proto_path=\$(INC_DIR) \$(PROTOBUF_PROTOC_INC) --cpp_out=\$(GEN_PATH) \$(SRC_DIR)/ortools/${main_dir}/${name}.proto"
+  echo
+  # Print makefile command for .pb.h.
+  echo -e "\$(GEN_DIR)/ortools/${main_dir}/${name}.pb.h: \\"
+  echo -e " \$(GEN_DIR)/ortools/${main_dir}/${name}.pb.cc"
+  echo -e "\t\$(TOUCH) \$(GEN_PATH)\$Sortools\$S${main_dir}\$S${name}.pb.h"
+  echo
+  # Print makefile command for .pb.$O.
+  echo -e "\$(OBJ_DIR)/${main_dir}/${name}.pb.\$O: \\"
+  echo -e -n " \$(GEN_DIR)/ortools/${main_dir}/${name}.pb.cc"
+  echo -e " | \$(OBJ_DIR)/${main_dir}"
+  echo -e "\t\$(CCC) \$(CFLAGS) -c \$(GEN_PATH)\$Sortools\$S${main_dir}\$S${name}.pb.cc \$(OBJ_OUT)\$(OBJ_DIR)\$S${main_dir}\$S${name}.pb.\$O"
+  echo
 done

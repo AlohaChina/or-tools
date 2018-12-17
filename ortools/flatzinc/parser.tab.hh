@@ -31,10 +31,10 @@
    version 2.2 of Bison.  */
 
 #ifndef YY_ORFZ_ORTOOLS_FLATZINC_PARSER_TAB_HH_INCLUDED
-# define YY_ORFZ_ORTOOLS_FLATZINC_PARSER_TAB_HH_INCLUDED
+#define YY_ORFZ_ORTOOLS_FLATZINC_PARSER_TAB_HH_INCLUDED
 /* Debug traces.  */
 #ifndef YYDEBUG
-# define YYDEBUG 1
+#define YYDEBUG 1
 #endif
 #if YYDEBUG
 extern int orfz_debug;
@@ -44,7 +44,8 @@ extern int orfz_debug;
 
 #if !defined(OR_TOOLS_FLATZINC_FLATZINC_TAB_HH_)
 #define OR_TOOLS_FLATZINC_FLATZINC_TAB_HH_
-#include "ortools/base/strutil.h"
+#include "absl/strings/match.h"
+#include "absl/strings/str_format.h"
 #include "ortools/flatzinc/parser_util.h"
 
 // Tells flex to use the LexerInfo class to communicate with the bison parser.
@@ -55,39 +56,37 @@ typedef operations_research::fz::LexerInfo YYSTYPE;
 
 #endif  // OR_TOOLS_FLATZINC_FLATZINC_TAB_HH_
 
-#line 59 "./ortools/flatzinc/parser.tab.hh" /* yacc.c:1909  */
+#line 60 "./ortools/flatzinc/parser.tab.hh" /* yacc.c:1909  */
 
 /* Token type.  */
 #ifndef YYTOKENTYPE
-# define YYTOKENTYPE
-  enum yytokentype
-  {
-    ARRAY = 258,
-    BOOL = 259,
-    CONSTRAINT = 260,
-    FLOAT = 261,
-    INT = 262,
-    MAXIMIZE = 263,
-    MINIMIZE = 264,
-    OF = 265,
-    PREDICATE = 266,
-    SATISFY = 267,
-    SET = 268,
-    SOLVE = 269,
-    VAR = 270,
-    DOTDOT = 271,
-    COLONCOLON = 272,
-    IVALUE = 273,
-    SVALUE = 274,
-    IDENTIFIER = 275,
-    DVALUE = 276
-  };
+#define YYTOKENTYPE
+enum yytokentype {
+  ARRAY = 258,
+  BOOL = 259,
+  CONSTRAINT = 260,
+  FLOAT = 261,
+  INT = 262,
+  MAXIMIZE = 263,
+  MINIMIZE = 264,
+  OF = 265,
+  PREDICATE = 266,
+  SATISFY = 267,
+  SET = 268,
+  SOLVE = 269,
+  VAR = 270,
+  DOTDOT = 271,
+  COLONCOLON = 272,
+  IVALUE = 273,
+  SVALUE = 274,
+  IDENTIFIER = 275,
+  DVALUE = 276
+};
 #endif
 
 /* Value type.  */
 
-
-
-int orfz_parse (operations_research::fz::ParserContext* context, operations_research::fz::Model* model, bool* ok, void* scanner);
+int orfz_parse(operations_research::fz::ParserContext* context,
+               operations_research::fz::Model* model, bool* ok, void* scanner);
 
 #endif /* !YY_ORFZ_ORTOOLS_FLATZINC_PARSER_TAB_HH_INCLUDED  */

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,8 +13,8 @@
 
 // A collections of i/o utilities for the Graph classes in ./graph.h.
 
-#ifndef OR_TOOLS_GRAPH_IO_H_
-#define OR_TOOLS_GRAPH_IO_H_
+#ifndef UTIL_GRAPH_IO_H_
+#define UTIL_GRAPH_IO_H_
 
 #include <algorithm>
 #include <memory>
@@ -22,24 +22,25 @@
 #include <string>
 #include <vector>
 
-#include "ortools/base/join.h"
-#include "ortools/base/numbers.h"
-#include "ortools/base/split.h"
-#include "ortools/base/join.h"
-#include "ortools/graph/graph.h"
-#include "ortools/util/filelineiter.h"
+#include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
+#include "absl/strings/str_split.h"
+#include "ortools/base/filelineiter.h"
 #include "ortools/base/status.h"
 #include "ortools/base/statusor.h"
+#include "ortools/graph/graph.h"
 
-namespace operations_research {
+namespace util {
 
 // Returns a std::string representation of a graph.
 enum GraphToStringFormat {
   // One arc per line, eg. "3->1".
   PRINT_GRAPH_ARCS,
 
-  // One space-separated adjacency list per line, eg. "5 1 3 1".
-  // Nodes with no outgoing arc get an empty line.
+  // One space-separated adjacency list per line, eg. "3: 5 1 3 1".
+  // Nodes with no outgoing arc get an empty list.
   PRINT_GRAPH_ADJACENCY_LISTS,
 
   // Ditto, but the adjacency lists are sorted.
@@ -110,7 +111,7 @@ std::string GraphToString(const Graph& graph, GraphToStringFormat format) {
     if (format == PRINT_GRAPH_ARCS) {
       for (const typename Graph::ArcIndex arc : graph.OutgoingArcs(node)) {
         if (!out.empty()) out += '\n';
-        StrAppend(&out, node, "->", graph.Head(arc));
+        absl::StrAppend(&out, node, "->", graph.Head(arc));
       }
     } else {  // PRINT_GRAPH_ADJACENCY_LISTS[_SORTED]
       adj.clear();
@@ -121,7 +122,7 @@ std::string GraphToString(const Graph& graph, GraphToStringFormat format) {
         std::sort(adj.begin(), adj.end());
       }
       if (node != 0) out += '\n';
-      StrAppend(&out, node, ": ", strings::Join(adj, " "));
+      absl::StrAppend(&out, node, ": ", absl::StrJoin(adj, " "));
     }
   }
   return out;
@@ -139,13 +140,14 @@ util::StatusOr<Graph*> ReadGraphFile(
     ++num_lines_read;
     if (num_lines_read == 1) {
       std::vector<int64> header_ints;
-      if (!SplitStringAndParse(line, " ", &safe_strto64, &header_ints) ||
-          header_ints.size() < 2 || header_ints[0] < 0 || header_ints[1] < 0) {
-        return util::Status(
-            util::error::INVALID_ARGUMENT,
-            StrCat("First line of '", filename,
-                         "' should be at least two nonnegative integers."));
-      }
+      // if (!SplitStringAndParse(line, " ", &absl::SimpleAtoi,
+      //                          &header_ints) ||
+      //     header_ints.size() < 2 || header_ints[0] < 0 || header_ints[1] < 0) {
+      //   return util::Status(
+      //       util::error::INVALID_ARGUMENT,
+      //       absl::StrCat("First line of '", filename,
+      //                    "' should be at least two nonnegative integers."));
+      // }
       num_nodes = header_ints[0];
       num_expected_lines = header_ints[1];
       if (num_nodes_with_color_or_null != nullptr) {
@@ -158,7 +160,7 @@ util::StatusOr<Graph*> ReadGraphFile(
           if (header_ints.size() != num_colors + 2) {
             return util::Status(
                 util::error::INVALID_ARGUMENT,
-                StrCat(
+                absl::StrCat(
                     "There should be num_colors-1 color cardinalities in the"
                     " header of '",
                     filename, "' (where num_colors=", num_colors,
@@ -172,7 +174,7 @@ util::StatusOr<Graph*> ReadGraphFile(
             if (header_ints[i] <= 0 || num_nodes_left <= 0) {
               return util::Status(
                   util::error::INVALID_ARGUMENT,
-                  StrCat(
+                  absl::StrCat(
                       "The color cardinalities in the header of '", filename,
                       " should always be >0 and add up to less than the"
                       " total number of nodes."));
@@ -185,13 +187,13 @@ util::StatusOr<Graph*> ReadGraphFile(
       graph.reset(new Graph(num_nodes, num_arcs));
       continue;
     }
-    int64 node1 = -1;
-    int64 node2 = -1;
-    if (sscanf(line.c_str(), "%lld %lld", &node1, &node2) != 2 || node1 < 0 ||
+    int64_t node1 = -1;
+    int64_t node2 = -1;
+    if (sscanf(line.c_str(), "%ld %ld", &node1, &node2) != 2 || node1 < 0 ||
         node2 < 0 || node1 >= num_nodes || node2 >= num_nodes) {
       return util::Status(
           util::error::INVALID_ARGUMENT,
-          StrCat("In '", filename, "', line ", num_lines_read,
+          absl::StrCat("In '", filename, "', line ", num_lines_read,
                        ": Expected two", " integers in the range [0, ",
                        num_nodes, ")."));
     }
@@ -208,7 +210,7 @@ util::StatusOr<Graph*> ReadGraphFile(
   }
   if (num_lines_read != num_expected_lines + 1) {
     return util::Status(util::error::INVALID_ARGUMENT,
-                        StrCat("The number of arcs/edges in '", filename,
+                        absl::StrCat("The number of arcs/edges in '", filename,
                                      "' (", num_lines_read - 1,
                                      " does not match the value announced in",
                                      " the header (", num_expected_lines, ")"));
@@ -243,8 +245,8 @@ util::Status WriteGraphToFile(const Graph& graph, const std::string& filename,
                           " arcs!");
     }
   }
-  fprintf(
-      f, "%lld %lld", static_cast<int64>(graph.num_nodes()),
+  absl::FPrintF(
+      f, "%d %d", static_cast<int64>(graph.num_nodes()),
       static_cast<int64>(directed ? graph.num_arcs()
                                   : (graph.num_arcs() + num_self_arcs) / 2));
   if (!num_nodes_with_color.empty()) {
@@ -257,7 +259,7 @@ util::Status WriteGraphToFile(const Graph& graph, const std::string& filename,
     }
     fprintf(f, " %lu", num_nodes_with_color.size());
     for (int i = 0; i < num_nodes_with_color.size() - 1; ++i) {
-      fprintf(f, " %lld", static_cast<int64>(num_nodes_with_color[i]));
+      absl::FPrintF(f, " %d", static_cast<int64>(num_nodes_with_color[i]));
     }
   }
   fprintf(f, "\n");
@@ -266,8 +268,8 @@ util::Status WriteGraphToFile(const Graph& graph, const std::string& filename,
     for (const typename Graph::ArcIndex arc : graph.OutgoingArcs(node)) {
       const typename Graph::NodeIndex head = graph.Head(arc);
       if (directed || head >= node) {
-        fprintf(f, "%lld %lld\n", static_cast<int64>(node),
-                static_cast<uint64>(head));
+        absl::FPrintF(f, "%d %d\n", static_cast<int64>(node),
+                      static_cast<uint64>(head));
       }
     }
   }
@@ -278,6 +280,6 @@ util::Status WriteGraphToFile(const Graph& graph, const std::string& filename,
   return util::Status::OK;
 }
 
-}  // namespace operations_research
+}  // namespace util
 
-#endif  // OR_TOOLS_GRAPH_IO_H_
+#endif  // UTIL_GRAPH_IO_H_

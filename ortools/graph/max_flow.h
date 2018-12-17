@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 
 // An implementation of a push-relabel algorithm for the max flow problem.
 //
@@ -69,7 +68,7 @@
 // In this case the following operations can be applied to it:
 //
 // - if there are *admissible* incident arcs, i.e. arcs which are not saturated,
-//   and whose tail's height is lower than the height of the active node
+//   and whose head's height is lower than the height of the active node
 //   considered, a PushFlow operation can be applied. It consists in sending as
 //   much flow as both the excess at the node and the capacity of the arc
 //   permit.
@@ -149,8 +148,7 @@ class GenericMaxFlow;
 // more memory in order to hide the somewhat involved construction of the
 // static graph.
 //
-// TODO(user): If the need arises, extend this interface to support warm start
-// and incrementality between solves.
+// TODO(user): If the need arises, extend this interface to support warm start.
 class SimpleMaxFlow {
  public:
   // The constructor takes no size.
@@ -215,7 +213,7 @@ class SimpleMaxFlow {
   void GetSourceSideMinCut(std::vector<NodeIndex>* result);
 
   // Returns the nodes that can reach the sink by non-saturated arcs, the
-  // outgoing arcs of this set form a minimun cut. Note that if this is the
+  // outgoing arcs of this set form a minimum cut. Note that if this is the
   // complement set of GetNodeReachableFromSource(), then the min-cut is unique.
   // This works only if Solve() returned OPTIMAL.
   void GetSinkSideMinCut(std::vector<NodeIndex>* result);
@@ -223,6 +221,12 @@ class SimpleMaxFlow {
   // Creates the protocol buffer representation of the problem used by the last
   // Solve() call. This is mainly useful for debugging.
   FlowModel CreateFlowModelOfLastSolve();
+
+  // Change the capacity of an arc.
+  // WARNING: This looks like it enables incremental solves, but as of 2018-02,
+  // the next Solve() will restart from scratch anyway.
+  // TODO(user): Support incrementality in the max flow implementation.
+  void SetArcCapacity(ArcIndex arc, FlowQuantity capacity);
 
  private:
   NodeIndex num_nodes_;
@@ -235,7 +239,7 @@ class SimpleMaxFlow {
 
   // Note that we cannot free the graph before we stop using the max-flow
   // instance that uses it.
-  typedef ReverseArcStaticGraph<NodeIndex, ArcIndex> Graph;
+  typedef ::util::ReverseArcStaticGraph<NodeIndex, ArcIndex> Graph;
   std::unique_ptr<Graph> underlying_graph_;
   std::unique_ptr<GenericMaxFlow<Graph> > underlying_max_flow_;
 
@@ -270,7 +274,7 @@ class PriorityQueueWithRestrictedPush {
   // Push a new element in the queue. Its priority must be greater or equal to
   // the highest priority present in the queue, minus one. This condition is
   // DCHECKed, and violating it yields erroneous queue behavior in NDEBUG mode.
-  void Push(Element index, IntegerPriority priority);
+  void Push(Element element, IntegerPriority priority);
 
   // Returns the element with highest priority and remove it from the queue.
   // IsEmpty() must be false, this condition is DCHECKed.
@@ -325,9 +329,9 @@ class GenericMaxFlow : public MaxFlowStatusClass {
 
   // Initialize a MaxFlow instance on the given graph. The graph does not need
   // to be fully built yet, but its capacity reservation are used to initialize
-  // the memory of this class. source and target must also be valid node of
+  // the memory of this class. source and sink must also be valid node of
   // graph.
-  GenericMaxFlow(const Graph* graph, NodeIndex source, NodeIndex target);
+  GenericMaxFlow(const Graph* graph, NodeIndex source, NodeIndex sink);
   virtual ~GenericMaxFlow() {}
 
   // Returns the graph associated to the current object.
@@ -382,7 +386,7 @@ class GenericMaxFlow : public MaxFlowStatusClass {
   void GetSourceSideMinCut(std::vector<NodeIndex>* result);
 
   // Returns the nodes that can reach the sink in the residual graph, the
-  // outgoing arcs of this set form a minimun cut. Note that if this is the
+  // outgoing arcs of this set form a minimum cut. Note that if this is the
   // complement of GetNodeReachableFromSource(), then the min-cut is unique.
   //
   // TODO(user): In the two-phases algorithm, we can get this minimum cut

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,15 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include "ortools/util/graph_export.h"
 
 #include <memory>
 
+#include "absl/strings/str_format.h"
+#include "ortools/base/file.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
-#include "ortools/base/stringprintf.h"
-#include "ortools/base/file.h"
 #include "ortools/base/status.h"
 
 namespace operations_research {
@@ -33,10 +32,12 @@ class GraphSyntax {
 
   // Node in the right syntax.
   virtual std::string Node(const std::string& name, const std::string& label,
-                      const std::string& shape, const std::string& color) = 0;
+                           const std::string& shape,
+                           const std::string& color) = 0;
   // Adds one link in the generated graph.
-  virtual std::string Link(const std::string& source, const std::string& destination,
-                      const std::string& label) = 0;
+  virtual std::string Link(const std::string& source,
+                           const std::string& destination,
+                           const std::string& label) = 0;
   // File header.
   virtual std::string Header(const std::string& name) = 0;
 
@@ -48,22 +49,22 @@ class DotSyntax : public GraphSyntax {
  public:
   ~DotSyntax() override {}
 
-  std::string Node(const std::string& name, const std::string& label, const std::string& shape,
-              const std::string& color) override {
-    return StringPrintf("%s [shape=%s label=\"%s\" color=%s]\n", name.c_str(),
-                        shape.c_str(), label.c_str(), color.c_str());
+  std::string Node(const std::string& name, const std::string& label,
+                   const std::string& shape,
+                   const std::string& color) override {
+    return absl::StrFormat("%s [shape=%s label=\"%s\" color=%s]\n", name, shape,
+                           label, color);
   }
 
   // Adds one link in the generated graph.
   std::string Link(const std::string& source, const std::string& destination,
-              const std::string& label) override {
-    return StringPrintf("%s -> %s [label=%s]\n", source.c_str(),
-                        destination.c_str(), label.c_str());
+                   const std::string& label) override {
+    return absl::StrFormat("%s -> %s [label=%s]\n", source, destination, label);
   }
 
   // File header.
   std::string Header(const std::string& name) override {
-    return StringPrintf("graph %s {\n", name.c_str());
+    return absl::StrFormat("graph %s {\n", name);
   }
 
   // File footer.
@@ -74,9 +75,10 @@ class GmlSyntax : public GraphSyntax {
  public:
   ~GmlSyntax() override {}
 
-  std::string Node(const std::string& name, const std::string& label, const std::string& shape,
-              const std::string& color) override {
-    return StringPrintf(
+  std::string Node(const std::string& name, const std::string& label,
+                   const std::string& shape,
+                   const std::string& color) override {
+    return absl::StrFormat(
         "  node [\n"
         "    name \"%s\"\n"
         "    label \"%s\"\n"
@@ -85,27 +87,27 @@ class GmlSyntax : public GraphSyntax {
         "      fill \"%s\"\n"
         "    ]\n"
         "  ]\n",
-        name.c_str(), label.c_str(), shape.c_str(), color.c_str());
+        name, label, shape, color);
   }
 
   // Adds one link in the generated graph.
   std::string Link(const std::string& source, const std::string& destination,
-              const std::string& label) override {
-    return StringPrintf(
+                   const std::string& label) override {
+    return absl::StrFormat(
         "  edge [\n"
         "    label \"%s\"\n"
         "    source \"%s\"\n"
         "    target \"%s\"\n"
         "  ]\n",
-        label.c_str(), source.c_str(), destination.c_str());
+        label, source, destination);
   }
 
   // File header.
   std::string Header(const std::string& name) override {
-    return StringPrintf(
+    return absl::StrFormat(
         "graph [\n"
         "  name \"%s\"\n",
-        name.c_str());
+        name);
   }
 
   // File footer.
@@ -122,8 +124,8 @@ class FileGraphExporter : public GraphExporter {
   ~FileGraphExporter() override {}
 
   // Write node in GML or DOT format.
-  void WriteNode(const std::string& name, const std::string& label, const std::string& shape,
-                 const std::string& color) override {
+  void WriteNode(const std::string& name, const std::string& label,
+                 const std::string& shape, const std::string& color) override {
     Append(syntax_->Node(name, label, shape, color));
   }
 

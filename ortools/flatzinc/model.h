@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,12 +16,11 @@
 
 #include <map>
 #include <string>
-#include <unordered_map>
 
+#include "absl/container/flat_hash_map.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
-#include "ortools/util/iterators.h"
+#include "ortools/graph/iterators.h"
 #include "ortools/util/string_array.h"
 
 namespace operations_research {
@@ -43,6 +42,9 @@ class Model;
 //  - a Boolean domain({ 0, 1 } with Boolean display tag).
 // TODO(user): Rework domains, all int64 should be kintmin..kint64max.
 //                It is a bit tricky though as we must take care of overflows.
+// If is_a_set is true, then this domain has a set semantics. For a set
+// variable, any subset of the initial set of values is a valid assignment,
+// instead of exactly one value.
 struct Domain {
   // The values will be sorted and duplicate values will be removed.
   static Domain IntegerList(std::vector<int64> values);
@@ -50,6 +52,11 @@ struct Domain {
   static Domain IntegerValue(int64 value);
   static Domain Interval(int64 included_min, int64 included_max);
   static Domain Boolean();
+  static Domain SetOfIntegerList(std::vector<int64> values);
+  static Domain SetOfAllInt64();
+  static Domain SetOfIntegerValue(int64 value);
+  static Domain SetOfInterval(int64 included_min, int64 included_max);
+  static Domain SetOfBoolean();
   static Domain EmptyDomain();
 
   bool HasOneValue() const;
@@ -69,7 +76,7 @@ struct Domain {
 
   // Various inclusion tests on a domain.
   bool Contains(int64 value) const;
-  bool OverlapsIntList(const std::vector<int64>& values) const;
+  bool OverlapsIntList(const std::vector<int64>& vec) const;
   bool OverlapsIntInterval(int64 lb, int64 ub) const;
   bool OverlapsDomain(const Domain& other) const;
 
@@ -90,6 +97,8 @@ struct Domain {
   std::vector<int64> values;
   bool is_interval;
   bool display_as_boolean;
+  // Indicates if the domain was created as a set domain.
+  bool is_a_set;
 };
 
 // An int var is a name with a domain of possible values, along with
@@ -131,7 +140,8 @@ struct IntegerVariable {
  private:
   friend class Model;
 
-  IntegerVariable(const std::string& name_, const Domain& domain_, bool temporary_);
+  IntegerVariable(const std::string& name_, const Domain& domain_,
+                  bool temporary_);
 };
 
 // An argument is either an integer value, an integer domain, a
@@ -165,7 +175,7 @@ struct Argument {
   bool HasOneValue() const;
   // Returns the value of the argument. Does DCHECK(HasOneValue()).
   int64 Value() const;
-  // Returns true if if it an integer list, or an array of integer
+  // Returns true if it an integer list, or an array of integer
   // variables (or domain) each having only one value.
   bool IsArrayOfValues() const;
   // Returns true if the argument is an integer value, an integer
@@ -190,8 +200,8 @@ struct Argument {
 // A constraint has a type, some arguments, and a few tags. Typically, a
 // Constraint is on the heap, and owned by the global Model object.
 struct Constraint {
-  Constraint(const std::string& t, std::vector<Argument> args, bool strong_propag,
-             IntegerVariable* target)
+  Constraint(const std::string& t, std::vector<Argument> args,
+             bool strong_propag, IntegerVariable* target)
       : type(t),
         arguments(std::move(args)),
         target_variable(target),
@@ -260,7 +270,7 @@ struct Annotation {
   static Annotation Interval(int64 interval_min, int64 interval_max);
   static Annotation IntegerValue(int64 value);
   static Annotation Variable(IntegerVariable* const var);
-  static Annotation VariableList(std::vector<IntegerVariable*> vars);
+  static Annotation VariableList(std::vector<IntegerVariable*> variables);
   static Annotation String(const std::string& str);
 
   std::string DebugString() const;
@@ -327,14 +337,12 @@ class Model {
   // The objects returned by AddVariable(), AddConstant(),  and AddConstraint()
   // are owned by the model and will remain live for its lifetime.
   IntegerVariable* AddVariable(const std::string& name, const Domain& domain,
-                               bool temporary);
+                               bool defined);
   IntegerVariable* AddConstant(int64 value);
   // Creates and add a constraint to the model.
-  // The parameter strong is an indication from the model that prefers stronger
-  // (and more expensive version of the propagator).
-  void AddConstraint(const std::string& type, std::vector<Argument> arguments,
-                     bool strong, IntegerVariable* target_variable);
-  void AddConstraint(const std::string& type, std::vector<Argument> arguments);
+  void AddConstraint(const std::string& id, std::vector<Argument> arguments,
+                     bool is_domain, IntegerVariable* defines);
+  void AddConstraint(const std::string& id, std::vector<Argument> arguments);
   void AddOutput(SolutionOutputSpecs output);
 
   // Set the search annotations and the objective: either simply satisfy the
@@ -356,14 +364,14 @@ class Model {
     return search_annotations_;
   }
 #if !defined(SWIG)
-  MutableVectorIteration<Annotation> mutable_search_annotations() {
-    return MutableVectorIteration<Annotation>(&search_annotations_);
+  util::MutableVectorIteration<Annotation> mutable_search_annotations() {
+    return util::MutableVectorIteration<Annotation>(&search_annotations_);
   }
 #endif
   const std::vector<SolutionOutputSpecs>& output() const { return output_; }
 #if !defined(SWIG)
-  MutableVectorIteration<SolutionOutputSpecs> mutable_output() {
-    return MutableVectorIteration<SolutionOutputSpecs>(&output_);
+  util::MutableVectorIteration<SolutionOutputSpecs> mutable_output() {
+    return util::MutableVectorIteration<SolutionOutputSpecs>(&output_);
   }
 #endif
   bool maximize() const { return maximize_; }
@@ -405,7 +413,7 @@ class ModelStatistics {
  private:
   const Model& model_;
   std::map<std::string, std::vector<Constraint*>> constraints_per_type_;
-  std::unordered_map<const IntegerVariable*, std::vector<Constraint*>>
+  absl::flat_hash_map<const IntegerVariable*, std::vector<Constraint*>>
       constraints_per_variables_;
 };
 }  // namespace fz

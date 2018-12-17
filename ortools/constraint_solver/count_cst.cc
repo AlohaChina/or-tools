@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -18,47 +18,48 @@
 #include <string>
 #include <vector>
 
+#include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
-#include "ortools/base/join.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/string_array.h"
 
 namespace operations_research {
-Constraint* Solver::MakeCount(const std::vector<IntVar*>& vars, int64 v,
-                              int64 c) {
+Constraint* Solver::MakeCount(const std::vector<IntVar*>& vars, int64 value,
+                              int64 max_count) {
   std::vector<IntVar*> tmp_sum;
   for (int i = 0; i < vars.size(); ++i) {
-    if (vars[i]->Contains(v)) {
+    if (vars[i]->Contains(value)) {
       if (vars[i]->Bound()) {
-        c--;
+        max_count--;
       } else {
-        tmp_sum.push_back(MakeIsEqualCstVar(vars[i], v));
+        tmp_sum.push_back(MakeIsEqualCstVar(vars[i], value));
       }
     }
   }
-  return MakeSumEquality(tmp_sum, c);
+  return MakeSumEquality(tmp_sum, max_count);
 }
 
-Constraint* Solver::MakeCount(const std::vector<IntVar*>& vars, int64 v,
-                              IntVar* c) {
-  if (c->Bound()) {
-    return MakeCount(vars, v, c->Min());
+Constraint* Solver::MakeCount(const std::vector<IntVar*>& vars, int64 value,
+                              IntVar* max_count) {
+  if (max_count->Bound()) {
+    return MakeCount(vars, value, max_count->Min());
   } else {
     std::vector<IntVar*> tmp_sum;
     int64 num_vars_bound_to_v = 0;
     for (int i = 0; i < vars.size(); ++i) {
-      if (vars[i]->Contains(v)) {
+      if (vars[i]->Contains(value)) {
         if (vars[i]->Bound()) {
           ++num_vars_bound_to_v;
         } else {
-          tmp_sum.push_back(MakeIsEqualCstVar(vars[i], v));
+          tmp_sum.push_back(MakeIsEqualCstVar(vars[i], value));
         }
       }
     }
-    return MakeSumEquality(tmp_sum, MakeSum(c, -num_vars_bound_to_v)->Var());
+    return MakeSumEquality(tmp_sum,
+                           MakeSum(max_count, -num_vars_bound_to_v)->Var());
   }
 }
 
@@ -125,9 +126,8 @@ class AtMost : public Constraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("AtMost(%s, %" GG_LL_FORMAT "d, %" GG_LL_FORMAT "d)",
-                        JoinDebugStringPtr(vars_, ", ").c_str(), value_,
-                        max_count_);
+    return absl::StrFormat("AtMost(%s, %d, %d)",
+                           JoinDebugStringPtr(vars_, ", "), value_, max_count_);
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -163,16 +163,16 @@ class Distribute : public Constraint {
 
   void Post() override;
   void InitialPropagate() override;
-  void OneBound(int vindex);
-  void OneDomain(int vindex);
+  void OneBound(int index);
+  void OneDomain(int index);
   void CountVar(int cindex);
   void CardMin(int cindex);
   void CardMax(int cindex);
   std::string DebugString() const override {
-    return StringPrintf("Distribute(vars = [%s], values = [%s], cards = [%s])",
-                        JoinDebugStringPtr(vars_, ", ").c_str(),
-                        strings::Join(values_, ", ").c_str(),
-                        JoinDebugStringPtr(cards_, ", ").c_str());
+    return absl::StrFormat(
+        "Distribute(vars = [%s], values = [%s], cards = [%s])",
+        JoinDebugStringPtr(vars_, ", "), absl::StrJoin(values_, ", "),
+        JoinDebugStringPtr(cards_, ", "));
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -327,8 +327,8 @@ class FastDistribute : public Constraint {
 
   void Post() override;
   void InitialPropagate() override;
-  void OneBound(int vindex);
-  void OneDomain(int vindex);
+  void OneBound(int index);
+  void OneDomain(int index);
   void CountVar(int card_index);
   void CardMin(int card_index);
   void CardMax(int card_index);
@@ -389,9 +389,9 @@ FastDistribute::FastDistribute(Solver* const s,
 }
 
 std::string FastDistribute::DebugString() const {
-  return StringPrintf("FastDistribute(vars = [%s], cards = [%s])",
-                      JoinDebugStringPtr(vars_, ", ").c_str(),
-                      JoinDebugStringPtr(cards_, ", ").c_str());
+  return absl::StrFormat("FastDistribute(vars = [%s], cards = [%s])",
+                         JoinDebugStringPtr(vars_, ", "),
+                         JoinDebugStringPtr(cards_, ", "));
 }
 
 void FastDistribute::Post() {
@@ -455,7 +455,7 @@ void FastDistribute::OneDomain(int index) {
   const int64 oldmax = var->OldMax();
   const int64 vmin = var->Min();
   const int64 vmax = var->Max();
-  for (int64 card_index = std::max(oldmin, 0LL);
+  for (int64 card_index = std::max(oldmin, int64{0});
        card_index < std::min(vmin, card_size()); ++card_index) {
     if (undecided_.IsSet(index, card_index)) {
       SetRevCannotContribute(index, card_index);
@@ -467,7 +467,7 @@ void FastDistribute::OneDomain(int index) {
       SetRevCannotContribute(index, card_index);
     }
   }
-  for (int64 card_index = std::max(vmax + 1, 0LL);
+  for (int64 card_index = std::max(vmax + 1, int64{0});
        card_index <= std::min(oldmax, card_size() - 1); ++card_index) {
     if (undecided_.IsSet(index, card_index)) {
       SetRevCannotContribute(index, card_index);
@@ -515,8 +515,8 @@ class BoundedDistribute : public Constraint {
 
   void Post() override;
   void InitialPropagate() override;
-  void OneBound(int vindex);
-  void OneDomain(int vindex);
+  void OneBound(int index);
+  void OneDomain(int index);
   void CountVar(int card_index);
   void CardMin(int card_index);
   void CardMax(int card_index);
@@ -588,13 +588,11 @@ BoundedDistribute::BoundedDistribute(Solver* const s,
 }
 
 std::string BoundedDistribute::DebugString() const {
-  return StringPrintf(
+  return absl::StrFormat(
       "BoundedDistribute([%s], values = [%s], card_min = [%s], card_max = "
       "[%s]",
-      JoinDebugStringPtr(vars_, ", ").c_str(),
-      strings::Join(values_, ", ").c_str(),
-      strings::Join(card_min_, ", ").c_str(),
-      strings::Join(card_max_, ", ").c_str());
+      JoinDebugStringPtr(vars_, ", "), absl::StrJoin(values_, ", "),
+      absl::StrJoin(card_min_, ", "), absl::StrJoin(card_max_, ", "));
 }
 
 void BoundedDistribute::Post() {
@@ -719,8 +717,8 @@ class BoundedFastDistribute : public Constraint {
 
   void Post() override;
   void InitialPropagate() override;
-  void OneBound(int vindex);
-  void OneDomain(int vindex);
+  void OneBound(int index);
+  void OneDomain(int index);
   void CountVar(int card_index);
   void CardMin(int card_index);
   void CardMax(int card_index);
@@ -788,11 +786,10 @@ BoundedFastDistribute::BoundedFastDistribute(Solver* const s,
 }
 
 std::string BoundedFastDistribute::DebugString() const {
-  return StringPrintf(
+  return absl::StrFormat(
       "BoundedFastDistribute([%s], card_min = [%s], card_max = [%s]",
-      JoinDebugStringPtr(vars_, ", ").c_str(),
-      strings::Join(card_min_, ", ").c_str(),
-      strings::Join(card_max_, ", ").c_str());
+      JoinDebugStringPtr(vars_, ", "), absl::StrJoin(card_min_, ", "),
+      absl::StrJoin(card_max_, ", "));
 }
 
 void BoundedFastDistribute::Post() {
@@ -871,7 +868,7 @@ void BoundedFastDistribute::OneDomain(int index) {
   const int64 oldmax = var->OldMax();
   const int64 vmin = var->Min();
   const int64 vmax = var->Max();
-  for (int64 card_index = std::max(oldmin, 0LL);
+  for (int64 card_index = std::max(oldmin, int64{0});
        card_index < std::min(vmin, card_size()); ++card_index) {
     if (undecided_.IsSet(index, card_index)) {
       SetRevCannotContribute(index, card_index);
@@ -883,7 +880,7 @@ void BoundedFastDistribute::OneDomain(int index) {
       SetRevCannotContribute(index, card_index);
     }
   }
-  for (int64 card_index = std::max(vmax + 1, 0LL);
+  for (int64 card_index = std::max(vmax + 1, int64{0});
        card_index <= std::min(oldmax, card_size() - 1); ++card_index) {
     if (undecided_.IsSet(index, card_index)) {
       SetRevCannotContribute(index, card_index);

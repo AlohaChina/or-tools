@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -41,7 +41,9 @@ namespace glop {
 // as expected. Fix? or document and crash in debug if this happens.
 class Preprocessor {
  public:
-  Preprocessor();
+  explicit Preprocessor(const GlopParameters* parameters);
+  Preprocessor(const Preprocessor&) = delete;
+  Preprocessor& operator=(const Preprocessor&) = delete;
   virtual ~Preprocessor();
 
   // Runs the preprocessor by modifying the given linear program. Returns true
@@ -49,7 +51,7 @@ class Preprocessor {
   // identity function). Also updates status_ to something different from
   // ProblemStatus::INIT if the problem was solved (including bad statuses
   // like ProblemStatus::ABNORMAL, ProblemStatus::INFEASIBLE, etc.).
-  virtual bool Run(LinearProgram* linear_program, TimeLimit* time_limit) = 0;
+  virtual bool Run(LinearProgram* lp) = 0;
 
   // Stores the optimal solution of the linear program that was passed to
   // Run(). The given solution needs to be set to the optimal solution of the
@@ -61,11 +63,6 @@ class Preprocessor {
   // solved and there is not need to call subsequent preprocessors.
   ProblemStatus status() const { return status_; }
 
-  // Stores the parameters for use by the different preprocessors.
-  void SetParameters(const GlopParameters& parameters) {
-    parameters_ = parameters;
-  }
-
   // Some preprocessors only need minimal changes when used with integer
   // variables in a MIP context. Setting this to true allows to consider integer
   // variables as integer in these preprocessors.
@@ -73,6 +70,8 @@ class Preprocessor {
   // Not all preprocessors handle integer variables correctly, calling this
   // function on them will cause a LOG(FATAL).
   virtual void UseInMipContext() { in_mip_context_ = true; }
+
+  void SetTimeLimit(TimeLimit* time_limit) { time_limit_ = time_limit; }
 
  protected:
   // Returns true if a is less than b (or slighlty greater than b with a given
@@ -89,11 +88,9 @@ class Preprocessor {
   }
 
   ProblemStatus status_;
-  GlopParameters parameters_;
+  const GlopParameters& parameters_;
   bool in_mip_context_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(Preprocessor);
+  TimeLimit* time_limit_;
 };
 
 // --------------------------------------------------------
@@ -103,10 +100,13 @@ class Preprocessor {
 // preprocessors in this file, possibly more than once.
 class MainLpPreprocessor : public Preprocessor {
  public:
-  MainLpPreprocessor() {}
+  explicit MainLpPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  MainLpPreprocessor(const MainLpPreprocessor&) = delete;
+  MainLpPreprocessor& operator=(const MainLpPreprocessor&) = delete;
   ~MainLpPreprocessor() override {}
 
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const override;
 
  private:
@@ -127,8 +127,6 @@ class MainLpPreprocessor : public Preprocessor {
   EntryIndex initial_num_entries_;
   RowIndex initial_num_rows_;
   ColIndex initial_num_cols_;
-
-  DISALLOW_COPY_AND_ASSIGN(MainLpPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -138,6 +136,8 @@ class MainLpPreprocessor : public Preprocessor {
 class ColumnDeletionHelper {
  public:
   ColumnDeletionHelper() {}
+  ColumnDeletionHelper(const ColumnDeletionHelper&) = delete;
+  ColumnDeletionHelper& operator=(const ColumnDeletionHelper&) = delete;
 
   // Remember the given column as "deleted" so that it can later be restored
   // by RestoreDeletedColumns(). Optionally, the caller may indicate the
@@ -183,7 +183,6 @@ class ColumnDeletionHelper {
   // data structure so columns can be deleted in any order if needed.
   DenseRow stored_value_;
   VariableStatusRow stored_status_;
-  DISALLOW_COPY_AND_ASSIGN(ColumnDeletionHelper);
 };
 
 // --------------------------------------------------------
@@ -193,6 +192,8 @@ class ColumnDeletionHelper {
 class RowDeletionHelper {
  public:
   RowDeletionHelper() {}
+  RowDeletionHelper(const RowDeletionHelper&) = delete;
+  RowDeletionHelper& operator=(const RowDeletionHelper&) = delete;
 
   // Returns true if no rows have been marked for deletion.
   bool IsEmpty() const { return is_row_deleted_.empty(); }
@@ -221,8 +222,6 @@ class RowDeletionHelper {
 
  private:
   DenseBooleanColumn is_row_deleted_;
-
-  DISALLOW_COPY_AND_ASSIGN(RowDeletionHelper);
 };
 
 // --------------------------------------------------------
@@ -231,14 +230,16 @@ class RowDeletionHelper {
 // Removes the empty columns from the problem.
 class EmptyColumnPreprocessor : public Preprocessor {
  public:
-  EmptyColumnPreprocessor() {}
+  explicit EmptyColumnPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  EmptyColumnPreprocessor(const EmptyColumnPreprocessor&) = delete;
+  EmptyColumnPreprocessor& operator=(const EmptyColumnPreprocessor&) = delete;
   ~EmptyColumnPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
   ColumnDeletionHelper column_deletion_helper_;
-  DISALLOW_COPY_AND_ASSIGN(EmptyColumnPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -256,9 +257,14 @@ class EmptyColumnPreprocessor : public Preprocessor {
 // so it makes sense to use the more general notion of proportional columns.
 class ProportionalColumnPreprocessor : public Preprocessor {
  public:
-  ProportionalColumnPreprocessor() {}
+  explicit ProportionalColumnPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  ProportionalColumnPreprocessor(const ProportionalColumnPreprocessor&) =
+      delete;
+  ProportionalColumnPreprocessor& operator=(
+      const ProportionalColumnPreprocessor&) = delete;
   ~ProportionalColumnPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
   void UseInMipContext() final { LOG(FATAL) << "Not implemented."; }
 
@@ -282,8 +288,6 @@ class ProportionalColumnPreprocessor : public Preprocessor {
   DenseRow new_upper_bounds_;
 
   ColumnDeletionHelper column_deletion_helper_;
-
-  DISALLOW_COPY_AND_ASSIGN(ProportionalColumnPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -294,9 +298,13 @@ class ProportionalColumnPreprocessor : public Preprocessor {
 // same remark above for columns in ProportionalColumnPreprocessor.
 class ProportionalRowPreprocessor : public Preprocessor {
  public:
-  ProportionalRowPreprocessor() {}
+  explicit ProportionalRowPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  ProportionalRowPreprocessor(const ProportionalRowPreprocessor&) = delete;
+  ProportionalRowPreprocessor& operator=(const ProportionalRowPreprocessor&) =
+      delete;
   ~ProportionalRowPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
@@ -307,7 +315,6 @@ class ProportionalRowPreprocessor : public Preprocessor {
 
   bool lp_is_maximization_problem_;
   RowDeletionHelper row_deletion_helper_;
-  DISALLOW_COPY_AND_ASSIGN(ProportionalRowPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -345,8 +352,8 @@ class SingletonUndo {
   // deleted_rows_ of SingletonPreprocessor, are needed to undo an operation
   // with the given type. Note that all the arguments must refer to the linear
   // program BEFORE the operation is applied.
-  SingletonUndo(OperationType type, const LinearProgram& linear_program,
-                MatrixEntry e, ConstraintStatus status);
+  SingletonUndo(OperationType type, const LinearProgram& lp, MatrixEntry e,
+                ConstraintStatus status);
 
   // Undo the operation saved in this class, taking into account the deleted
   // columns and rows passed by the calling instance of SingletonPreprocessor.
@@ -390,9 +397,12 @@ class SingletonUndo {
 // each time we delete a row or a column, new singletons may be created.
 class SingletonPreprocessor : public Preprocessor {
  public:
-  SingletonPreprocessor() {}
+  explicit SingletonPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  SingletonPreprocessor(const SingletonPreprocessor&) = delete;
+  SingletonPreprocessor& operator=(const SingletonPreprocessor&) = delete;
   ~SingletonPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
@@ -412,7 +422,6 @@ class SingletonPreprocessor : public Preprocessor {
   // the bounds of the corresponding variable.
   void UpdateConstraintBoundsWithVariableBounds(MatrixEntry e,
                                                 LinearProgram* lp);
-
 
   // A singleton column with a cost of zero can always be removed by changing
   // the corresponding constraint bounds to take into acount the bound of this
@@ -452,17 +461,15 @@ class SingletonPreprocessor : public Preprocessor {
 
   // This is used as a "cache" by MakeConstraintAnEqualityIfPossible() to avoid
   // scanning more than once each row. See the code to see how this is used.
-  ITIVector<RowIndex, bool> row_sum_is_cached_;
-  ITIVector<RowIndex, SumWithNegativeInfiniteAndOneMissing> row_lb_sum_;
-  ITIVector<RowIndex, SumWithPositiveInfiniteAndOneMissing> row_ub_sum_;
+  gtl::ITIVector<RowIndex, bool> row_sum_is_cached_;
+  gtl::ITIVector<RowIndex, SumWithNegativeInfiniteAndOneMissing> row_lb_sum_;
+  gtl::ITIVector<RowIndex, SumWithPositiveInfiniteAndOneMissing> row_ub_sum_;
 
   // The columns that are deleted by this preprocessor.
   SparseMatrix deleted_columns_;
   // The transpose of the rows that are deleted by this preprocessor.
   // TODO(user): implement a RowMajorSparseMatrix class to simplify the code.
   SparseMatrix deleted_rows_;
-
-  DISALLOW_COPY_AND_ASSIGN(SingletonPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -471,14 +478,17 @@ class SingletonPreprocessor : public Preprocessor {
 // Removes the fixed variables from the problem.
 class FixedVariablePreprocessor : public Preprocessor {
  public:
-  FixedVariablePreprocessor() {}
+  explicit FixedVariablePreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  FixedVariablePreprocessor(const FixedVariablePreprocessor&) = delete;
+  FixedVariablePreprocessor& operator=(const FixedVariablePreprocessor&) =
+      delete;
   ~FixedVariablePreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
   ColumnDeletionHelper column_deletion_helper_;
-  DISALLOW_COPY_AND_ASSIGN(FixedVariablePreprocessor);
 };
 
 // --------------------------------------------------------
@@ -503,9 +513,15 @@ class FixedVariablePreprocessor : public Preprocessor {
 // * Otherwise, wo do nothing.
 class ForcingAndImpliedFreeConstraintPreprocessor : public Preprocessor {
  public:
-  ForcingAndImpliedFreeConstraintPreprocessor() {}
+  explicit ForcingAndImpliedFreeConstraintPreprocessor(
+      const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  ForcingAndImpliedFreeConstraintPreprocessor(
+      const ForcingAndImpliedFreeConstraintPreprocessor&) = delete;
+  ForcingAndImpliedFreeConstraintPreprocessor& operator=(
+      const ForcingAndImpliedFreeConstraintPreprocessor&) = delete;
   ~ForcingAndImpliedFreeConstraintPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
@@ -515,8 +531,6 @@ class ForcingAndImpliedFreeConstraintPreprocessor : public Preprocessor {
   DenseBooleanColumn is_forcing_up_;
   ColumnDeletionHelper column_deletion_helper_;
   RowDeletionHelper row_deletion_helper_;
-
-  DISALLOW_COPY_AND_ASSIGN(ForcingAndImpliedFreeConstraintPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -545,9 +559,12 @@ class ForcingAndImpliedFreeConstraintPreprocessor : public Preprocessor {
 // problem thanks to the DoubletonFreeColumnPreprocessor.
 class ImpliedFreePreprocessor : public Preprocessor {
  public:
-  ImpliedFreePreprocessor() {}
+  explicit ImpliedFreePreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  ImpliedFreePreprocessor(const ImpliedFreePreprocessor&) = delete;
+  ImpliedFreePreprocessor& operator=(const ImpliedFreePreprocessor&) = delete;
   ~ImpliedFreePreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
@@ -560,8 +577,6 @@ class ImpliedFreePreprocessor : public Preprocessor {
   // value of these variables; which will only be used (eg. restored) if the
   // variable actually turns out to be VariableStatus::FREE.
   VariableStatusRow postsolve_status_of_free_variables_;
-
-  DISALLOW_COPY_AND_ASSIGN(ImpliedFreePreprocessor);
 };
 
 // --------------------------------------------------------
@@ -590,9 +605,14 @@ class ImpliedFreePreprocessor : public Preprocessor {
 // required. Most probably, commercial solvers do use it though.
 class DoubletonFreeColumnPreprocessor : public Preprocessor {
  public:
-  DoubletonFreeColumnPreprocessor() {}
+  explicit DoubletonFreeColumnPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  DoubletonFreeColumnPreprocessor(const DoubletonFreeColumnPreprocessor&) =
+      delete;
+  DoubletonFreeColumnPreprocessor& operator=(
+      const DoubletonFreeColumnPreprocessor&) = delete;
   ~DoubletonFreeColumnPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
@@ -617,10 +637,8 @@ class DoubletonFreeColumnPreprocessor : public Preprocessor {
     SparseColumn deleted_row_as_column;
   };
 
-
   std::vector<RestoreInfo> restore_stack_;
   RowDeletionHelper row_deletion_helper_;
-  DISALLOW_COPY_AND_ASSIGN(DoubletonFreeColumnPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -638,9 +656,14 @@ class DoubletonFreeColumnPreprocessor : public Preprocessor {
 // the Andersen & Andersen paper.
 class UnconstrainedVariablePreprocessor : public Preprocessor {
  public:
-  UnconstrainedVariablePreprocessor() {}
+  explicit UnconstrainedVariablePreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  UnconstrainedVariablePreprocessor(const UnconstrainedVariablePreprocessor&) =
+      delete;
+  UnconstrainedVariablePreprocessor& operator=(
+      const UnconstrainedVariablePreprocessor&) = delete;
   ~UnconstrainedVariablePreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
   // Removes the given variable and all the rows in which it appears: If a
@@ -679,8 +702,6 @@ class UnconstrainedVariablePreprocessor : public Preprocessor {
 
   SparseMatrix deleted_columns_;
   SparseMatrix deleted_rows_as_column_;
-
-  DISALLOW_COPY_AND_ASSIGN(UnconstrainedVariablePreprocessor);
 };
 
 // --------------------------------------------------------
@@ -689,14 +710,17 @@ class UnconstrainedVariablePreprocessor : public Preprocessor {
 // Removes the constraints with no bounds from the problem.
 class FreeConstraintPreprocessor : public Preprocessor {
  public:
-  FreeConstraintPreprocessor() {}
+  explicit FreeConstraintPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  FreeConstraintPreprocessor(const FreeConstraintPreprocessor&) = delete;
+  FreeConstraintPreprocessor& operator=(const FreeConstraintPreprocessor&) =
+      delete;
   ~FreeConstraintPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
   RowDeletionHelper row_deletion_helper_;
-  DISALLOW_COPY_AND_ASSIGN(FreeConstraintPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -705,14 +729,17 @@ class FreeConstraintPreprocessor : public Preprocessor {
 // Removes the constraints with no coefficients from the problem.
 class EmptyConstraintPreprocessor : public Preprocessor {
  public:
-  EmptyConstraintPreprocessor() {}
+  explicit EmptyConstraintPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  EmptyConstraintPreprocessor(const EmptyConstraintPreprocessor&) = delete;
+  EmptyConstraintPreprocessor& operator=(const EmptyConstraintPreprocessor&) =
+      delete;
   ~EmptyConstraintPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
   RowDeletionHelper row_deletion_helper_;
-  DISALLOW_COPY_AND_ASSIGN(EmptyConstraintPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -727,13 +754,17 @@ class EmptyConstraintPreprocessor : public Preprocessor {
 // coefficients are small! Run it after ScalingPreprocessor or fix the code.
 class RemoveNearZeroEntriesPreprocessor : public Preprocessor {
  public:
-  RemoveNearZeroEntriesPreprocessor() {}
+  explicit RemoveNearZeroEntriesPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  RemoveNearZeroEntriesPreprocessor(const RemoveNearZeroEntriesPreprocessor&) =
+      delete;
+  RemoveNearZeroEntriesPreprocessor& operator=(
+      const RemoveNearZeroEntriesPreprocessor&) = delete;
   ~RemoveNearZeroEntriesPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(RemoveNearZeroEntriesPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -745,14 +776,18 @@ class RemoveNearZeroEntriesPreprocessor : public Preprocessor {
 // efficient solve when this column is involved.
 class SingletonColumnSignPreprocessor : public Preprocessor {
  public:
-  SingletonColumnSignPreprocessor() {}
+  explicit SingletonColumnSignPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  SingletonColumnSignPreprocessor(const SingletonColumnSignPreprocessor&) =
+      delete;
+  SingletonColumnSignPreprocessor& operator=(
+      const SingletonColumnSignPreprocessor&) = delete;
   ~SingletonColumnSignPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
   std::vector<ColIndex> changed_columns_;
-  DISALLOW_COPY_AND_ASSIGN(SingletonColumnSignPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -763,9 +798,14 @@ class SingletonColumnSignPreprocessor : public Preprocessor {
 // in all the constraints that it is involved in.
 class DoubletonEqualityRowPreprocessor : public Preprocessor {
  public:
-  DoubletonEqualityRowPreprocessor() {}
+  explicit DoubletonEqualityRowPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  DoubletonEqualityRowPreprocessor(const DoubletonEqualityRowPreprocessor&) =
+      delete;
+  DoubletonEqualityRowPreprocessor& operator=(
+      const DoubletonEqualityRowPreprocessor&) = delete;
   ~DoubletonEqualityRowPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
@@ -815,9 +855,25 @@ class DoubletonEqualityRowPreprocessor : public Preprocessor {
   void SwapDeletedAndModifiedVariableRestoreInfo(RestoreInfo* r);
 
   std::vector<RestoreInfo> restore_stack_;
-
-  DISALLOW_COPY_AND_ASSIGN(DoubletonEqualityRowPreprocessor);
+  DenseColumn saved_row_lower_bounds_;
+  DenseColumn saved_row_upper_bounds_;
 };
+
+// Because of numerical imprecision, a preprocessor like
+// DoubletonEqualityRowPreprocessor can transform a constraint/variable domain
+// like [1, 1+1e-7] to a fixed domain (for ex by multiplying the above domain by
+// 1e9). This causes an issue because at postsolve, a FIXED_VALUE status now
+// needs to be transformed to a AT_LOWER_BOUND/AT_UPPER_BOUND status. This is
+// what this function is doing for the constraint statuses only.
+//
+// TODO(user): A better solution would simply be to get rid of the FIXED status
+// altogether, it is better to simply use AT_LOWER_BOUND/AT_UPPER_BOUND
+// depending on the constraining bound in the optimal solution. Note that we can
+// always at the end transform any variable/constraint with a fixed domain to
+// FIXED_VALUE if needed to keep the same external API.
+void FixConstraintWithFixedStatuses(const DenseColumn& row_lower_bounds,
+                                    const DenseColumn& row_upper_bounds,
+                                    ProblemSolution* solution);
 
 // --------------------------------------------------------
 // DualizerPreprocessor
@@ -829,9 +885,12 @@ class DoubletonEqualityRowPreprocessor : public Preprocessor {
 // preprocessor does not deal correctly with free constraints.
 class DualizerPreprocessor : public Preprocessor {
  public:
-  DualizerPreprocessor() {}
+  explicit DualizerPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  DualizerPreprocessor(const DualizerPreprocessor&) = delete;
+  DualizerPreprocessor& operator=(const DualizerPreprocessor&) = delete;
   ~DualizerPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
   void UseInMipContext() final {
     LOG(FATAL) << "In the presence of integer variables, "
@@ -853,8 +912,6 @@ class DualizerPreprocessor : public Preprocessor {
   // For postsolving the variable/constraint statuses.
   VariableStatusRow dual_status_correspondence_;
   ColMapping slack_or_surplus_mapping_;
-
-  DISALLOW_COPY_AND_ASSIGN(DualizerPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -886,9 +943,14 @@ class DualizerPreprocessor : public Preprocessor {
 // a free variable so that only having a domain containing 0.0 is enough?
 class ShiftVariableBoundsPreprocessor : public Preprocessor {
  public:
-  ShiftVariableBoundsPreprocessor() {}
+  explicit ShiftVariableBoundsPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  ShiftVariableBoundsPreprocessor(const ShiftVariableBoundsPreprocessor&) =
+      delete;
+  ShiftVariableBoundsPreprocessor& operator=(
+      const ShiftVariableBoundsPreprocessor&) = delete;
   ~ShiftVariableBoundsPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
@@ -900,7 +962,6 @@ class ShiftVariableBoundsPreprocessor : public Preprocessor {
   // numerical accuracy for variables at their bound after postsolve.
   DenseRow variable_initial_lbs_;
   DenseRow variable_initial_ubs_;
-  DISALLOW_COPY_AND_ASSIGN(ShiftVariableBoundsPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -910,9 +971,12 @@ class ShiftVariableBoundsPreprocessor : public Preprocessor {
 // This is only applied if the parameter use_scaling is true.
 class ScalingPreprocessor : public Preprocessor {
  public:
-  ScalingPreprocessor() {}
+  explicit ScalingPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  ScalingPreprocessor(const ScalingPreprocessor&) = delete;
+  ScalingPreprocessor& operator=(const ScalingPreprocessor&) = delete;
   ~ScalingPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
   void UseInMipContext() final { LOG(FATAL) << "Not implemented."; }
 
@@ -920,9 +984,8 @@ class ScalingPreprocessor : public Preprocessor {
   DenseRow variable_lower_bounds_;
   DenseRow variable_upper_bounds_;
   Fractional cost_scaling_factor_;
+  Fractional bound_scaling_factor_;
   SparseMatrixScaler scaler_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScalingPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -933,13 +996,14 @@ class ScalingPreprocessor : public Preprocessor {
 // The preprocessor is kept here, because it could be used by Glop too.
 class ToMinimizationPreprocessor : public Preprocessor {
  public:
-  ToMinimizationPreprocessor() {}
+  explicit ToMinimizationPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  ToMinimizationPreprocessor(const ToMinimizationPreprocessor&) = delete;
+  ToMinimizationPreprocessor& operator=(const ToMinimizationPreprocessor&) =
+      delete;
   ~ToMinimizationPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ToMinimizationPreprocessor);
 };
 
 // --------------------------------------------------------
@@ -957,54 +1021,17 @@ class ToMinimizationPreprocessor : public Preprocessor {
 // so that the rightmost square sub-matrix is always the identity matrix.
 class AddSlackVariablesPreprocessor : public Preprocessor {
  public:
-  AddSlackVariablesPreprocessor() {}
+  explicit AddSlackVariablesPreprocessor(const GlopParameters* parameters)
+      : Preprocessor(parameters) {}
+  AddSlackVariablesPreprocessor(const AddSlackVariablesPreprocessor&) = delete;
+  AddSlackVariablesPreprocessor& operator=(
+      const AddSlackVariablesPreprocessor&) = delete;
   ~AddSlackVariablesPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
+  bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
  private:
   ColIndex first_slack_col_;
-
-  DISALLOW_COPY_AND_ASSIGN(AddSlackVariablesPreprocessor);
-};
-
-// --------------------------------------------------------
-// SolowHalimPreprocessor
-// --------------------------------------------------------
-// Modifies the problem by changing variables to begin
-// geometrically near to the optimal solution according to the suggestion of
-// Solow & Halim.
-// Variable changes have a very simple form :
-// x_j' =  upper_bound(j) - x_j if cost(j) >  0
-// x_j' = -lower_bound(j) + x_j if cost(j) <  0
-// for a maximization problem
-//
-// reference:
-// Improving the Efficiency of the Simplex Algorithm Based on a
-// Geometric Explanation of Phase 1
-// https://weatherhead.case.edu/faculty/research/library/detail?id=12128593921
-// DOI: 10.1504/IJOR.2009.025701
-class SolowHalimPreprocessor : public Preprocessor {
- public:
-  SolowHalimPreprocessor() {}
-  ~SolowHalimPreprocessor() final {}
-  bool Run(LinearProgram* linear_program, TimeLimit* time_limit) final;
-  void RecoverSolution(ProblemSolution* solution) const final;
-
- private:
-  typedef enum {
-    NOT_MODIFIED = 0,
-    SHIFTED = 1,
-    SHIFTED_OPPOSITE_DIRECTION = 2
-  } ColumnTransformType;
-
-  // Contains the coordinate change information for each column
-  ITIVector<ColIndex, ColumnTransformType> column_transform_;
-
-  // Contains the initial problem bounds.
-  DenseRow variable_initial_lbs_;
-  DenseRow variable_initial_ubs_;
-  DISALLOW_COPY_AND_ASSIGN(SolowHalimPreprocessor);
 };
 
 }  // namespace glop

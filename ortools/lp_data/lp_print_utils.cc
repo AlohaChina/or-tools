@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,15 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include "ortools/lp_data/lp_print_utils.h"
 #include <cmath>
 #include <cstdio>
 #include <limits>
 
+#include "absl/strings/str_cat.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/join.h"
 #include "ortools/lp_data/lp_types.h"
 #include "ortools/util/rational_approximation.h"
 
@@ -38,28 +37,29 @@ std::string StringifyRational(const double x, const double precision) {
   Fraction fraction = RationalApproximation(x, precision);
   const int64 numerator = fraction.first;
   const int64 denominator = fraction.second;
-  return denominator == 1 ? StrCat(numerator)
-                          : StrCat(numerator, "/", denominator);
+  return denominator == 1 ? absl::StrCat(numerator)
+                          : absl::StrCat(numerator, "/", denominator);
 }
 
 std::string Stringify(const Fractional x, bool fraction) {
-  return fraction
-      ? StringifyRational(ToDouble(x), std::numeric_limits<double>::epsilon())
-      : Stringify(x);
+  return fraction ? StringifyRational(ToDouble(x),
+                                      std::numeric_limits<double>::epsilon())
+                  : Stringify(x);
 }
 
 // Returns a std::string that pretty-prints a monomial ax with coefficient
 // a and variable name x
-std::string StringifyMonomial(const Fractional a, const std::string& x, bool fraction) {
-  if (a == 0.0)  return "";
+std::string StringifyMonomial(const Fractional a, const std::string& x,
+                              bool fraction) {
+  if (a == 0.0) return "";
   return a > 0.0
-             ? StrCat(
+             ? absl::StrCat(
                    " + ",
-                   a == 1.0 ? x : StrCat(Stringify(a, fraction), " ", x))
-             : StrCat(
+                   a == 1.0 ? x : absl::StrCat(Stringify(a, fraction), " ", x))
+             : absl::StrCat(
                    " - ", a == -1.0
                               ? x
-                              : StrCat(Stringify(-a, fraction), " ", x));
+                              : absl::StrCat(Stringify(-a, fraction), " ", x));
 }
 
 }  // namespace glop

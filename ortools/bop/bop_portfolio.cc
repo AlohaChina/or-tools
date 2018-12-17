@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,7 +13,8 @@
 
 #include "ortools/bop/bop_portfolio.h"
 
-#include "ortools/base/stringprintf.h"
+#include "absl/memory/memory.h"
+#include "absl/strings/str_format.h"
 #include "ortools/base/stl_util.h"
 #include "ortools/bop/bop_fs.h"
 #include "ortools/bop/bop_lns.h"
@@ -82,7 +83,7 @@ PortfolioOptimizer::~PortfolioOptimizer() {
 
   // Note that unique pointers are not used due to unsupported emplace_back
   // in ITIVectors.
-  STLDeleteElements(&optimizers_);
+  gtl::STLDeleteElements(&optimizers_);
 }
 
 BopOptimizerBase::Status PortfolioOptimizer::SynchronizeIfNeeded(
@@ -211,8 +212,8 @@ void PortfolioOptimizer::AddOptimizer(
       break;
     case BopOptimizerMethod::LOCAL_SEARCH: {
       for (int i = 1; i <= parameters.max_num_decisions_in_ls(); ++i) {
-        optimizers_.push_back(new LocalSearchOptimizer(StringPrintf("LS_%d", i),
-                                                       i, &sat_propagator_));
+        optimizers_.push_back(new LocalSearchOptimizer(
+            absl::StrFormat("LS_%d", i), i, &sat_propagator_));
       }
     } break;
     case BopOptimizerMethod::RANDOM_FIRST_SOLUTION:
@@ -296,7 +297,7 @@ void PortfolioOptimizer::AddOptimizer(
 void PortfolioOptimizer::CreateOptimizers(
     const LinearBooleanProblem& problem, const BopParameters& parameters,
     const BopSolverOptimizerSet& optimizer_set) {
-  random_.reset(new MTRandom(parameters.random_seed()));
+  random_ = absl::make_unique<MTRandom>(parameters.random_seed());
 
   if (parameters.use_symmetry()) {
     VLOG(1) << "Finding symmetries of the problem.";
@@ -319,14 +320,14 @@ void PortfolioOptimizer::CreateOptimizers(
     AddOptimizer(problem, parameters, optimizer_method);
   }
 
-  selector_.reset(new OptimizerSelector(optimizers_));
+  selector_ = absl::make_unique<OptimizerSelector>(optimizers_);
 }
 
 //------------------------------------------------------------------------------
 // OptimizerSelector
 //------------------------------------------------------------------------------
 OptimizerSelector::OptimizerSelector(
-    const ITIVector<OptimizerIndex, BopOptimizerBase*>& optimizers)
+    const gtl::ITIVector<OptimizerIndex, BopOptimizerBase*>& optimizers)
     : run_infos_(), selected_index_(optimizers.size()) {
   for (OptimizerIndex i(0); i < optimizers.size(); ++i) {
     info_positions_.push_back(run_infos_.size());
@@ -409,12 +410,13 @@ void OptimizerSelector::SetOptimizerRunnability(OptimizerIndex optimizer_index,
   run_infos_[info_positions_[optimizer_index]].runnable = runnable;
 }
 
-std::string OptimizerSelector::PrintStats(OptimizerIndex optimizer_index) const {
+std::string OptimizerSelector::PrintStats(
+    OptimizerIndex optimizer_index) const {
   const RunInfo& info = run_infos_[info_positions_[optimizer_index]];
-  return StringPrintf(
-      "    %40s : %3d/%-3d  (%6.2f%%)  Total gain: %6lld  Total Dtime: %0.3f "
+  return absl::StrFormat(
+      "    %40s : %3d/%-3d  (%6.2f%%)  Total gain: %6d  Total Dtime: %0.3f "
       "score: %f\n",
-      info.name.c_str(), info.num_successes, info.num_calls,
+      info.name, info.num_successes, info.num_calls,
       100.0 * info.num_successes / info.num_calls, info.total_gain,
       info.time_spent, info.score);
 }

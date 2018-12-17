@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -58,7 +58,8 @@ Constraint* MakeFixedModulo(Solver* const s, IntVar* const var,
 // Creates a performed interval variable with the given start and duration
 // variables.
 IntervalVar* MakePerformedIntervalVar(Solver* const solver, IntVar* const start,
-                                      IntVar* const duration, const std::string& n);
+                                      IntVar* const duration,
+                                      const std::string& n);
 
 // Creates a n-dimensional constraints that enforces that k boxes (n dimension)
 // do not overlap in space.

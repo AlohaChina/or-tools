@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,14 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include <functional>
-#include <unordered_set>
 #include <memory>
 #include <vector>
 
-#include "ortools/base/integral_types.h"
+#include "absl/container/flat_hash_set.h"
 #include "ortools/base/adjustable_priority_queue.h"
+#include "ortools/base/integral_types.h"
 
 namespace operations_research {
 namespace {
@@ -61,7 +60,7 @@ class DijkstraSP {
  private:
   void Initialize();
   int SelectClosestNode(int64* distance);
-  void Update(int label);
+  void Update(int node);
   void FindPath(int dest, std::vector<int>* nodes);
 
   const int node_count_;
@@ -71,8 +70,8 @@ class DijkstraSP {
   std::unique_ptr<int[]> predecessor_;
   AdjustablePriorityQueue<Element> frontier_;
   std::vector<Element> elements_;
-  std::unordered_set<int> not_visited_;
-  std::unordered_set<int> added_to_the_frontier_;
+  absl::flat_hash_set<int> not_visited_;
+  absl::flat_hash_set<int> added_to_the_frontier_;
 };
 
 void DijkstraSP::Initialize() {
@@ -100,7 +99,7 @@ int DijkstraSP::SelectClosestNode(int64* distance) {
 }
 
 void DijkstraSP::Update(int node) {
-  for (std::unordered_set<int>::const_iterator it = not_visited_.begin();
+  for (absl::flat_hash_set<int>::const_iterator it = not_visited_.begin();
        it != not_visited_.end(); ++it) {
     const int other_node = *it;
     const int64 graph_node_i = graph_(node, other_node);

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,12 +17,11 @@
 #include <queue>
 #include <vector>
 
-#include "ortools/base/integral_types.h"
-#include "ortools/graph/connectivity.h"
-#include "ortools/graph/graph.h"
-#include "ortools/util/vector_or_function.h"
 #include "ortools/base/adjustable_priority_queue-inl.h"
 #include "ortools/base/adjustable_priority_queue.h"
+#include "ortools/base/integral_types.h"
+#include "ortools/graph/connectivity.h"
+#include "ortools/util/vector_or_function.h"
 
 namespace operations_research {
 
@@ -145,6 +144,7 @@ std::vector<typename Graph::ArcIndex> BuildPrimMinimumSpanningTree(
 
   AdjustablePriorityQueue<Entry> pq;
   std::vector<Entry> entries;
+  std::vector<bool> touched_entry(graph.num_nodes(), false);
   for (NodeIndex node : graph.AllNodes()) {
     entries.push_back({node, std::numeric_limits<ArcValueType>::max(), -1});
   }
@@ -163,9 +163,10 @@ std::vector<typename Graph::ArcIndex> BuildPrimMinimumSpanningTree(
       if (node_active[neighbor]) {
         const ArcValueType value = arc_value(arc);
         Entry& entry = entries[neighbor];
-        if (value < entry.value) {
+        if (value < entry.value || !touched_entry[neighbor]) {
           node_neighbor[neighbor] = arc;
           entry.value = value;
+          touched_entry[neighbor] = true;
           if (pq.Contains(&entry)) {
             pq.NoteChangedPriority(&entry);
           } else {

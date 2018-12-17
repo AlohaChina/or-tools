@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,12 +13,15 @@
 
 syntax = "proto2";
 
+option java_package = "com.google.ortools.sat";
+option java_multiple_files = true;
+
 package operations_research.sat;
 
 // Contains the definitions for all the sat algorithm parameters and their
 // default values.
 //
-// NEXT TAG: 90
+// NEXT TAG: 113
 message SatParameters {
   // ==========================================================================
   // Branching and polarity
@@ -65,7 +68,7 @@ message SatParameters {
   // Satisfiability Testing, 2007.
   optional bool use_phase_saving = 44 [default = true];
 
-  // The proportion of polarity choosen at random. Note that this take
+  // The proportion of polarity chosen at random. Note that this take
   // precedence over the phase saving heuristic. This is different from
   // initial_polarity:POLARITY_RANDOM because it will select a new random
   // polarity each time the variable is branched upon instead of selecting one
@@ -76,19 +79,6 @@ message SatParameters {
   // variables that are selected randomly instead of choosing the first variable
   // from the given variable_ordering strategy.
   optional double random_branches_ratio = 32 [default = 0];
-
-  // Specifies how literals should be initially sorted in a clause.
-  enum LiteralOrdering {
-    // Do nothing and keep literals in their current order.
-    LITERAL_IN_ORDER = 0;
-    // Sort the literals by increasing order of their variable appearance in the
-    // problem.
-    VAR_MIN_USAGE = 1;
-    // Sort the literals by decreasing order of their variable appearance in the
-    // problem.
-    VAR_MAX_USAGE = 2;
-  }
-  optional LiteralOrdering literal_ordering = 3 [default = LITERAL_IN_ORDER];
 
   // Whether we use the ERWA (Exponential Recency Weighted Average) heuristic as
   // described in "Learning Rate Based Branching Heuristic for SAT solvers",
@@ -182,6 +172,22 @@ message SatParameters {
   optional int32 pb_cleanup_increment = 46 [default = 200];
   optional double pb_cleanup_ratio = 47 [default = 0.5];
 
+  // Parameters for an heuristic similar to the one descibed in "An effective
+  // learnt clause minimization approach for CDCL Sat Solvers",
+  // https://www.ijcai.org/proceedings/2017/0098.pdf
+  //
+  // For now, we have a somewhat simpler implementation where every x restart we
+  // spend y decisions on clause minimization. The minimization technique is the
+  // same as the one used to minimize core in max-sat. We also minimize problem
+  // clauses and not just the learned clause that we keep forever like in the
+  // paper.
+  //
+  // Changing these parameters or the kind of clause we minimize seems to have
+  // a big impact on the overall perf on our benchmarks. So this technique seems
+  // definitely useful, but it is hard to tune properly.
+  optional int32 minimize_with_propagation_restart_period = 96 [default = 10];
+  optional int32 minimize_with_propagation_num_decisions = 97 [default = 1000];
+
   // ==========================================================================
   // Variable and clause activities
   // ==========================================================================
@@ -210,11 +216,6 @@ message SatParameters {
   optional double clause_activity_decay = 17 [default = 0.999];
   optional double max_clause_activity_value = 18 [default = 1e20];
 
-  // To try to reward good variables, Glucose bumps again the variable from the
-  // last decision level and with a learned reason of smaller LBD than the 1 UIP
-  // conflict. This needs use_lbd() to be true.
-  optional bool use_glucose_bump_again_strategy = 21 [ default = false];
-
   // ==========================================================================
   // Restart
   // ==========================================================================
@@ -228,7 +229,7 @@ message SatParameters {
   enum RestartAlgorithm {
     NO_RESTART = 0;
 
-    // Just follow a Luby sequence times luby_restart_period.
+    // Just follow a Luby sequence times restart_period.
     LUBY_RESTART = 1;
 
     // Moving average restart based on the decision level of conflicts.
@@ -236,6 +237,9 @@ message SatParameters {
 
     // Moving average restart based on the LBD of conflicts.
     LBD_MOVING_AVERAGE_RESTART = 3;
+
+    // Fixed period restart every restart period.
+    FIXED_RESTART = 4;
   }
 
   // The restart strategies will change each time the strategy_counter is
@@ -252,8 +256,9 @@ message SatParameters {
       [default =
            "LUBY_RESTART,LBD_MOVING_AVERAGE_RESTART,DL_MOVING_AVERAGE_RESTART"];
 
-  // Multiplier for the LUBY_RESTART algorithm.
-  optional int32 luby_restart_period = 30 [default = 50];
+  // Restart period for the FIXED_RESTART strategy. This is also the multiplier
+  // used by the LUBY_RESTART strategy.
+  optional int32 restart_period = 30 [default = 50];
 
   // Size of the window for the moving average restarts.
   optional int32 restart_running_window_size = 62 [default = 50];
@@ -345,7 +350,7 @@ message SatParameters {
   //
   // Gilles Audemard, Jean-Marie Lagniez, Laurent Simon, "Improving Glucose for
   // Incremental SAT Solving with Assumptions: Application to MUS Extraction"
-  // Theory and Applications of Satisfiability Testing – SAT 2013, Lecture Notes
+  // Theory and Applications of Satisfiability Testing - SAT 2013, Lecture Notes
   // in Computer Science Volume 7962, 2013, pp 309-317.
   optional bool count_assumption_levels_in_lbd = 49 [default = true];
 
@@ -392,8 +397,8 @@ message SatParameters {
   // Whether we use a simple heuristic to try to minimize an UNSAT core.
   optional bool minimize_core = 50 [default = true];
 
-  // Wheter we try to find more independent cores for a given set of assumptions
-  // in the core based max-SAT algorithms.
+  // Whether we try to find more independent cores for a given set of
+  // assumptions in the core based max-SAT algorithms.
   optional bool find_multiple_cores = 84 [default = true];
 
   // If true, when the max-sat algo find a core, we compute the minimal number
@@ -479,25 +484,68 @@ message SatParameters {
   optional bool use_disjunctive_constraint_in_cumulative_constraint = 80
       [default = true];
 
-  // When this is true, then we extract all the linear constraints of the
-  // CpModel and linearly encode some other constraints in an extra "linear
-  // programming" constraint that will run a LP solver to detect infeasibility
-  // and propagates the bounds on the objective.
-  optional bool use_global_lp_constraint = 81 [default = true];
+  // A non-negative level indicating the type of constraints we consider in the
+  // LP relaxation. At level zero, no LP relaxation is used. At level 1, only
+  // the linear constraint and full encoding are added. At level 2, we also add
+  // all the Boolean constraints.
+  optional int32 linearization_level = 90 [default = 1];
 
-  // If true then all decisions taken by the solver are made using a fixed order
-  // as specified in the API or in the cp_model.proto search_order field.
-  //
-  // TODO(user): This is not working in all situation yet. The time limit is not
-  // really enforced properly, we don't support assumptions, and all the
-  // decisions variables must be integers.
-  optional bool use_fixed_search = 82 [default = false];
+  // A non-negative level indicating how much we should try to fully encode
+  // Integer variables as Boolean.
+  optional int32 boolean_encoding_level = 107 [default = 1];
+
+  // For now, we don't have any manager for the LP cuts, so we just add any
+  // generated cuts until this limit is reached.
+  optional int32 max_num_cuts = 91 [default = 1000];
+  optional bool only_add_cuts_at_level_zero = 92 [default = false];
+  optional bool add_knapsack_cuts = 111 [default = false];
+
+  // If true, we start by an empty LP, and only add constraints not satisfied
+  // by the current LP solution batch by batch. A constraint that is only added
+  // like this is known as a "lazy" constraint in the literature, except that we
+  // currently consider all constraints as lazy here.
+  optional bool add_lp_constraints_lazily = 112 [default = false];
+
+  // The search branching will be used to decide how to branch on unfixed nodes.
+  enum SearchBranching {
+    // Try to fix all literals using the underlying SAT solver's heuristics,
+    // then generate and fix literals until integer variables are fixed.
+    AUTOMATIC_SEARCH = 0;
+
+    // If used then all decisions taken by the solver are made using a fixed
+    // order as specified in the API or in the cp_model.proto search_order
+    // field.
+    //
+    // TODO(user): This is not working in all situation yet. The time limit is
+    // not really enforced properly, we don't support assumptions, and all the
+    // decisions variables must be integers.
+    FIXED_SEARCH = 1;
+
+    // If used, the solver will use various generic heuristics in turn.
+    PORTFOLIO_SEARCH = 2;
+
+    // If used, the solver will use heuristics from the LP relaxation.
+    LP_SEARCH = 3;
+  }
+  optional SearchBranching search_branching = 82 [default = AUTOMATIC_SEARCH];
+
+  // If true and the Lp relaxation of the problem has an integer optimal
+  // solution, try to exploit it. Note that since the LP relaxation may not
+  // contain all the constraints, such a solution is not necessarily a solution
+  // of the full problem.
+  optional bool exploit_integer_lp_solution = 94 [default = true];
 
   // The default optimization method is a simple "linear scan", each time trying
   // to find a better solution than the previous one. If this is true, then we
   // use a core-based approach (like in max-SAT) when we try to increase the
   // lower bound instead.
   optional bool optimize_with_core = 83 [default = false];
+
+  // If non-negative, perform a binary search on the objective variable in order
+  // to find an [min, max] interval outside of which the solver proved unsat/sat
+  // under this amount of conflict. This can quickly reduce the objective domain
+  // on some problems.
+  optional int32 binary_search_num_conflicts = 99 [default = -1];
 
   // This has no effect if optimize_with_core is false. If true, use a different
   // core-based algorithm similar to the max-HS algo for max-SAT. This is a
@@ -507,14 +555,69 @@ message SatParameters {
   // http://aaai.org/ocs/index.php/AAAI/AAAI17/paper/view/14489
   optional bool optimize_with_max_hs = 85 [default = false];
 
-  // Wheter we presolve the cp_model before solving it.
+  // Whether we presolve the cp_model before solving it.
   optional bool cp_model_presolve = 86 [default = true];
 
-  // Wheter we enumerate all solutions of a SAT problem.
-  //
-  // TODO(user): When used with cp_model_presolve, it is possible that not all
-  // solutions are enumerated. This is because our presolver currently do not
-  // look at this parameter and only guarantee the existence of one feasible
+  // How much effort do we spend on probing. 0 disables it completely.
+  optional int32 cp_model_probing_level = 110 [default = 2];
+
+  // Whether we also use the sat presolve when cp_model_presolve is true.
+  optional bool cp_model_use_sat_presolve = 93 [default = true];
+
+  // Whether we enumerate all solutions of a problem without objective. Note
+  // that setting this to true automatically disable the presolve. This is
+  // because the presolve rules only guarantee the existence of one feasible
   // solution to the presolved problem.
+  //
+  // TODO(user): Activate the presolve but with just the rules that do not
+  // change the set of feasible solutions.
   optional bool enumerate_all_solutions = 87 [default = false];
+
+  // If true, the solver will add a default integer branching strategy to the
+  // already defined search strategy.
+  optional bool instantiate_all_variables = 106 [default = true];
+
+  // If true, then the precedences propagator try to detect for each variable if
+  // it has a set of "optional incoming arc" for which at least one of them is
+  // present. This is usually useful to have but can be slow on model with a lot
+  // of precedence.
+  optional bool auto_detect_greater_than_at_least_one_of = 95 [default = true];
+
+  // For an optimization problem, stop the solver as soon as we have a solution.
+  optional bool stop_after_first_solution = 98 [default = false];
+
+  // Specify the number of parallel workers to use during search.
+  // A number <= 1 means no parallelism.
+  //
+  // WARNING: For now the code is non-deterministic. There is plans to make it
+  // deterministic (or provide an options) soon.
+  optional int32 num_search_workers = 100 [default = 0];
+
+  // LNS parameters.
+  optional bool use_lns = 101 [default = false];
+  optional int32 lns_num_threads = 102 [default = 1];
+  optional bool lns_focus_on_decision_variables = 105 [default = false];
+
+  // Randomize fixed search.
+  optional bool randomize_search = 103 [default = false];
+
+  // Search randomization will collect equivalent 'max valued' variables, and
+  // pick one randomly. For instance, if the variable strategy is CHOOSE_FIRST,
+  // all unassigned variables are equivalent. If the variable strategy is
+  // CHOOSE_LOWEST_MIN, and `lm` is the current lowest min of all unassigned
+  // variables, then the set of max valued variables will be all unassigned
+  // variables where
+  //    lm <= variable min <= lm + search_randomization_tolerance
+  optional int64 search_randomization_tolerance = 104 [default = 0];
+
+  // If true, we automatically detect variables whose constraint are always
+  // enforced by the same literal and we mark them as optional. This allows
+  // to propagate them as if they were present in some situation.
+  optional bool use_optional_variables = 108 [default = true];
+
+  // The solver usually exploit the LP relaxation of a model. If this option is
+  // true, then whatever is infered by the LP will be used like an heuristic to
+  // compute EXACT propagation on the IP. So with this option, there is no
+  // numerical imprecision issues.
+  optional bool use_exact_lp_reason = 109 [default = true];
 }

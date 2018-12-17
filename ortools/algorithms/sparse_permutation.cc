@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,8 +14,8 @@
 #include "ortools/algorithms/sparse_permutation.h"
 
 #include <algorithm>
+#include "absl/strings/str_join.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/join.h"
 
 namespace operations_research {
 
@@ -70,7 +70,7 @@ std::string SparsePermutation::DebugString() const {
   for (const std::vector<int>& cycle : cycles) {
     if (!out.empty()) out += " ";
     out += "(";
-    out += strings::Join(cycle, " ");
+    out += absl::StrJoin(cycle, " ");
     out += ")";
   }
   return out;

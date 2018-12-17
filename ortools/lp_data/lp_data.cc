@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,19 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include "ortools/lp_data/lp_data.h"
 
 #include <algorithm>
 #include <cmath>
-#include <unordered_map>
 #include <string>
 #include <utility>
+#include "absl/container/flat_hash_map.h"
 
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
-#include "ortools/base/join.h"
-#include "ortools/base/join.h"
 #include "ortools/lp_data/lp_print_utils.h"
 #include "ortools/lp_data/lp_utils.h"
 #include "ortools/lp_data/matrix_utils.h"
@@ -57,7 +55,7 @@ bool AreBoundsFreeOrBoxed(Fractional lower_bound, Fractional upper_bound) {
 }
 
 template <class I, class T>
-double Average(const ITIVector<I, T>& v) {
+double Average(const gtl::ITIVector<I, T>& v) {
   const size_t size = v.size();
   DCHECK_LT(0, size);
   double sum = 0.0;
@@ -71,7 +69,7 @@ double Average(const ITIVector<I, T>& v) {
 }
 
 template <class I, class T>
-double StandardDeviation(const ITIVector<I, T>& v) {
+double StandardDeviation(const gtl::ITIVector<I, T>& v) {
   const size_t size = v.size();
   double n = 0.0;  // n is used in a calculation involving doubles.
   double sigma_square = 0.0;
@@ -88,7 +86,7 @@ double StandardDeviation(const ITIVector<I, T>& v) {
 
 // Returns 0 when the vector is empty.
 template <class I, class T>
-T GetMaxElement(const ITIVector<I, T>& v) {
+T GetMaxElement(const gtl::ITIVector<I, T>& v) {
   const size_t size = v.size();
   if (size == 0) {
     return T(0);
@@ -203,7 +201,7 @@ RowIndex LinearProgram::CreateNewConstraint() {
 }
 
 ColIndex LinearProgram::FindOrCreateVariable(const std::string& variable_id) {
-  const std::unordered_map<std::string, ColIndex>::iterator it =
+  const absl::flat_hash_map<std::string, ColIndex>::iterator it =
       variable_table_.find(variable_id);
   if (it != variable_table_.end()) {
     return it->second;
@@ -215,8 +213,9 @@ ColIndex LinearProgram::FindOrCreateVariable(const std::string& variable_id) {
   }
 }
 
-RowIndex LinearProgram::FindOrCreateConstraint(const std::string& constraint_id) {
-  const std::unordered_map<std::string, RowIndex>::iterator it =
+RowIndex LinearProgram::FindOrCreateConstraint(
+    const std::string& constraint_id) {
+  const absl::flat_hash_map<std::string, RowIndex>::iterator it =
       constraint_table_.find(constraint_id);
   if (it != constraint_table_.end()) {
     return it->second;
@@ -352,13 +351,13 @@ bool LinearProgram::IsCleanedUp() const {
 
 std::string LinearProgram::GetVariableName(ColIndex col) const {
   return col >= variable_names_.size() || variable_names_[col].empty()
-             ? StringPrintf("c%d", col.value())
+             ? absl::StrFormat("c%d", col.value())
              : variable_names_[col];
 }
 
 std::string LinearProgram::GetConstraintName(RowIndex row) const {
   return row >= constraint_names_.size() || constraint_names_[row].empty()
-             ? StringPrintf("r%d", row.value())
+             ? absl::StrFormat("r%d", row.value())
              : constraint_names_[row];
 }
 
@@ -416,8 +415,8 @@ Fractional LinearProgram::GetObjectiveCoefficientForMinimizationVersion(
 }
 
 std::string LinearProgram::GetDimensionString() const {
-  return StringPrintf(
-      "%d rows, %d columns, %lld entries", num_constraints().value(),
+  return absl::StrFormat(
+      "%d rows, %d columns, %d entries", num_constraints().value(),
       num_variables().value(),
       // static_cast<int64> is needed because the Android port uses int32.
       static_cast<int64>(num_entries().value()));
@@ -437,13 +436,13 @@ std::string LinearProgram::GetObjectiveStatsString() const {
   if (num_non_zeros == 0) {
     return "No objective term. This is a pure feasibility problem.";
   } else {
-    return StringPrintf("%lld non-zeros, range [%e, %e]", num_non_zeros,
-                        min_value, max_value);
+    return absl::StrFormat("%d non-zeros, range [%e, %e]", num_non_zeros,
+                           min_value, max_value);
   }
 }
 
-bool LinearProgram::SolutionIsLPFeasible(const DenseRow& solution,
-                                         Fractional absolute_tolerance) const {
+bool LinearProgram::SolutionIsWithinVariableBounds(
+    const DenseRow& solution, Fractional absolute_tolerance) const {
   DCHECK_EQ(solution.size(), num_variables());
   if (solution.size() != num_variables()) return false;
   const ColIndex num_cols = num_variables();
@@ -454,6 +453,14 @@ bool LinearProgram::SolutionIsLPFeasible(const DenseRow& solution,
     if (lb_error > absolute_tolerance || ub_error > absolute_tolerance) {
       return false;
     }
+  }
+  return true;
+}
+
+bool LinearProgram::SolutionIsLPFeasible(const DenseRow& solution,
+                                         Fractional absolute_tolerance) const {
+  if (!SolutionIsWithinVariableBounds(solution, absolute_tolerance)) {
+    return false;
   }
   const SparseMatrix& transpose = GetTransposeSparseMatrix();
   const RowIndex num_rows = num_constraints();
@@ -486,6 +493,21 @@ bool LinearProgram::SolutionIsMIPFeasible(const DenseRow& solution,
                                           Fractional absolute_tolerance) const {
   return SolutionIsLPFeasible(solution, absolute_tolerance) &&
          SolutionIsInteger(solution, absolute_tolerance);
+}
+
+void LinearProgram::ComputeSlackVariableValues(DenseRow* solution) const {
+  CHECK(solution != nullptr);
+  const ColIndex num_cols = GetFirstSlackVariable();
+  const SparseMatrix& transpose = GetTransposeSparseMatrix();
+  const RowIndex num_rows = num_constraints();
+  CHECK_EQ(solution->size(), num_variables());
+  for (RowIndex row = RowIndex(0); row < num_rows; ++row) {
+    const Fractional sum = PartialScalarProduct(
+        *solution, transpose.column(RowToColIndex(row)), num_cols.value());
+    const ColIndex slack_variable = GetSlackVariable(row);
+    CHECK_NE(slack_variable, kInvalidCol);
+    (*solution)[slack_variable] = -sum;
+  }
 }
 
 Fractional LinearProgram::ApplyObjectiveScalingAndOffset(
@@ -589,17 +611,16 @@ std::string LinearProgram::DumpSolution(const DenseRow& variable_values) const {
   DCHECK_EQ(variable_values.size(), num_variables());
   std::string output;
   for (ColIndex col(0); col < variable_values.size(); ++col) {
-    if (!output.empty()) StrAppend(&output, ", ");
-    StrAppend(&output, GetVariableName(col), " = ",
-                    LegacyPrecision(variable_values[col]));
+    if (!output.empty()) absl::StrAppend(&output, ", ");
+    absl::StrAppend(&output, GetVariableName(col), " = ",
+                    (variable_values[col]));
   }
   return output;
 }
 
-
 std::string LinearProgram::GetProblemStats() const {
   return ProblemStatFormatter(
-      "%d,%d,%lld,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
+      "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
       "%d,%d,%d,%d");
 }
 
@@ -607,7 +628,7 @@ std::string LinearProgram::GetPrettyProblemStats() const {
   return ProblemStatFormatter(
       "Number of rows                               : %d\n"
       "Number of variables in file                  : %d\n"
-      "Number of entries (non-zeros)                : %lld\n"
+      "Number of entries (non-zeros)                : %d\n"
       "Number of entries in the objective           : %d\n"
       "Number of entries in the right-hand side     : %d\n"
       "Number of <= constraints                     : %d\n"
@@ -641,7 +662,7 @@ void LinearProgram::AddSlackVariablesWhereNecessary(
   // Clean up the matrix. We're going to add entries, but we'll only be adding
   // them to new columns, and only one entry per column, which does not
   // invalidate the "cleanness" of the matrix.
-  matrix_.CleanUp();
+  CleanUp();
 
   // Detect which constraints produce an integer slack variable. A constraint
   // has an integer slack variable, if it contains only integer variables with
@@ -678,10 +699,12 @@ void LinearProgram::AddSlackVariablesWhereNecessary(
     }
     const ColIndex slack_col = CreateNewSlackVariable(
         has_integer_slack_variable[row], -constraint_upper_bounds_[row],
-        -constraint_lower_bounds_[row], StrCat("s", row.value()));
+        -constraint_lower_bounds_[row], absl::StrCat("s", row.value()));
     SetCoefficient(row, slack_col, 1.0);
     SetConstraintBounds(row, 0.0, 0.0);
   }
+
+  columns_are_known_to_be_clean_ = true;
   transpose_matrix_is_consistent_ = false;
   if (first_slack_variable_ == kInvalidCol) {
     first_slack_variable_ = original_num_variables;
@@ -1030,7 +1053,8 @@ void LinearProgram::DeleteColumns(const DenseBooleanRow& columns_to_delete) {
   variable_names_.resize(new_index, "");
 
   // Remove the id of the deleted columns and adjust the index of the other.
-  std::unordered_map<std::string, ColIndex>::iterator it = variable_table_.begin();
+  absl::flat_hash_map<std::string, ColIndex>::iterator it =
+      variable_table_.begin();
   while (it != variable_table_.end()) {
     const ColIndex col = it->second;
     if (col >= columns_to_delete.size() || !columns_to_delete[col]) {
@@ -1071,17 +1095,6 @@ void LinearProgram::DeleteSlackVariables() {
 
   DeleteColumns(slack_variables);
   first_slack_variable_ = kInvalidCol;
-}
-
-void LinearProgram::Scale(SparseMatrixScaler* scaler) {
-  scaler->Init(&matrix_);
-  scaler->Scale();  // Compute R and C, and replace the matrix A by R.A.C
-  scaler->ScaleRowVector(false, &objective_coefficients_);      // oc = oc.C
-  scaler->ScaleRowVector(true, &variable_lower_bounds_);        // cl = cl.C^-1
-  scaler->ScaleRowVector(true, &variable_upper_bounds_);        // cu = cu.C^-1
-  scaler->ScaleColumnVector(false, &constraint_lower_bounds_);  // rl = R.rl
-  scaler->ScaleColumnVector(false, &constraint_upper_bounds_);  // ru = R.ru
-  transpose_matrix_is_consistent_ = false;
 }
 
 namespace {
@@ -1168,8 +1181,8 @@ Fractional LinearProgram::ScaleBounds() {
   return bound_scaling_factor;
 }
 
-void LinearProgram::DeleteRows(const DenseBooleanColumn& row_to_delete) {
-  if (row_to_delete.empty()) return;
+void LinearProgram::DeleteRows(const DenseBooleanColumn& rows_to_delete) {
+  if (rows_to_delete.empty()) return;
 
   // Deal with row-indexed data and construct the row mapping that will need to
   // be applied to every column entry.
@@ -1177,7 +1190,7 @@ void LinearProgram::DeleteRows(const DenseBooleanColumn& row_to_delete) {
   RowPermutation permutation(num_rows);
   RowIndex new_index(0);
   for (RowIndex row(0); row < num_rows; ++row) {
-    if (row >= row_to_delete.size() || !row_to_delete[row]) {
+    if (row >= rows_to_delete.size() || !rows_to_delete[row]) {
       constraint_lower_bounds_[new_index] = constraint_lower_bounds_[row];
       constraint_upper_bounds_[new_index] = constraint_upper_bounds_[row];
       constraint_names_[new_index].swap(constraint_names_[row]);
@@ -1195,7 +1208,8 @@ void LinearProgram::DeleteRows(const DenseBooleanColumn& row_to_delete) {
   matrix_.DeleteRows(new_index, permutation);
 
   // Remove the id of the deleted rows and adjust the index of the other.
-  std::unordered_map<std::string, RowIndex>::iterator it = constraint_table_.begin();
+  absl::flat_hash_map<std::string, RowIndex>::iterator it =
+      constraint_table_.begin();
   while (it != constraint_table_.end()) {
     const RowIndex row = it->second;
     if (permutation[row] != kInvalidRow) {
@@ -1210,7 +1224,7 @@ void LinearProgram::DeleteRows(const DenseBooleanColumn& row_to_delete) {
   // Eventually update transpose_matrix_.
   if (transpose_matrix_is_consistent_) {
     transpose_matrix_.DeleteColumns(
-        reinterpret_cast<const DenseBooleanRow&>(row_to_delete));
+        reinterpret_cast<const DenseBooleanRow&>(rows_to_delete));
   }
 }
 
@@ -1243,7 +1257,8 @@ bool LinearProgram::IsValid() const {
   return true;
 }
 
-std::string LinearProgram::ProblemStatFormatter(const char* format) const {
+std::string LinearProgram::ProblemStatFormatter(
+    const absl::string_view format) const {
   int num_objective_non_zeros = 0;
   int num_non_negative_variables = 0;
   int num_boxed_variables = 0;
@@ -1320,17 +1335,23 @@ std::string LinearProgram::ProblemStatFormatter(const char* format) const {
   const int num_non_binary_variables = NonBinaryVariablesList().size();
   const int num_continuous_variables =
       ColToIntIndex(num_variables()) - num_integer_variables;
-  return StringPrintf(
-      format, RowToIntIndex(num_constraints()), ColToIntIndex(num_variables()),
-      matrix_.num_entries().value(), num_objective_non_zeros, num_rhs_non_zeros,
-      num_less_than_constraints, num_greater_than_constraints,
-      num_equal_constraints, num_range_constraints, num_non_negative_variables,
-      num_boxed_variables, num_free_variables, num_fixed_variables,
-      num_other_variables, num_integer_variables, num_binary_variables,
-      num_non_binary_variables, num_continuous_variables);
+  auto format_runtime =
+      absl::ParsedFormat<'d', 'd', 'd', 'd', 'd', 'd', 'd', 'd', 'd', 'd', 'd',
+                         'd', 'd', 'd', 'd', 'd', 'd', 'd'>::New(format);
+  CHECK(format_runtime);
+  return absl::StrFormat(
+      *format_runtime, RowToIntIndex(num_constraints()),
+      ColToIntIndex(num_variables()), matrix_.num_entries().value(),
+      num_objective_non_zeros, num_rhs_non_zeros, num_less_than_constraints,
+      num_greater_than_constraints, num_equal_constraints,
+      num_range_constraints, num_non_negative_variables, num_boxed_variables,
+      num_free_variables, num_fixed_variables, num_other_variables,
+      num_integer_variables, num_binary_variables, num_non_binary_variables,
+      num_continuous_variables);
 }
 
-std::string LinearProgram::NonZeroStatFormatter(const char* format) const {
+std::string LinearProgram::NonZeroStatFormatter(
+    const absl::string_view format) const {
   StrictITIVector<RowIndex, EntryIndex> num_entries_in_row(num_constraints(),
                                                            EntryIndex(0));
   StrictITIVector<ColIndex, EntryIndex> num_entries_in_column(num_variables(),
@@ -1353,8 +1374,10 @@ std::string LinearProgram::NonZeroStatFormatter(const char* format) const {
   const double fill_rate = 100.0 * static_cast<double>(num_entries.value()) /
                            static_cast<double>(height * width);
 
-  return StringPrintf(
-      format, fill_rate, GetMaxElement(num_entries_in_row).value(),
+  auto format_runtime =
+      absl::ParsedFormat<'f', 'd', 'f', 'f', 'd', 'f', 'f'>::New(format);
+  return absl::StrFormat(
+      *format_runtime, fill_rate, GetMaxElement(num_entries_in_row).value(),
       Average(num_entries_in_row), StandardDeviation(num_entries_in_row),
       GetMaxElement(num_entries_in_column).value(),
       Average(num_entries_in_column), StandardDeviation(num_entries_in_column));
@@ -1441,15 +1464,15 @@ bool LinearProgram::BoundsOfIntegerConstraintsAreInteger(
 std::string ProblemSolution::DebugString() const {
   std::string s = "Problem status: " + GetProblemStatusString(status);
   for (ColIndex col(0); col < primal_values.size(); ++col) {
-    StringAppendF(&s, "\n  Var #%d: %s %g", col.value(),
-                  GetVariableStatusString(variable_statuses[col]).c_str(),
-                  primal_values[col]);
+    absl::StrAppendFormat(&s, "\n  Var #%d: %s %g", col.value(),
+                          GetVariableStatusString(variable_statuses[col]),
+                          primal_values[col]);
   }
   s += "\n------------------------------";
   for (RowIndex row(0); row < dual_values.size(); ++row) {
-    StringAppendF(&s, "\n  Constraint #%d: %s %g", row.value(),
-                  GetConstraintStatusString(constraint_statuses[row]).c_str(),
-                  dual_values[row]);
+    absl::StrAppendFormat(&s, "\n  Constraint #%d: %s %g", row.value(),
+                          GetConstraintStatusString(constraint_statuses[row]),
+                          dual_values[row]);
   }
   return s;
 }

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -27,13 +27,14 @@
 #include <memory>
 #include <vector>
 
+#include "absl/time/time.h"
 #include "ortools/algorithms/dynamic_partition.h"
 #include "ortools/algorithms/dynamic_permutation.h"
+#include "ortools/base/status.h"
 #include "ortools/graph/graph.h"
-#include "ortools/util/iterators.h"
+#include "ortools/graph/iterators.h"
 #include "ortools/util/stats.h"
 #include "ortools/util/time_limit.h"
-#include "ortools/base/status.h"
 
 namespace operations_research {
 
@@ -41,7 +42,7 @@ class SparsePermutation;
 
 class GraphSymmetryFinder {
  public:
-  typedef StaticGraph<> Graph;
+  typedef ::util::StaticGraph<> Graph;
 
   // If the Graph passed to the GraphSymmetryFinder is undirected, i.e.
   // for every arc a->b, b->a is also present, then you should set
@@ -101,10 +102,8 @@ class GraphSymmetryFinder {
   //   elements are valid factors of the automorphism group size.
   util::Status FindSymmetries(
       double time_limit_seconds, std::vector<int>* node_equivalence_classes_io,
-      std::vector<std::unique_ptr<SparsePermutation>>* generators,
+      std::vector<std::unique_ptr<SparsePermutation> >* generators,
       std::vector<int>* factorized_automorphism_group_size);
-
-  // **** Methods below are public FOR TESTING ONLY. ****
 
   // Fully refine the partition of nodes, using the graph as symmetry breaker.
   // This means applying the following steps on each part P of the partition:
@@ -117,8 +116,10 @@ class GraphSymmetryFinder {
   // In our use cases, we may call this in a scenario where the partition was
   // already partially refined on all parts #0...#K, then you should set
   // "first_unrefined_part_index" to K+1.
-  void RecursivelyRefinePartitionByAdjacency(
-      int first_unrefined_part_index, DynamicPartition* partition);
+  void RecursivelyRefinePartitionByAdjacency(int first_unrefined_part_index,
+                                             DynamicPartition* partition);
+
+  // **** Methods below are public FOR TESTING ONLY. ****
 
   // Special wrapper of the above method: assuming that partition is already
   // fully refined, further refine it by {node}, and propagate by adjacency.
@@ -144,7 +145,7 @@ class GraphSymmetryFinder {
   // vectors are empty, and TailsOfIncomingArcsTo() crashes.
   std::vector<int> flattened_reverse_adj_lists_;
   std::vector<int> reverse_adj_list_index_;
-  BeginEndWrapper<std::vector<int>::const_iterator> TailsOfIncomingArcsTo(
+  util::BeginEndWrapper<std::vector<int>::const_iterator> TailsOfIncomingArcsTo(
       int node) const;
 
   // Deadline management. Populated upon FindSymmetries().
@@ -163,9 +164,9 @@ class GraphSymmetryFinder {
   std::unique_ptr<SparsePermutation> FindOneSuitablePermutation(
       int root_node, int root_image_node, DynamicPartition* base_partition,
       DynamicPartition* image_partition,
-      const std::vector<std::unique_ptr<SparsePermutation>>&
+      const std::vector<std::unique_ptr<SparsePermutation> >&
           generators_found_so_far,
-      const std::vector<std::vector<int>>& permutations_displacing_node);
+      const std::vector<std::vector<int> >& permutations_displacing_node);
 
   // Data structure used by FindOneSuitablePermutation(). See the .cc
   struct SearchState {
@@ -223,80 +224,57 @@ class GraphSymmetryFinder {
   // For each orbit, keep the first node that appears in "nodes".
   void PruneOrbitsUnderPermutationsCompatibleWithPartition(
       const DynamicPartition& partition,
-      const std::vector<std::unique_ptr<SparsePermutation>>& all_permutations,
+      const std::vector<std::unique_ptr<SparsePermutation> >& all_permutations,
       const std::vector<int>& permutation_indices, std::vector<int>* nodes);
 
   // Temporary objects used by some of the class methods, and owned by the
   // class to avoid (costly) re-allocation. Their resting states are described
   // in the side comments; with N = NumNodes().
-  DynamicPermutation tmp_dynamic_permutation_;   // Identity(N)
-  mutable std::vector<bool> tmp_node_mask_;           // [0..N-1] = false
-  std::vector<int> tmp_degree_;                       // [0..N-1] = 0.
-  std::vector<int> tmp_stack_;                        // Empty.
-  std::vector<std::vector<int>> tmp_nodes_with_degree_;    // [0..N-1] = [].
-  MergingPartition tmp_partition_;               // Reset(N).
+  DynamicPermutation tmp_dynamic_permutation_;            // Identity(N)
+  mutable std::vector<bool> tmp_node_mask_;               // [0..N-1] = false
+  std::vector<int> tmp_degree_;                           // [0..N-1] = 0.
+  std::vector<int> tmp_stack_;                            // Empty.
+  std::vector<std::vector<int> > tmp_nodes_with_degree_;  // [0..N-1] = [].
+  MergingPartition tmp_partition_;                        // Reset(N).
   std::vector<const SparsePermutation*> tmp_compatible_permutations_;  // Empty.
 
   // Internal statistics, used for performance tuning and debugging.
   struct Stats : public StatsGroup {
     Stats()
         : StatsGroup("GraphSymmetryFinder"),
-          initialization_time(
-              "a Initialization", this),
-          initialization_refine_time(
-              "b  ┗╸Refine", this),
-          invariant_dive_time(
-              "c Invariant Dive", this),
-          main_search_time(
-              "d Main Search", this),
-          invariant_unroll_time(
-              "e  ┣╸Dive unroll", this),
-          permutation_output_time(
-              "f  ┣╸Permutation output", this),
-          search_time(
-              "g  ┗╸FindOneSuitablePermutation()", this),
-          search_time_fail(
-              "h    ┣╸Fail", this),
-          search_time_success(
-              "i    ┣╸Success", this),
-          initial_search_refine_time(
-              "j    ┣╸Initial refine", this),
-          search_refine_time(
-              "k    ┣╸Further refines", this),
-          quick_compatibility_time(
-              "l    ┣╸Compatibility checks", this),
-          quick_compatibility_fail_time(
-              "m    ┃ ┣╸Fail", this),
-          quick_compatibility_success_time(
-              "n    ┃ ┗╸Success", this),
+          initialization_time("a Initialization", this),
+          initialization_refine_time("b  ┗╸Refine", this),
+          invariant_dive_time("c Invariant Dive", this),
+          main_search_time("d Main Search", this),
+          invariant_unroll_time("e  ┣╸Dive unroll", this),
+          permutation_output_time("f  ┣╸Permutation output", this),
+          search_time("g  ┗╸FindOneSuitablePermutation()", this),
+          search_time_fail("h    ┣╸Fail", this),
+          search_time_success("i    ┣╸Success", this),
+          initial_search_refine_time("j    ┣╸Initial refine", this),
+          search_refine_time("k    ┣╸Further refines", this),
+          quick_compatibility_time("l    ┣╸Compatibility checks", this),
+          quick_compatibility_fail_time("m    ┃ ┣╸Fail", this),
+          quick_compatibility_success_time("n    ┃ ┗╸Success", this),
           dynamic_permutation_refinement_time(
               "o    ┣╸Dynamic permutation refinement", this),
           map_election_std_time(
               "p    ┣╸Mapping election / full match detection", this),
-          map_election_std_mapping_time(
-              "q    ┃ ┣╸Mapping elected", this),
-          map_election_std_full_match_time(
-              "r    ┃ ┗╸Full Match", this),
-          automorphism_test_time(
-              "s    ┣╸[Upon full match] Automorphism check", this),
-          automorphism_test_fail_time(
-              "t    ┃ ┣╸Fail", this),
-          automorphism_test_success_time(
-              "u    ┃ ┗╸Success", this),
-          search_finalize_time(
-              "v    ┣╸[Upon auto success] Finalization", this),
+          map_election_std_mapping_time("q    ┃ ┣╸Mapping elected", this),
+          map_election_std_full_match_time("r    ┃ ┗╸Full Match", this),
+          automorphism_test_time("s    ┣╸[Upon full match] Automorphism check",
+                                 this),
+          automorphism_test_fail_time("t    ┃ ┣╸Fail", this),
+          automorphism_test_success_time("u    ┃ ┗╸Success", this),
+          search_finalize_time("v    ┣╸[Upon auto success] Finalization", this),
           dynamic_permutation_undo_time(
               "w    ┣╸[Upon auto fail, full] Dynamic permutation undo", this),
           map_reelection_time(
               "x    ┣╸[Upon auto fail, partial] Mapping re-election", this),
-          non_singleton_search_time(
-              "y    ┃ ┗╸Non-singleton search", this),
-          backtracking_time(
-              "z    ┗╸Backtracking", this),
-          pruning_time(
-              "{      ┗╸Pruning", this),
-          search_depth(
-              "~ Search Stats: search_depth", this) {}
+          non_singleton_search_time("y    ┃ ┗╸Non-singleton search", this),
+          backtracking_time("z    ┗╸Backtracking", this),
+          pruning_time("{      ┗╸Pruning", this),
+          search_depth("~ Search Stats: search_depth", this) {}
 
     TimeDistribution initialization_time;
     TimeDistribution initialization_refine_time;

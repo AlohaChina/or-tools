@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,29 +13,48 @@
 
 // A collections of utilities for the Graph classes in ./graph.h.
 
-#ifndef OR_TOOLS_GRAPH_UTIL_H_
-#define OR_TOOLS_GRAPH_UTIL_H_
+#ifndef UTIL_GRAPH_UTIL_H_
+#define UTIL_GRAPH_UTIL_H_
 
 #include <algorithm>
-#include <unordered_map>
-#include <unordered_set>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
-#include "ortools/base/map_util.h"
 #include "ortools/base/hash.h"
+#include "ortools/base/map_util.h"
+#include "ortools/graph/connected_components.h"
 #include "ortools/graph/graph.h"
+#include "ortools/graph/iterators.h"
 
-namespace operations_research {
+namespace util {
 
-// Diagnoses whether a graph is symmetric. A graph is symmetric iff
-// for all (a, b), the number of arcs a->b is equal to the number of arcs b->a.
-// Works in O(graph size).
+// Here's a set of simple diagnosis tools. Notes:
+// - A self-arc is an arc from a node to itself.
+// - We say that an arc A->B is duplicate when there is another arc A->B in the
+//   same graph.
+// - A graph is said "weakly connected" if it is connected when considering all
+//   arcs as undirected edges.
+// - A graph is said "symmetric" iff for all (a, b), the number of arcs a->b
+//   is equal to the number of arcs b->a.
+//
+// All these diagnosis work in O(graph size), since the inverse Ackerman
+// function is <= 5 for all practical instances, and are very fast.
+//
+// If the graph is a "static" kind, they must be finalized, except for
+// GraphHasSelfArcs() and GraphIsWeaklyConnected() which also support
+// non-finalized StaticGraph<>.
+template <class Graph>
+bool GraphHasSelfArcs(const Graph& graph);
+template <class Graph>
+bool GraphHasDuplicateArcs(const Graph& graph);
 template <class Graph>
 bool GraphIsSymmetric(const Graph& graph);
+template <class Graph>
+bool GraphIsWeaklyConnected(const Graph& graph);
 
 // Returns a fresh copy of a given graph.
 template <class Graph>
@@ -63,6 +82,57 @@ std::unique_ptr<Graph> RemapGraph(const Graph& graph,
 template <class Graph>
 std::unique_ptr<Graph> GetSubgraphOfNodes(const Graph& graph,
                                           const std::vector<int>& nodes);
+
+// This can be used to view a directed graph (that supports reverse arcs)
+// from graph.h as un undirected graph: operator[](node) returns a
+// pseudo-container that iterates over all nodes adjacent to "node" (from
+// outgoing or incoming arcs).
+// CAVEAT: Self-arcs (aka loops) will appear twice.
+//
+// Example:
+// ReverseArcsStaticGraph<> dgraph;
+// ...
+// UndirectedAdjacencyListsOfDirectedGraph<decltype(dgraph)> ugraph(dgraph);
+// for (int neighbor_of_node_42 : ugraph[42]) { ... }
+template <class Graph>
+class UndirectedAdjacencyListsOfDirectedGraph {
+ public:
+  explicit UndirectedAdjacencyListsOfDirectedGraph(const Graph& graph)
+      : graph_(graph) {}
+
+  typedef typename Graph::OutgoingOrOppositeIncomingArcIterator ArcIterator;
+  class AdjacencyListIterator : public ArcIterator {
+   public:
+    explicit AdjacencyListIterator(const Graph& graph, ArcIterator&& arc_it)
+        : ArcIterator(arc_it), graph_(graph) {}
+    // Overwrite operator* to return the heads of the arcs.
+    typename Graph::NodeIndex operator*() const {
+      return graph_.Head(ArcIterator::operator*());
+    }
+
+   private:
+    const Graph& graph_;
+  };
+
+  // Returns a pseudo-container of all the nodes adjacent to "node".
+  BeginEndWrapper<AdjacencyListIterator> operator[](int node) const {
+    const auto& arc_range = graph_.OutgoingOrOppositeIncomingArcs(node);
+    return {AdjacencyListIterator(graph_, arc_range.begin()),
+            AdjacencyListIterator(graph_, arc_range.end())};
+  }
+
+ private:
+  const Graph& graph_;
+};
+
+// Computes the weakly connected components of a directed graph that
+// provides the OutgoingOrOppositeIncomingArcs() API, and returns them
+// as a mapping from node to component index. See GetConnectedComponens().
+template <class Graph>
+std::vector<int> GetWeaklyConnectedComponents(const Graph& graph) {
+  return GetConnectedComponents(
+      graph.num_nodes(), UndirectedAdjacencyListsOfDirectedGraph<Graph>(graph));
+}
 
 // Returns true iff the given vector is a subset of [0..n-1], i.e.
 // all elements i are such that 0 <= i < n and no two elements are equal.
@@ -109,9 +179,35 @@ bool PathHasCycle(const Graph& graph, const std::vector<int>& arc_path);
 // unique, hence the function name.
 template <class Graph>
 std::vector<int> ComputeOnePossibleReverseArcMapping(const Graph& graph,
-                                                bool die_if_not_symmetric);
+                                                     bool die_if_not_symmetric);
 
 // Implementations of the templated methods.
+
+template <class Graph>
+bool GraphHasSelfArcs(const Graph& graph) {
+  for (const auto arc : graph.AllForwardArcs()) {
+    if (graph.Tail(arc) == graph.Head(arc)) return true;
+  }
+  return false;
+}
+
+template <class Graph>
+bool GraphHasDuplicateArcs(const Graph& graph) {
+  typedef typename Graph::ArcIndex ArcIndex;
+  typedef typename Graph::NodeIndex NodeIndex;
+  std::vector<bool> tmp_node_mask(graph.num_nodes(), false);
+  for (const NodeIndex tail : graph.AllNodes()) {
+    for (const ArcIndex arc : graph.OutgoingArcs(tail)) {
+      const NodeIndex head = graph.Head(arc);
+      if (tmp_node_mask[head]) return true;
+      tmp_node_mask[head] = true;
+    }
+    for (const ArcIndex arc : graph.OutgoingArcs(tail)) {
+      tmp_node_mask[graph.Head(arc)] = false;
+    }
+  }
+  return false;
+}
 
 template <class Graph>
 bool GraphIsSymmetric(const Graph& graph) {
@@ -140,6 +236,22 @@ bool GraphIsSymmetric(const Graph& graph) {
     }
   }
   return true;
+}
+
+template <class Graph>
+bool GraphIsWeaklyConnected(const Graph& graph) {
+  typedef typename Graph::NodeIndex NodeIndex;
+  static_assert(std::numeric_limits<NodeIndex>::max() <= INT_MAX,
+                "GraphIsWeaklyConnected() isn't yet implemented for graphs"
+                " that support more than INT_MAX nodes. Reach out to"
+                " or-core-team@ if you need this.");
+  if (graph.num_nodes() == 0) return true;
+  DenseConnectedComponentsFinder union_find;
+  union_find.SetNumberOfNodes(graph.num_nodes());
+  for (typename Graph::ArcIndex arc = 0; arc < graph.num_arcs(); ++arc) {
+    union_find.AddEdge(graph.Tail(arc), graph.Head(arc));
+  }
+  return union_find.GetNumberOfComponents() == 1;
 }
 
 template <class Graph>
@@ -213,13 +325,17 @@ std::unique_ptr<Graph> RemoveSelfArcsAndDuplicateArcs(const Graph& graph) {
   std::unique_ptr<Graph> g(new Graph(graph.num_nodes(), graph.num_arcs()));
   typedef typename Graph::ArcIndex ArcIndex;
   typedef typename Graph::NodeIndex NodeIndex;
-  std::unordered_set<std::pair<NodeIndex, NodeIndex>> arcs;
+  std::vector<bool> tmp_node_mask(graph.num_nodes(), false);
   for (const NodeIndex tail : graph.AllNodes()) {
     for (const ArcIndex arc : graph.OutgoingArcs(tail)) {
       const NodeIndex head = graph.Head(arc);
-      if (head != tail && arcs.insert({tail, head}).second) {
+      if (head != tail && !tmp_node_mask[head]) {
+        tmp_node_mask[head] = true;
         g->AddArc(tail, head);
       }
+    }
+    for (const ArcIndex arc : graph.OutgoingArcs(tail)) {
+      tmp_node_mask[graph.Head(arc)] = false;
     }
   }
   g->Build();
@@ -243,7 +359,7 @@ void RemoveCyclesFromPath(const Graph& graph, std::vector<int>* arc_path) {
   int node = graph.Tail(arc_path->front());
   int new_size = 0;
   while (new_size < arc_path->size()) {  // To prevent cycle on bad input.
-    const int arc = FindOrDie(last_arc_leaving_node, node);
+    const int arc = gtl::FindOrDie(last_arc_leaving_node, node);
     if (arc == -1) break;
     (*arc_path)[new_size++] = arc;
     node = graph.Head(arc);
@@ -257,16 +373,17 @@ bool PathHasCycle(const Graph& graph, const std::vector<int>& arc_path) {
   std::set<int> seen;
   seen.insert(graph.Tail(arc_path.front()));
   for (const int arc : arc_path) {
-    if (!InsertIfNotPresent(&seen, graph.Head(arc))) return true;
+    if (!gtl::InsertIfNotPresent(&seen, graph.Head(arc))) return true;
   }
   return false;
 }
 
 template <class Graph>
-std::vector<int> ComputeOnePossibleReverseArcMapping(const Graph& graph,
-                                                bool die_if_not_symmetric) {
+std::vector<int> ComputeOnePossibleReverseArcMapping(
+    const Graph& graph, bool die_if_not_symmetric) {
   std::vector<int> reverse_arc(graph.num_arcs(), -1);
-  std::unordered_multimap<std::pair</*tail*/ int, /*head*/ int>, /*arc index*/ int>
+  std::unordered_multimap<std::pair</*tail*/ int, /*head*/ int>,
+                          /*arc index*/ int>
       arc_map;
   for (int arc = 0; arc < graph.num_arcs(); ++arc) {
     const int tail = graph.Tail(arc);
@@ -300,6 +417,6 @@ std::vector<int> ComputeOnePossibleReverseArcMapping(const Graph& graph,
   return reverse_arc;
 }
 
-}  // namespace operations_research
+}  // namespace util
 
-#endif  // OR_TOOLS_GRAPH_UTIL_H_
+#endif  // UTIL_GRAPH_UTIL_H_

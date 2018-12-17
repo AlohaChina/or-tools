@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 
 // Helper classes to track statistics of a program component.
 //
@@ -61,6 +60,7 @@
 // times your function calls!
 //
 // IMPORTANT: The SCOPED_TIME_STAT() macro only does something if OR_STATS is
+// defined, so you need to build your code with blaze build --copt='-DOR_STATS'.
 // The idea is that by default the instrumentation is off. You can also use the
 // macro IF_STATS_ENABLED() that does nothing if OR_STATS is not defined or just
 // translates to its argument otherwise.
@@ -71,14 +71,16 @@
 #include <map>
 #include <string>
 #ifdef HAS_PERF_SUBSYSTEM
-#include "absl/ortools/base/str_replace.h"
+#include "absl/strings/str_replace.h"
 #include "exegesis/exegesis/itineraries/perf_subsystem.h"
+#include "ortools/util/time_limit.h"
 #endif  // HAS_PERF_SUBSYSTEM
 #include "ortools/base/timer.h"
 
 namespace operations_research {
 
-// Returns the current thread's total memory usage in an human-readable std::string.
+// Returns the current thread's total memory usage in an human-readable
+// std::string.
 std::string MemoryUsage();
 
 // Forward declaration.
@@ -126,18 +128,27 @@ class Stat {
 // Base class to print a nice summary of a group of statistics.
 class StatsGroup {
  public:
+  enum PrintOrder {
+    SORT_BY_PRIORITY_THEN_VALUE = 0,
+    SORT_BY_NAME = 1,
+  };
+
   explicit StatsGroup(const std::string& name)
       : name_(name), stats_(), time_distributions_() {}
   ~StatsGroup();
 
-  // Registers a Stat, which will appear in the std::string returned by StatString().
-  // The Stat object must live as long as this StatsGroup.
+  // Registers a Stat, which will appear in the std::string returned by
+  // StatString(). The Stat object must live as long as this StatsGroup.
   void Register(Stat* stat);
 
   // Returns this group name, followed by one line per Stat registered with this
   // group (this includes the ones created by LookupOrCreateTimeDistribution()).
   // Note that only the stats WorthPrinting() are printed.
   std::string StatString() const;
+
+  // Changes the print ordering (will affect the order in which the stats
+  // registered with this group are printed via StatString()).
+  void SetPrintOrder(PrintOrder print_order) { print_order_ = print_order; }
 
   // Returns and if needed creates and registers a TimeDistribution with the
   // given name. Note that this involve a map lookup and his thus slower than
@@ -149,6 +160,7 @@ class StatsGroup {
 
  private:
   std::string name_;
+  PrintOrder print_order_ = SORT_BY_PRIORITY_THEN_VALUE;
   std::vector<Stat*> stats_;
   std::map<std::string, TimeDistribution*> time_distributions_;
 
@@ -220,10 +232,10 @@ class TimeDistribution : public DistributionStat {
   static double CyclesToSeconds(double num_cycles);
 
   // Adds a time in seconds to this distribution.
-  void AddTimeInSec(double value);
+  void AddTimeInSec(double seconds);
 
   // Adds a time in CPU cycles to this distribution.
-  void AddTimeInCycles(double value);
+  void AddTimeInCycles(double cycles);
 
   // Starts the timer in preparation of a StopTimerAndAddElapsedTime().
   inline void StartTimer() { timer_.Restart(); }
@@ -246,7 +258,8 @@ class TimeDistribution : public DistributionStat {
 // Statistic on the distribution of a sequence of ratios, displayed as %.
 class RatioDistribution : public DistributionStat {
  public:
-  explicit RatioDistribution(const std::string& name) : DistributionStat(name) {}
+  explicit RatioDistribution(const std::string& name)
+      : DistributionStat(name) {}
   RatioDistribution(const std::string& name, StatsGroup* group)
       : DistributionStat(name, group) {}
   std::string ValueAsString() const override;
@@ -256,7 +269,8 @@ class RatioDistribution : public DistributionStat {
 // Statistic on the distribution of a sequence of doubles.
 class DoubleDistribution : public DistributionStat {
  public:
-  explicit DoubleDistribution(const std::string& name) : DistributionStat(name) {}
+  explicit DoubleDistribution(const std::string& name)
+      : DistributionStat(name) {}
   DoubleDistribution(const std::string& name, StatsGroup* group)
       : DistributionStat(name, group) {}
   std::string ValueAsString() const override;
@@ -266,7 +280,8 @@ class DoubleDistribution : public DistributionStat {
 // Statistic on the distribution of a sequence of integers.
 class IntegerDistribution : public DistributionStat {
  public:
-  explicit IntegerDistribution(const std::string& name) : DistributionStat(name) {}
+  explicit IntegerDistribution(const std::string& name)
+      : DistributionStat(name) {}
   IntegerDistribution(const std::string& name, StatsGroup* group)
       : DistributionStat(name, group) {}
   std::string ValueAsString() const override;
@@ -330,33 +345,29 @@ class DisabledScopedTimeDistributionUpdater {
 #ifdef HAS_PERF_SUBSYSTEM
 // Helper classes to count instructions during execution of a block of code and
 // add print the results to logs.
-// Creates new perf subsystem and start collecting 'inst_retired:any_p' event on
-// creation and stops collecting on destruction.
+//
+// Note: To enable instruction counting on machines running Debian, execute the
+// following commands to modify the permissions.
+//   sudo echo "1" > /proc/sys/kernel/perf_event_paranoid
+//   sudo echo "0" > /proc/sys/kernel/kptr_restrict
 class EnabledScopedInstructionCounter {
  public:
-  explicit EnabledScopedInstructionCounter(const std::string& name) : name_(name) {
-    perf_subsystem_.CleanUp();
-    perf_subsystem_.AddEvent("inst_retired:any_p:u,p");
-    perf_subsystem_.AddEvent("cycles:u,p");
-    perf_subsystem_.StartCollecting();
-  }
+  explicit EnabledScopedInstructionCounter(const std::string& name,
+                                           TimeLimit* time_limit);
   EnabledScopedInstructionCounter(const EnabledScopedInstructionCounter&) =
       delete;
   EnabledScopedInstructionCounter& operator=(
       const EnabledScopedInstructionCounter&) = delete;
-  ~EnabledScopedInstructionCounter() {
-    exegesis::PerfResult perf_result = perf_subsystem_.StopAndReadCounters();
-    LOG(INFO) << name_ << ": " << perf_result.ToString();
-  }
+  ~EnabledScopedInstructionCounter();
 
   // Used only for testing.
-  exegesis::PerfResult GetPerfResult() {
-    return perf_subsystem_.ReadCounters();
-  }
+  double ReadInstructionCount() { return ending_count_ - starting_count_; }
 
  private:
-  exegesis::PerfSubsystem perf_subsystem_;
+  TimeLimit* time_limit_;
   std::string name_;
+  double starting_count_;
+  double ending_count_;
 };
 #endif  // HAS_PERF_SUBSYSTEM
 
@@ -395,14 +406,16 @@ using ScopedInstructionCounter = DisabledScopedInstructionCounter;
 
 #ifdef HAS_PERF_SUBSYSTEM
 
-inline std::string RemoveOperationsResearchAndGlop(const std::string& pretty_function) {
+inline std::string RemoveOperationsResearchAndGlop(
+    const std::string& pretty_function) {
   return strings::GlobalReplaceSubstrings(
       pretty_function, {{"operations_research::", ""}, {"glop::", ""}});
 }
 
-#define SCOPED_INSTRUCTION_COUNT                                          \
+#define SCOPED_INSTRUCTION_COUNT(time_limit)                              \
   operations_research::ScopedInstructionCounter scoped_instruction_count( \
-      RemoveOperationsResearchAndGlop(__PRETTY_FUNCTION__))
+      RemoveOperationsResearchAndGlop(__PRETTY_FUNCTION__), time_limit)
+
 #endif  // HAS_PERF_SUBSYSTEM
 
 #else  // OR_STATS
@@ -414,7 +427,7 @@ using ScopedInstructionCounter = DisabledScopedInstructionCounter;
 
 #define IF_STATS_ENABLED(instructions)
 #define SCOPED_TIME_STAT(stats)
-#define SCOPED_INSTRUCTION_COUNT
+#define SCOPED_INSTRUCTION_COUNT(time_limit)
 
 #endif  // OR_STATS
 

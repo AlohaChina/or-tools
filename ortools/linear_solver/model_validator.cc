@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,22 +15,13 @@
 
 #include <cmath>
 #include <limits>
-#include "ortools/base/join.h"
+#include "absl/strings/str_cat.h"
 #include "ortools/base/accurate_sum.h"
+#include "ortools/port/proto_utils.h"
 #include "ortools/util/fp_utils.h"
 
 namespace operations_research {
 namespace {
-// This code is also used in the android export, which uses a lightweight proto
-// library that doesn't have DebugString() nor ShortDebugString().
-template <class Proto>
-std::string DebugString(const Proto& proto) {
-#ifdef ANDROID_JNI
-  return std::string("<proto>");
-#else   // ANDROID_JNI
-  return proto.ShortDebugString();
-#endif  // ANDROID_JNI
-}
 
 static const double kInfinity = std::numeric_limits<double>::infinity();
 
@@ -41,20 +32,18 @@ std::string FindErrorInMPVariable(const MPVariableProto& variable) {
       variable.lower_bound() == kInfinity ||
       variable.upper_bound() == -kInfinity ||
       variable.lower_bound() > variable.upper_bound()) {
-    return StrCat("Infeasible bounds: [",
-                  LegacyPrecision(variable.lower_bound()), ", ",
-                  LegacyPrecision(variable.upper_bound()), "]");
+    return absl::StrCat("Infeasible bounds: [", (variable.lower_bound()), ", ",
+                        (variable.upper_bound()), "]");
   }
   if (variable.is_integer() &&
       ceil(variable.lower_bound()) > floor(variable.upper_bound())) {
-    return StrCat("Infeasible bounds for integer variable: [",
-                  LegacyPrecision(variable.lower_bound()), ", ",
-                  LegacyPrecision(variable.upper_bound()), "]",
-                  " translate to the empty set");
+    return absl::StrCat(
+        "Infeasible bounds for integer variable: [", (variable.lower_bound()),
+        ", ", (variable.upper_bound()), "]", " translate to the empty set");
   }
   if (!std::isfinite(variable.objective_coefficient())) {
-    return StrCat("Invalid objective_coefficient: ",
-                  LegacyPrecision(variable.objective_coefficient()));
+    return absl::StrCat("Invalid objective_coefficient: ",
+                        (variable.objective_coefficient()));
   }
   return std::string();
 }
@@ -63,15 +52,14 @@ std::string FindErrorInMPVariable(const MPVariableProto& variable) {
 // "var_mask" is a std::vector<bool> whose size is the number of variables in
 // the model, and it will be all set to false before and after the call.
 std::string FindErrorInMPConstraint(const MPConstraintProto& constraint,
-                               std::vector<bool>* var_mask) {
+                                    std::vector<bool>* var_mask) {
   if (std::isnan(constraint.lower_bound()) ||
       std::isnan(constraint.upper_bound()) ||
       constraint.lower_bound() == kInfinity ||
       constraint.upper_bound() == -kInfinity ||
       constraint.lower_bound() > constraint.upper_bound()) {
-    return StrCat("Infeasible bounds: [",
-                  LegacyPrecision(constraint.lower_bound()), ", ",
-                  LegacyPrecision(constraint.upper_bound()), "]");
+    return absl::StrCat("Infeasible bounds: [", (constraint.lower_bound()),
+                        ", ", (constraint.upper_bound()), "]");
   }
 
   // TODO(user): clarify explicitly, at least in a comment, whether we want
@@ -81,18 +69,18 @@ std::string FindErrorInMPConstraint(const MPConstraintProto& constraint,
   const int num_vars_in_ct = constraint.var_index_size();
   const int num_coeffs_in_ct = constraint.coefficient_size();
   if (num_vars_in_ct != num_coeffs_in_ct) {
-    return StrCat("var_index_size() != coefficient_size() (", num_vars_in_ct,
-                  " VS ", num_coeffs_in_ct);
+    return absl::StrCat("var_index_size() != coefficient_size() (",
+                        num_vars_in_ct, " VS ", num_coeffs_in_ct);
   }
   for (int i = 0; i < num_vars_in_ct; ++i) {
     const int var_index = constraint.var_index(i);
     if (var_index >= num_vars_in_model || var_index < 0) {
-      return StrCat("var_index(", i, ")=", var_index, " is out of bounds");
+      return absl::StrCat("var_index(", i, ")=", var_index,
+                          " is out of bounds");
     }
     const double coeff = constraint.coefficient(i);
     if (!std::isfinite(coeff)) {
-      return StrCat("coefficient(", i, ")=", LegacyPrecision(coeff),
-                    " is invalid");
+      return absl::StrCat("coefficient(", i, ")=", (coeff), " is invalid");
     }
   }
 
@@ -107,35 +95,35 @@ std::string FindErrorInMPConstraint(const MPConstraintProto& constraint,
     (*var_mask)[var_index] = false;
   }
   if (duplicate_var_index >= 0) {
-    return StrCat("var_index #", duplicate_var_index, " appears several times");
+    return absl::StrCat("var_index #", duplicate_var_index,
+                        " appears several times");
   }
 
   // We found no error, all is fine.
   return std::string();
 }
 
-std::string FindErrorInSolutionHint(const PartialVariableAssignment& solution_hint,
-                               int num_vars) {
+std::string FindErrorInSolutionHint(
+    const PartialVariableAssignment& solution_hint, int num_vars) {
   if (solution_hint.var_index_size() != solution_hint.var_value_size()) {
-    return StrCat("var_index_size() != var_value_size() [",
-                  solution_hint.var_index_size(), " VS ",
-                  solution_hint.var_value_size());
+    return absl::StrCat("var_index_size() != var_value_size() [",
+                        solution_hint.var_index_size(), " VS ",
+                        solution_hint.var_value_size());
   }
   std::vector<bool> var_in_hint(num_vars, false);
   for (int i = 0; i < solution_hint.var_index_size(); ++i) {
     const int var_index = solution_hint.var_index(i);
     if (var_index >= num_vars || var_index < 0) {
-      return StrCat("var_index(", i, ")=", var_index, " is invalid.",
-                    " It must be in [0, ", num_vars, ")");
+      return absl::StrCat("var_index(", i, ")=", var_index, " is invalid.",
+                          " It must be in [0, ", num_vars, ")");
     }
     if (var_in_hint[var_index]) {
-      return StrCat("Duplicate var_index = ", var_index);
+      return absl::StrCat("Duplicate var_index = ", var_index);
     }
     var_in_hint[var_index] = true;
     if (!std::isfinite(solution_hint.var_value(i))) {
-      return StrCat("var_value(", i,
-                    ")=", LegacyPrecision(solution_hint.var_value(i)),
-                    " is not a finite number");
+      return absl::StrCat("var_value(", i, ")=", (solution_hint.var_value(i)),
+                          " is not a finite number");
     }
   }
   return std::string();
@@ -151,8 +139,8 @@ std::string FindErrorInMPModelProto(const MPModelProto& model) {
   // accept models without variables and/or constraints.
 
   if (!std::isfinite(model.objective_offset())) {
-    return StrCat("Invalid objective_offset: ",
-                  LegacyPrecision(model.objective_offset()));
+    return absl::StrCat("Invalid objective_offset: ",
+                        (model.objective_offset()));
   }
   const int num_vars = model.variable_size();
   const int num_cts = model.constraint_size();
@@ -162,8 +150,8 @@ std::string FindErrorInMPModelProto(const MPModelProto& model) {
   for (int i = 0; i < num_vars; ++i) {
     error = FindErrorInMPVariable(model.variable(i));
     if (!error.empty()) {
-      return StrCat("In variable #", i, ": ", error, ". Variable proto: ",
-                    DebugString(model.variable(i)));
+      return absl::StrCat("In variable #", i, ": ", error, ". Variable proto: ",
+                          ProtobufShortDebugString(model.variable(i)));
     }
   }
 
@@ -180,24 +168,26 @@ std::string FindErrorInMPModelProto(const MPModelProto& model) {
       if (constraint.var_index_size() > kMaxNumVarsInPrintedConstraint) {
         constraint_light.mutable_var_index()->Truncate(
             kMaxNumVarsInPrintedConstraint);
-        StrAppend(&suffix_str, " (var_index cropped; size=",
-                  constraint.var_index_size(), ").");
+        absl::StrAppend(&suffix_str, " (var_index cropped; size=",
+                        constraint.var_index_size(), ").");
       }
       if (constraint.coefficient_size() > kMaxNumVarsInPrintedConstraint) {
         constraint_light.mutable_coefficient()->Truncate(
             kMaxNumVarsInPrintedConstraint);
-        StrAppend(&suffix_str, " (coefficient cropped; size=",
-                  constraint.coefficient_size(), ").");
+        absl::StrAppend(&suffix_str, " (coefficient cropped; size=",
+                        constraint.coefficient_size(), ").");
       }
-      return StrCat("In constraint #", i, ": ", error, ". Constraint proto: ",
-                    DebugString(constraint_light), suffix_str);
+      return absl::StrCat(
+          "In constraint #", i, ": ", error,
+          ". Constraint proto: ", ProtobufShortDebugString(constraint_light),
+          suffix_str);
     }
   }
 
   // Validate the solution hint.
   error = FindErrorInSolutionHint(model.solution_hint(), num_vars);
   if (!error.empty()) {
-    return StrCat("In solution_hint(): ", error);
+    return absl::StrCat("In solution_hint(): ", error);
   }
 
   return std::string();
@@ -206,12 +196,12 @@ std::string FindErrorInMPModelProto(const MPModelProto& model) {
 // TODO(user): Add a general FindFeasibilityErrorInSolution() and factor out the
 // common code.
 std::string FindFeasibilityErrorInSolutionHint(const MPModelProto& model,
-                                          double tolerance) {
+                                               double tolerance) {
   const int num_vars = model.variable_size();
 
   // First, we validate the solution hint.
   std::string error = FindErrorInSolutionHint(model.solution_hint(), num_vars);
-  if (!error.empty()) return StrCat("Invalid solution_hint: ", error);
+  if (!error.empty()) return absl::StrCat("Invalid solution_hint: ", error);
 
   // Special error message for the empty case.
   if (num_vars > 0 && model.solution_hint().var_index_size() == 0) {
@@ -220,9 +210,9 @@ std::string FindFeasibilityErrorInSolutionHint(const MPModelProto& model,
 
   // To be feasible, the hint must not be partial.
   if (model.solution_hint().var_index_size() != num_vars) {
-    return StrCat("Partial solution_hint: only ",
-                  model.solution_hint().var_index_size(), " out of the ",
-                  num_vars, " problem variables are set.");
+    return absl::StrCat("Partial solution_hint: only ",
+                        model.solution_hint().var_index_size(), " out of the ",
+                        num_vars, " problem variables are set.");
   }
 
   // All the values must be exactly in the variable bounds.
@@ -235,12 +225,10 @@ std::string FindFeasibilityErrorInSolutionHint(const MPModelProto& model,
     const double ub = model.variable(var_index).upper_bound();
     if (!IsSmallerWithinTolerance(value, ub, tolerance) ||
         !IsSmallerWithinTolerance(lb, value, tolerance)) {
-      return StrCat("Variable '", model.variable(var_index).name(),
-                    "' is set to ", LegacyPrecision(value),
-                    " which is not in the variable bounds [",
-                    LegacyPrecision(lb), ", ", LegacyPrecision(ub),
-                    "] modulo a tolerance of ",
-                    LegacyPrecision(tolerance), ".");
+      return absl::StrCat("Variable '", model.variable(var_index).name(),
+                          "' is set to ", (value),
+                          " which is not in the variable bounds [", (lb), ", ",
+                          (ub), "] modulo a tolerance of ", (tolerance), ".");
     }
   }
 
@@ -256,12 +244,10 @@ std::string FindFeasibilityErrorInSolutionHint(const MPModelProto& model,
     const double ub = model.constraint(cst_index).upper_bound();
     if (!IsSmallerWithinTolerance(activity.Value(), ub, tolerance) ||
         !IsSmallerWithinTolerance(lb, activity.Value(), tolerance)) {
-      return StrCat("Constraint '", model.constraint(cst_index).name(),
-                    "' has activity ", LegacyPrecision(activity.Value()),
-                    " which is not in the constraint bounds [",
-                    LegacyPrecision(lb), ", ", LegacyPrecision(ub),
-                    "] modulo a tolerance of ",
-                    LegacyPrecision(tolerance), ".");
+      return absl::StrCat(
+          "Constraint '", model.constraint(cst_index).name(), "' has activity ",
+          (activity.Value()), " which is not in the constraint bounds [", (lb),
+          ", ", (ub), "] modulo a tolerance of ", (tolerance), ".");
     }
   }
 

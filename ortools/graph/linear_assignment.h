@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -36,7 +36,7 @@
 //   #include "ortools/graph/linear_assignment.h"
 //
 //   // Choose a graph implementation (we recommend StaticGraph<>).
-//   typedef operations_research::StaticGraph<> Graph;
+//   typedef util::StaticGraph<> Graph;
 //
 //   // Define a num_nodes / 2 by num_nodes / 2 assignment problem:
 //   const int num_nodes = ...
@@ -55,9 +55,9 @@
 //   // instead, but then the ComputeAssignment() below will be slower. It is
 //   // okay if your graph is small and performance is not critical though.
 //   {
-//     std::vector<typename GraphType::ArcIndex> arc_permutation;
-//     graph->get()->Build(&arc_permutation);
-//     operations_research::Permute(arc_permutation, &arc_costs);
+//     std::vector<Graph::ArcIndex> arc_permutation;
+//     graph.Build(&arc_permutation);
+//     util::Permute(arc_permutation, &arc_costs);
 //   }
 //
 //   // Construct the LinearSumAssignment.
@@ -84,7 +84,7 @@
 //
 // In the following, we consider a bipartite graph
 //   G = (V = X union Y, E subset XxY),
-// where V denodes the set of nodes (vertices) in the graph, E denotes
+// where V denotes the set of nodes (vertices) in the graph, E denotes
 // the set of arcs (edges), n = |V| denotes the number of nodes in the
 // graph, and m = |E| denotes the number of arcs in the graph.
 //
@@ -204,11 +204,11 @@
 #include <utility>
 #include <vector>
 
+#include "absl/strings/str_format.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
-#include "ortools/base/stringprintf.h"
 #include "ortools/graph/ebert_graph.h"
 #include "ortools/util/permutation.h"
 #include "ortools/util/zvector.h"
@@ -260,7 +260,7 @@ class LinearSumAssignment {
   // Passes ownership of the cycle handler to the caller.
   //
   operations_research::PermutationCycleHandler<typename GraphType::ArcIndex>*
-      ArcAnnotationCycleHandler();
+  ArcAnnotationCycleHandler();
 
   // Optimizes the layout of the graph for the access pattern our
   // implementation will use.
@@ -391,9 +391,9 @@ class LinearSumAssignment {
       refinements_ += that.refinements_;
     }
     std::string StatsString() const {
-      return StringPrintf(
-          "%lld refinements; %lld relabelings; "
-          "%lld double pushes; %lld pushes",
+      return absl::StrFormat(
+          "%d refinements; %d relabelings; "
+          "%d double pushes; %d pushes",
           refinements_, relabelings_, double_pushes_, pushes_);
     }
     int64 pushes_;
@@ -1121,8 +1121,8 @@ bool LinearSumAssignment<GraphType>::UpdateEpsilon() {
 
 // For production code that checks whether a left-side node is active.
 template <typename GraphType>
-inline bool LinearSumAssignment<GraphType>::IsActive(NodeIndex left_node)
-    const {
+inline bool LinearSumAssignment<GraphType>::IsActive(
+    NodeIndex left_node) const {
   DCHECK_LT(left_node, num_left_nodes_);
   return matched_arc_[left_node] == GraphType::kNilArc;
 }
@@ -1131,8 +1131,8 @@ inline bool LinearSumAssignment<GraphType>::IsActive(NodeIndex left_node)
 // so that method can assert that its argument is a left-side node,
 // while for debugging we need to be able to test any node.
 template <typename GraphType>
-inline bool LinearSumAssignment<GraphType>::IsActiveForDebugging(NodeIndex node)
-    const {
+inline bool LinearSumAssignment<GraphType>::IsActiveForDebugging(
+    NodeIndex node) const {
   if (node < num_left_nodes_) {
     return IsActive(node);
   } else {
@@ -1265,8 +1265,8 @@ bool LinearSumAssignment<GraphType>::Refine() {
 template <typename GraphType>
 inline typename LinearSumAssignment<GraphType>::ImplicitPriceSummary
 LinearSumAssignment<GraphType>::BestArcAndGap(NodeIndex left_node) const {
-  DCHECK(IsActive(left_node)) << "Node " << left_node
-                              << " must be active (unmatched)!";
+  DCHECK(IsActive(left_node))
+      << "Node " << left_node << " must be active (unmatched)!";
   DCHECK_GT(epsilon_, 0);
   typename GraphType::OutgoingArcIterator arc_it(*graph_, left_node);
   ArcIndex best_arc = arc_it.Index();
@@ -1446,7 +1446,7 @@ void LinearSumAssignment<GraphType>::ReportAndAccumulateStats() {
 
 template <typename GraphType>
 bool LinearSumAssignment<GraphType>::ComputeAssignment() {
-  CHECK_NOTNULL(graph_);
+  CHECK(graph_ != nullptr);
   bool ok = graph_->num_nodes() == 2 * num_left_nodes_;
   if (!ok) return false;
   // Note: FinalizeSetup() might have been called already by white-box

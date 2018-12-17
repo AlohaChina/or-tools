@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -35,12 +35,12 @@
 #include <memory>
 #include <string>
 
+#include "absl/strings/str_format.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"  // for CHECK*
-#include "ortools/base/stringprintf.h"
+#include "ortools/graph/iterators.h"
 #include "ortools/lp_data/lp_types.h"
 #include "ortools/lp_data/permutation.h"
-#include "ortools/util/iterators.h"
 #include "ortools/util/return_macros.h"
 
 namespace operations_research {
@@ -134,7 +134,7 @@ class SparseVector {
   void ClearAndRelease();
 
   // Reserve the underlying storage for the given number of entries.
-  void Reserve(EntryIndex size);
+  void Reserve(EntryIndex new_capacity);
 
   // Returns true if the vector is empty.
   bool IsEmpty() const;
@@ -250,7 +250,7 @@ class SparseVector {
   // Same as AddMultipleToSparseVectorAndDeleteCommonIndex() but instead of
   // deleting the common index, leave it unchanged.
   void AddMultipleToSparseVectorAndIgnoreCommonIndex(
-      Fractional multiplier, Index ignored_common_index,
+      Fractional multiplier, Index removed_common_index,
       SparseVector* accumulator_vector) const;
 
   // Applies the index permutation to all entries: index = index_perm[index];
@@ -302,8 +302,8 @@ class SparseVector {
   //   for (const EntryIndex i : sparse_vector.AllEntryIndices()) { ... }
   // TODO(user): consider removing this, in favor of the natural range
   // iteration.
-  IntegerRange<EntryIndex> AllEntryIndices() const {
-    return IntegerRange<EntryIndex>(EntryIndex(0), num_entries_);
+  ::util::IntegerRange<EntryIndex> AllEntryIndices() const {
+    return ::util::IntegerRange<EntryIndex>(EntryIndex(0), num_entries_);
   }
 
   // Returns true if this vector is exactly equal to the given one, i.e. all its
@@ -320,7 +320,7 @@ class SparseVector {
   void AddEntry(Index index, Fractional value) {
     DCHECK_GE(index, 0);
     // Grow the internal storage if there is no space left for the new entry. We
-    // increase the size to std::max(4, 1.5*current capacity).
+    // increase the size to max(4, 1.5*current capacity).
     if (num_entries_ == capacity_) {
       // Reserve(capacity_ == 0 ? EntryIndex(4)
       //                        : EntryIndex(2 * capacity_.value()));
@@ -600,8 +600,7 @@ void SparseVector<IndexType, IteratorType>::CleanUp() {
   for (int i = 0; i < num_entries_; ++i) {
     const std::pair<Index, Fractional> entry = entries[i];
     if (entry.second == 0.0) continue;
-    if (i + 1 == num_entries_ ||
-        entry.first != entries[i + 1].first) {
+    if (i + 1 == num_entries_ || entry.first != entries[i + 1].first) {
       MutableIndex(new_size) = entry.first;
       MutableCoefficient(new_size) = entry.second;
       ++new_size;
@@ -1043,7 +1042,8 @@ std::string SparseVector<IndexType, IteratorType>::DebugString() const {
   std::string s;
   for (const EntryIndex i : AllEntryIndices()) {
     if (i != 0) s += ", ";
-    StringAppendF(&s, "[%d]=%g", GetIndex(i).value(), GetCoefficient(i));
+    absl::StrAppendFormat(&s, "[%d]=%g", GetIndex(i).value(),
+                          GetCoefficient(i));
   }
   return s;
 }

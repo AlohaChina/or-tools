@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -61,29 +61,26 @@ class EnteringVariable {
   // IsValidPrimalEnteringCandidate() for more details) or kInvalidCol if no
   // such column exists. This latter case means that the primal algorithm has
   // terminated: the optimal has been reached.
-  Status PrimalChooseEnteringColumn(ColIndex* entering_col) MUST_USE_RESULT;
+  ABSL_MUST_USE_RESULT Status
+  PrimalChooseEnteringColumn(ColIndex* entering_col);
 
   // Dual optimization phase (i.e. phase II) ratio test.
   // Returns the index of the entering column given that we want to move along
   // the "update" row vector in the direction given by the sign of
   // cost_variation. Computes the smallest step that keeps the dual feasibility
-  // for all the columns. The pivot is the coefficient of the "update" vector at
-  // the entering column index.
-  Status DualChooseEnteringColumn(const UpdateRow& update_row,
-                                  Fractional cost_variation,
-                                  std::vector<ColIndex>* bound_flip_candidates,
-                                  ColIndex* entering_col, Fractional* pivot,
-                                  Fractional* step) MUST_USE_RESULT;
+  // for all the columns.
+  ABSL_MUST_USE_RESULT Status DualChooseEnteringColumn(
+      const UpdateRow& update_row, Fractional cost_variation,
+      std::vector<ColIndex>* bound_flip_candidates, ColIndex* entering_col,
+      Fractional* step);
 
   // Dual feasibility phase (i.e. phase I) ratio test.
   // Similar to the optimization phase test, but allows a step that increases
   // the infeasibility of an already infeasible column. The step magnitude is
   // the one that minimize the sum of infeasibilities when applied.
-  Status DualPhaseIChooseEnteringColumn(const UpdateRow& update_row,
-                                        Fractional cost_variation,
-                                        ColIndex* entering_col,
-                                        Fractional* pivot,
-                                        Fractional* step) MUST_USE_RESULT;
+  ABSL_MUST_USE_RESULT Status DualPhaseIChooseEnteringColumn(
+      const UpdateRow& update_row, Fractional cost_variation,
+      ColIndex* entering_col, Fractional* step);
 
   // Sets the pricing parameters. This does not change the pricing rule.
   void SetParameters(const GlopParameters& parameters);
@@ -141,6 +138,31 @@ class EnteringVariable {
   // candidate #2, #3, ...; because the first tied candidate is remembered
   // anyway.
   std::vector<ColIndex> equivalent_entering_choices_;
+
+  // Store a column with its update coefficient and ratio.
+  // This is used during the dual phase I & II ratio tests.
+  struct ColWithRatio {
+    ColWithRatio(ColIndex _col, Fractional reduced_cost, Fractional coeff_m)
+        : col(_col), ratio(reduced_cost / coeff_m), coeff_magnitude(coeff_m) {}
+
+    // Returns false if "this" is before "other" in a priority queue.
+    bool operator<(const ColWithRatio& other) const {
+      if (ratio == other.ratio) {
+        if (coeff_magnitude == other.coeff_magnitude) {
+          return col > other.col;
+        }
+        return coeff_magnitude < other.coeff_magnitude;
+      }
+      return ratio > other.ratio;
+    }
+
+    ColIndex col;
+    Fractional ratio;
+    Fractional coeff_magnitude;
+  };
+
+  // Temporary vector used to hold breakpoints.
+  std::vector<ColWithRatio> breakpoints_;
 
   DISALLOW_COPY_AND_ASSIGN(EnteringVariable);
 };

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -37,7 +37,7 @@
 // const LinearExpr e1 = x + y;
 // const LinearExpr e2 = (e1 + 7.0 + z)/3.0;
 // const LinearRange r = e1 <= e2;
-// solver.AddRowConstraint(r);
+// solver.MakeRowConstraint(r);
 //
 // WARNING, AVOID THIS TRAP:
 //
@@ -66,7 +66,7 @@
 //    * LinearExpr e1 = LinearExpr(x) + (y + 5);
 //    * LinearExpr e1 = y + 5 + LinearExpr(x);
 
-#include <unordered_map>
+#include "absl/container/flat_hash_map.h"
 
 namespace operations_research {
 
@@ -87,12 +87,12 @@ class MPVariable;
 //
 //   * Create a constraint in your optimization, e.g.
 //
-//     solver.AddRowConstraint(linear_expr1 <= linear_expr2);
+//     solver.MakeRowConstraint(linear_expr1 <= linear_expr2);
 //
 //   * Get the value of the quantity after solving, e.g.
 //
 //     solver.Solve();
-//     solver.SolutionValue(linear_expr);
+//     linear_expr.SolutionValue();
 //
 // LinearExpr is allowed to delete variables with coefficient zero from the map,
 // but is not obligated to do so.
@@ -118,13 +118,17 @@ class LinearExpr {
   LinearExpr operator-() const;
 
   double offset() const { return offset_; }
-  const std::unordered_map<const MPVariable*, double>& terms() const {
+  const absl::flat_hash_map<const MPVariable*, double>& terms() const {
     return terms_;
   }
 
+  // Call only after calling MPSolver::Solve. Evaluates the value of this
+  // expression at the solution found.
+  double SolutionValue() const;
+
  private:
   double offset_;
-  std::unordered_map<const MPVariable*, double> terms_;
+  absl::flat_hash_map<const MPVariable*, double> terms_;
 };
 
 // NOTE(user): in the ops below, the non-"const LinearExpr&" are intentional.
@@ -145,10 +149,11 @@ LinearExpr operator*(double lhs, LinearExpr rhs);
 // The sum is represented as a LinearExpr with offset 0.
 //
 // Must be added to model with
-// MPSolver::AddRowConstraint(const LinearRange& range[, const std::string& name]);
+// MPSolver::AddRowConstraint(const LinearRange& range[, const std::string&
+// name]);
 class LinearRange {
  public:
-  LinearRange();
+  LinearRange() : lower_bound_(0), upper_bound_(0) {}
   // The bounds of the linear range are updated so that they include the offset
   // from "linear_expr", i.e., we form the range:
   // lower_bound - offset <= linear_expr - offset <= upper_bound - offset.

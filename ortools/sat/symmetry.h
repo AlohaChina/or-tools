@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,10 +17,10 @@
 #include <memory>
 #include <vector>
 
-#include "ortools/base/macros.h"
-#include "ortools/base/span.h"
-#include "ortools/base/int_type_indexed_vector.h"
+#include "absl/types/span.h"
 #include "ortools/algorithms/sparse_permutation.h"
+#include "ortools/base/int_type_indexed_vector.h"
+#include "ortools/base/macros.h"
 #include "ortools/sat/sat_base.h"
 #include "ortools/util/stats.h"
 
@@ -65,7 +65,7 @@ class SymmetryPropagator : public SatPropagator {
 
   bool Propagate(Trail* trail) final;
   void Untrail(const Trail& trail, int trail_index) final;
-  gtl::Span<Literal> Reason(const Trail& trail,
+  absl::Span<const Literal> Reason(const Trail& trail,
                                    int trail_index) const final;
 
   // Adds a new permutation to this symmetry propagator. The ownership is
@@ -92,7 +92,7 @@ class SymmetryPropagator : public SatPropagator {
   // Permutes a list of literals from input into output using the permutation
   // with given index. This uses tmp_literal_mapping_ and has a complexity in
   // O(permutation_support + input_size).
-  void Permute(int index, gtl::Span<Literal> input,
+  void Permute(int index, absl::Span<const Literal> input,
                std::vector<Literal>* output) const;
 
  private:
@@ -110,7 +110,7 @@ class SymmetryPropagator : public SatPropagator {
     int permutation_index;
     Literal image;
   };
-  ITIVector<LiteralIndex, std::vector<ImageInfo>> images_;
+  gtl::ITIVector<LiteralIndex, std::vector<ImageInfo>> images_;
 
   // For each permutation p, we maintain the list of all assigned literals
   // affected by p whose trail index is < propagation_trail_index_; sorted by
@@ -136,12 +136,12 @@ class SymmetryPropagator : public SatPropagator {
   // Returns false if there is a non-symmetric literal in this trail with its
   // image not already assigned to true by the solver.
   bool Enqueue(const Trail& trail, Literal literal, Literal image,
-               std::vector<AssignedLiteralInfo>* permutation_trail);
+               std::vector<AssignedLiteralInfo>* p_trail);
 
   // The identity permutation over all the literals.
   // This is temporary modified to encode a sparse permutation and then always
   // restored to the identity.
-  mutable ITIVector<LiteralIndex, Literal> tmp_literal_mapping_;
+  mutable gtl::ITIVector<LiteralIndex, Literal> tmp_literal_mapping_;
 
   // Symmetry reason indexed by trail_index.
   struct ReasonInfo {

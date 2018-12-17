@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 
 #include "ortools/lp_data/lp_utils.h"
 
@@ -33,14 +32,12 @@ Fractional PreciseSquaredNorm(const SparseColumn& v) {
   return sum.Value();
 }
 
-Fractional PreciseSquaredNorm(ScatteredColumnReference v) {
-  if (v.non_zero_rows.size() >
-      ScatteredColumnReference::kDenseThresholdForPreciseSum *
-          v.dense_column.size().value()) {
-    return PreciseSquaredNorm(v.dense_column);
+Fractional PreciseSquaredNorm(const ScatteredColumn& v) {
+  if (ShouldUseDenseIteration(v)) {
+    return PreciseSquaredNorm(v.values);
   }
   KahanSum sum;
-  for (const RowIndex row : v.non_zero_rows) {
+  for (const RowIndex row : v.non_zeros) {
     sum.Add(Square(v[row]));
   }
   return sum.Value();
@@ -48,8 +45,16 @@ Fractional PreciseSquaredNorm(ScatteredColumnReference v) {
 
 Fractional SquaredNorm(const DenseColumn& column) {
   Fractional sum(0.0);
-  for (RowIndex row(0); row < column.size(); ++row) {
-    sum += Square(column[row]);
+  RowIndex row(0);
+  const size_t num_blocks = column.size().value() / 4;
+  for (size_t i = 0; i < num_blocks; ++i) {
+    // See the comment in ScalarProduct in the header for some notes about the
+    // effect of adding up several squares at a time.
+    sum += Square(column[row++]) + Square(column[row++]) +
+           Square(column[row++]) + Square(column[row++]);
+  }
+  while (row < column.size()) {
+    sum += Square(column[row++]);
   }
   return sum;
 }
@@ -106,11 +111,11 @@ void RemoveNearZeroEntries(Fractional threshold, DenseColumn* column) {
 }
 
 Fractional RestrictedInfinityNorm(const SparseColumn& column,
-                                  const DenseBooleanColumn& row_to_consider,
+                                  const DenseBooleanColumn& rows_to_consider,
                                   RowIndex* row_index) {
   Fractional infinity_norm = 0.0;
   for (const SparseColumn::Entry e : column) {
-    if (row_to_consider[e.row()] && fabs(e.coefficient()) > infinity_norm) {
+    if (rows_to_consider[e.row()] && fabs(e.coefficient()) > infinity_norm) {
       infinity_norm = fabs(e.coefficient());
       *row_index = e.row();
     }

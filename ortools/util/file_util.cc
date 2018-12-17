@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,21 +13,19 @@
 
 #include "ortools/util/file_util.h"
 
-#include "ortools/base/logging.h"
-#include "ortools/base/file.h"
-#include "google/protobuf/io/zero_copy_stream_impl_lite.h"
 #include "google/protobuf/descriptor.h"
+#include "google/protobuf/io/zero_copy_stream_impl_lite.h"
 #include "google/protobuf/message.h"
 #include "google/protobuf/text_format.h"
+#include "ortools/base/file.h"
+#include "ortools/base/logging.h"
 
 namespace operations_research {
 
-using ::google::protobuf::Descriptor;
-using ::google::protobuf::FieldDescriptor;
-using ::google::protobuf::Reflection;
 using ::google::protobuf::TextFormat;
 
-bool ReadFileToProto(string_view filename, google::protobuf::Message* proto) {
+bool ReadFileToProto(absl::string_view filename,
+                     google::protobuf::Message* proto) {
   std::string data;
   CHECK_OK(file::GetContents(filename, &data, file::Defaults()));
   // Note that gzipped files are currently not supported.
@@ -38,10 +36,11 @@ bool ReadFileToProto(string_view filename, google::protobuf::Message* proto) {
   return false;
 }
 
-bool WriteProtoToFile(string_view filename, const google::protobuf::Message& proto,
+bool WriteProtoToFile(absl::string_view filename,
+                      const google::protobuf::Message& proto,
                       ProtoWriteFormat proto_write_format, bool gzipped) {
   // Note that gzipped files are currently not supported.
-    gzipped = false;
+  gzipped = false;
 
   std::string file_type_suffix;
   std::string output_string;
@@ -61,7 +60,7 @@ bool WriteProtoToFile(string_view filename, const google::protobuf::Message& pro
       }
       break;
   }
-  const std::string output_filename = StrCat(filename, file_type_suffix);
+  const std::string output_filename = absl::StrCat(filename, file_type_suffix);
   VLOG(1) << "Writing " << output_string.size() << " bytes to "
           << output_filename;
   if (!file::SetContents(output_filename, output_string, file::Defaults())

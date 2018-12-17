@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -62,6 +62,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/memory/memory.h"
 #include "ortools/base/basictypes.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
@@ -91,9 +92,9 @@ namespace operations_research {
 //  - KNAPSACK_MULTIDIMENSION_CBC_MIP_SOLVER: This solver can deal with both
 //    large number of items and several dimensions. This solver is based on
 //    Integer Programming solver CBC.
-//  - KNAPSACK_MULTIDIMENSION_GLPK_MIP_SOLVER: This solver can deal with both
+//  - KNAPSACK_MULTIDIMENSION_SCIP_MIP_SOLVER: This solver can deal with both
 //    large number of items and several dimensions. This solver is based on
-//    Integer Programming solver GLPK.
+//    Integer Programming solver SCIP.
 //
 // KnapsackSolver also implements a problem reduction algorithm based on lower
 // and upper bounds (see Ingargolia and Korsh: A reduction algorithm for
@@ -115,16 +116,13 @@ class KnapsackSolver {
     KNAPSACK_BRUTE_FORCE_SOLVER = 0,
     KNAPSACK_64ITEMS_SOLVER = 1,
     KNAPSACK_DYNAMIC_PROGRAMMING_SOLVER = 2,
-    #if defined(USE_CBC)
+#if defined(USE_CBC)
     KNAPSACK_MULTIDIMENSION_CBC_MIP_SOLVER = 3,
-    #endif  // USE_CBC
-    #if defined(USE_GLPK)
-    KNAPSACK_MULTIDIMENSION_GLPK_MIP_SOLVER = 4,
-    #endif  // USE_GLPK
+#endif  // USE_CBC
     KNAPSACK_MULTIDIMENSION_BRANCH_AND_BOUND_SOLVER = 5,
-    #if defined(USE_SCIP)
+#if defined(USE_SCIP)
     KNAPSACK_MULTIDIMENSION_SCIP_MIP_SOLVER = 6,
-    #endif  // USE_SCIP
+#endif  // USE_SCIP
   };
 
   explicit KnapsackSolver(const std::string& solver_name);
@@ -152,7 +150,7 @@ class KnapsackSolver {
   // obtained might not be optimal if the limit is reached.
   void set_time_limit(double time_limit_seconds) {
     time_limit_seconds_ = time_limit_seconds;
-    time_limit_.reset(new TimeLimit(time_limit_seconds_));
+    time_limit_ = absl::make_unique<TimeLimit>(time_limit_seconds_);
   }
 
  private:
@@ -410,8 +408,8 @@ class KnapsackPropagator {
   // called with current state.
   // This method is useful when a propagator is able to find a better solution
   // than the blind instantiation to false of unbound items.
-  virtual void CopyCurrentStateToSolutionPropagator(std::vector<bool>* solution)
-      const = 0;
+  virtual void CopyCurrentStateToSolutionPropagator(
+      std::vector<bool>* solution) const = 0;
 
   const KnapsackState& state() const { return state_; }
   const std::vector<KnapsackItemPtr>& items() const { return items_; }

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -19,6 +19,7 @@
 
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
+#include "ortools/base/mathutil.h"
 #include "ortools/base/stl_util.h"
 #include "ortools/flatzinc/model.h"
 #include "ortools/flatzinc/parser.tab.hh"
@@ -59,6 +60,13 @@ bool AllDomainsHaveOneValue(const std::vector<Domain>& domains) {
     }
   }
   return true;
+}
+
+int64 ConvertAsIntegerOrDie(double d) {
+  const double rounded = std::round(d);
+  const int64 i = static_cast<int64>(rounded);
+  CHECK_LE(std::abs(static_cast<double>(i) - rounded), 1e-9);
+  return i;
 }
 
 // Array in flatzinc are 1 based. We use this trivial wrapper for all flatzinc

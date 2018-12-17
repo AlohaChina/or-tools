@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,10 +13,9 @@
 
 #include "ortools/flatzinc/flatzinc_constraints.h"
 
-#include <unordered_set>
-
+#include "absl/container/flat_hash_set.h"
+#include "absl/strings/str_format.h"
 #include "ortools/base/commandlineflags.h"
-#include "ortools/base/stringprintf.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/flatzinc/logging.h"
 #include "ortools/util/string_array.h"
@@ -106,8 +105,8 @@ class BooleanSumOdd : public Constraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("BooleanSumOdd([%s])",
-                        JoinDebugStringPtr(vars_, ", ").c_str());
+    return absl::StrFormat("BooleanSumOdd([%s])",
+                           JoinDebugStringPtr(vars_, ", "));
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -153,9 +152,8 @@ class FixedModulo : public Constraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("(%s %% %s == %" GG_LL_FORMAT "d)",
-                        var_->DebugString().c_str(),
-                        mod_->DebugString().c_str(), residual_);
+    return absl::StrFormat("(%s %% %s == %d)", var_->DebugString(),
+                           mod_->DebugString(), residual_);
   }
 
  private:
@@ -202,7 +200,7 @@ class VariableParity : public Constraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("VarParity(%s, %d)", var_->DebugString().c_str(), odd_);
+    return absl::StrFormat("VarParity(%s, %d)", var_->DebugString(), odd_);
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -305,10 +303,9 @@ class IsBooleanSumInRange : public Constraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("Sum([%s]) in [%" GG_LL_FORMAT "d..%" GG_LL_FORMAT
-                        "d] == %s",
-                        JoinDebugStringPtr(vars_, ", ").c_str(), range_min_,
-                        range_max_, target_->DebugString().c_str());
+    return absl::StrFormat("Sum([%s]) in [%d..%d] == %s",
+                           JoinDebugStringPtr(vars_, ", "), range_min_,
+                           range_max_, target_->DebugString());
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -424,9 +421,9 @@ class BooleanSumInRange : public Constraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("Sum([%s]) in [%" GG_LL_FORMAT "d..%" GG_LL_FORMAT "d]",
-                        JoinDebugStringPtr(vars_, ", ").c_str(), range_min_,
-                        range_max_);
+    return absl::StrFormat("Sum([%s]) in [%d..%d]",
+                           JoinDebugStringPtr(vars_, ", "), range_min_,
+                           range_max_);
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -465,7 +462,7 @@ class BooleanSumInRange : public Constraint {
 
 class StartVarDurationVarPerformedIntervalVar : public IntervalVar {
  public:
-  StartVarDurationVarPerformedIntervalVar(Solver* const s, IntVar* const start,
+  StartVarDurationVarPerformedIntervalVar(Solver* const s, IntVar* const var,
                                           IntVar* const duration,
                                           const std::string& name);
   ~StartVarDurationVarPerformedIntervalVar() override {}
@@ -623,9 +620,8 @@ std::string StartVarDurationVarPerformedIntervalVar::DebugString() const {
   } else {
     out = "IntervalVar(start = ";
   }
-  StringAppendF(&out, "%s, duration = %s, performed = true)",
-                start_->DebugString().c_str(),
-                duration_->DebugString().c_str());
+  absl::StrAppendFormat(&out, "%s, duration = %s, performed = true)",
+                        start_->DebugString(), duration_->DebugString());
   return out;
 }
 
@@ -843,7 +839,7 @@ class KDiffn : public Constraint {
   const int64 num_boxes_;
   const int64 num_dims_;
   Demon* delayed_demon_;
-  std::unordered_set<int> to_propagate_;
+  absl::flat_hash_set<int> to_propagate_;
   std::vector<int> neighbors_;
   uint64 fail_stamp_;
 };
@@ -914,7 +910,8 @@ Constraint* MakeFixedModulo(Solver* const s, IntVar* const var,
 }
 
 IntervalVar* MakePerformedIntervalVar(Solver* const solver, IntVar* const start,
-                                      IntVar* const duration, const std::string& n) {
+                                      IntVar* const duration,
+                                      const std::string& n) {
   CHECK(start != nullptr);
   CHECK(duration != nullptr);
   return solver->RegisterIntervalVar(solver->RevAlloc(

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,7 +17,7 @@
 #include <memory>
 #include <vector>
 
-#include "ortools/base/mutex.h"
+#include "absl/synchronization/mutex.h"
 #include "ortools/lp_data/lp_data.h"
 #include "ortools/lp_data/lp_types.h"
 
@@ -82,7 +82,7 @@ class LPDecomposer {
   const LinearProgram* original_problem_;
   std::vector<std::vector<ColIndex>> clusters_;
 
-  mutable Mutex mutex_;
+  mutable absl::Mutex mutex_;
 
   DISALLOW_COPY_AND_ASSIGN(LPDecomposer);
 };

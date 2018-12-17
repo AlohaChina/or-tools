@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,15 +17,19 @@
 #include <limits>
 #include <numeric>
 
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/stringprintf.h"
-#include "ortools/base/join.h"
+#include "absl/memory/memory.h"
+#include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "ortools/algorithms/dense_doubly_linked_list.h"
 #include "ortools/algorithms/dynamic_partition.h"
 #include "ortools/algorithms/dynamic_permutation.h"
 #include "ortools/algorithms/sparse_permutation.h"
+#include "ortools/base/canonical_errors.h"
+#include "ortools/base/commandlineflags.h"
+#include "ortools/graph/iterators.h"
 #include "ortools/graph/util.h"
-#include "ortools/util/iterators.h"
 
 DEFINE_bool(minimize_permutation_support_size, false,
             "Tweak the algorithm to try and minimize the support size"
@@ -34,6 +38,8 @@ DEFINE_bool(minimize_permutation_support_size, false,
             " to reduce the support size.");
 
 namespace operations_research {
+
+using util::GraphIsSymmetric;
 
 namespace {
 // Some routines used below.
@@ -125,8 +131,9 @@ GraphSymmetryFinder::GraphSymmetryFinder(const Graph& graph, bool is_undirected)
     flattened_reverse_adj_lists_.assign(graph.num_arcs(), -1);
     for (const int node : graph.AllNodes()) {
       for (const int arc : graph.OutgoingArcs(node)) {
-        flattened_reverse_adj_lists_
-            [reverse_adj_list_index_[graph.Head(arc) + /*shift*/ 1]++] = node;
+        flattened_reverse_adj_lists_[reverse_adj_list_index_[graph.Head(arc) +
+                                                             /*shift*/ 1]++] =
+            node;
       }
     }
     // The last pass shifted reverse_adj_list_index, so it's now as we want it:
@@ -339,8 +346,8 @@ void GetAllOtherRepresentativesInSamePartAs(
     std::sort(expected_output.begin(), expected_output.end());
     std::vector<int> sorted_output = *pruned_other_nodes;
     std::sort(sorted_output.begin(), sorted_output.end());
-    DCHECK_EQ(strings::Join(expected_output, " "),
-              strings::Join(sorted_output, " "));
+    DCHECK_EQ(absl::StrJoin(expected_output, " "),
+              absl::StrJoin(sorted_output, " "));
   }
 }
 }  // namespace
@@ -350,7 +357,7 @@ util::Status GraphSymmetryFinder::FindSymmetries(
     std::vector<std::unique_ptr<SparsePermutation>>* generators,
     std::vector<int>* factorized_automorphism_group_size) {
   // Initialization.
-  time_limit_.reset(new TimeLimit(time_limit_seconds));
+  time_limit_ = absl::make_unique<TimeLimit>(time_limit_seconds);
   IF_STATS_ENABLED(stats_.initialization_time.StartTimer());
   generators->clear();
   factorized_automorphism_group_size->clear();
@@ -402,7 +409,7 @@ util::Status GraphSymmetryFinder::FindSymmetries(
     int num_parts_before_refinement;
 
     InvariantDiveState(int node, int num_parts)
-      : invariant_node(node), num_parts_before_refinement(num_parts) {}
+        : invariant_node(node), num_parts_before_refinement(num_parts) {}
   };
   std::vector<InvariantDiveState> invariant_dive_stack;
   // TODO(user): experiment with, and briefly describe the results of various
@@ -480,7 +487,7 @@ util::Status GraphSymmetryFinder::FindSymmetries(
     while (!potential_root_image_nodes.empty()) {
       if (time_limit_->LimitReached()) break;
       VLOG(4) << "Potential (pruned) images of root node " << root_node
-              << " left: [" << strings::Join(potential_root_image_nodes, " ")
+              << " left: [" << absl::StrJoin(potential_root_image_nodes, " ")
               << "].";
       const int root_image_node = potential_root_image_nodes.back();
       VLOG(4) << "Trying image of root node: " << root_image_node;
@@ -529,6 +536,7 @@ util::Status GraphSymmetryFinder::FindSymmetries(
   }
   node_equivalence_classes.FillEquivalenceClasses(node_equivalence_classes_io);
   IF_STATS_ENABLED(stats_.main_search_time.StopTimerAndAddElapsedTime());
+  IF_STATS_ENABLED(stats_.SetPrintOrder(StatsGroup::SORT_BY_NAME));
   IF_STATS_ENABLED(LOG(INFO) << "Statistics: " << stats_.StatString());
   if (time_limit_->LimitReached()) {
     return util::Status(util::error::DEADLINE_EXCEEDED,
@@ -838,9 +846,9 @@ GraphSymmetryFinder::FindOneSuitablePermutation(
   return nullptr;
 }
 
-BeginEndWrapper<std::vector<int>::const_iterator>
+util::BeginEndWrapper<std::vector<int>::const_iterator>
 GraphSymmetryFinder::TailsOfIncomingArcsTo(int node) const {
-  return BeginEndWrapper<std::vector<int>::const_iterator>(
+  return util::BeginEndWrapper<std::vector<int>::const_iterator>(
       flattened_reverse_adj_lists_.begin() + reverse_adj_list_index_[node],
       flattened_reverse_adj_lists_.begin() + reverse_adj_list_index_[node + 1]);
 }
@@ -849,7 +857,7 @@ void GraphSymmetryFinder::PruneOrbitsUnderPermutationsCompatibleWithPartition(
     const DynamicPartition& partition,
     const std::vector<std::unique_ptr<SparsePermutation>>& permutations,
     const std::vector<int>& permutation_indices, std::vector<int>* nodes) {
-  VLOG(4) << "    Pruning [" << strings::Join(*nodes, ", ") << "]";
+  VLOG(4) << "    Pruning [" << absl::StrJoin(*nodes, ", ") << "]";
   // TODO(user): apply a smarter test to decide whether to do the pruning
   // or not: we can accurately estimate the cost of pruning (iterate through
   // all generators found so far) and its estimated benefit (the cost of
@@ -917,7 +925,7 @@ void GraphSymmetryFinder::PruneOrbitsUnderPermutationsCompatibleWithPartition(
     tmp_partition_.ResetNode(node);
   }
   tmp_nodes_on_support.clear();
-  VLOG(4) << "    Pruned: [" << strings::Join(*nodes, ", ") << "]";
+  VLOG(4) << "    Pruned: [" << absl::StrJoin(*nodes, ", ") << "]";
 }
 
 bool GraphSymmetryFinder::ConfirmFullMatchOrFindNextMappingDecision(
@@ -951,8 +959,9 @@ bool GraphSymmetryFinder::ConfirmFullMatchOrFindNextMappingDecision(
       // We found loose ends, but none that mapped to its own root. Just pick
       // any valid image.
       *next_image_node =
-          *image_partition.ElementsInPart(
-                               base_partition.PartOf(*next_base_node)).begin();
+          *image_partition
+               .ElementsInPart(base_partition.PartOf(*next_base_node))
+               .begin();
       return false;
     }
   }
@@ -1004,12 +1013,12 @@ bool GraphSymmetryFinder::ConfirmFullMatchOrFindNextMappingDecision(
 }
 
 std::string GraphSymmetryFinder::SearchState::DebugString() const {
-  return StringPrintf(
+  return absl::StrFormat(
       "SearchState{ base_node=%d, first_image_node=%d,"
       " remaining_pruned_image_nodes=[%s],"
       " num_parts_before_trying_to_map_base_node=%d }",
       base_node, first_image_node,
-      strings::Join(remaining_pruned_image_nodes, " ").c_str(),
+      absl::StrJoin(remaining_pruned_image_nodes, " "),
       num_parts_before_trying_to_map_base_node);
 }
 

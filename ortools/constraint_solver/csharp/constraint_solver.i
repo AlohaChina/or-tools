@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -19,8 +19,12 @@ using System.Runtime.InteropServices;
 using System.Collections;
 %}
 
+%include "enumsimple.swg"
+%include "stdint.i"
 %include "exception.i"
 %include "std_vector.i"
+
+%include "ortools/base/base.i"
 %include "ortools/util/csharp/tuple_set.i"
 %include "ortools/util/csharp/functions.i"
 %include "ortools/util/csharp/proto.i"
@@ -46,6 +50,7 @@ class SearchLimitParameters;
 %feature("director") SearchLimit;
 %feature("director") SearchMonitor;
 %feature("director") SequenceVarLocalSearchOperator;
+%feature("director") SolutionCollector;
 %feature("director") SymmetryBreaker;
 %{
 #include <setjmp.h>
@@ -53,7 +58,6 @@ class SearchLimitParameters;
 #include <string>
 #include <vector>
 
-#include "ortools/base/callback.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
@@ -69,10 +73,6 @@ class LocalSearchPhaseParameters {
 };
 }  // namespace operations_research
 
-namespace swig_util {
-	class NodeEvaluator2;
-}
-
 struct FailureProtect {
   jmp_buf exception_buffer;
   void JumpBack() {
@@ -80,6 +80,9 @@ struct FailureProtect {
   }
 };
 %}
+
+typedef int64_t int64;
+typedef uint64_t uint64;
 
 /* allow partial c# classes */
 %typemap(csclassmodifiers) SWIGTYPE "public partial class"
@@ -111,7 +114,7 @@ namespace operations_research {
 PROTECT_FROM_FAILURE(IntExpr::SetValue(int64 v), arg1->solver());
 PROTECT_FROM_FAILURE(IntExpr::SetMin(int64 v), arg1->solver());
 PROTECT_FROM_FAILURE(IntExpr::SetMax(int64 v), arg1->solver());
-PROTECT_FROM_FAILURE(IntExpr::SetRange(int64 mi, int64 ma), arg1->solver());
+PROTECT_FROM_FAILURE(IntExpr::SetRange(int64 l, int64 u), arg1->solver());
 PROTECT_FROM_FAILURE(IntVar::RemoveValue(int64 v), arg1->solver());
 PROTECT_FROM_FAILURE(IntVar::RemoveValues(const std::vector<int64>& values),
                      arg1->solver());
@@ -128,7 +131,7 @@ PROTECT_FROM_FAILURE(IntervalVar::SetEndMax(int64 m), arg1->solver());
 PROTECT_FROM_FAILURE(IntervalVar::SetEndRange(int64 mi, int64 ma),
                      arg1->solver());
 PROTECT_FROM_FAILURE(IntervalVar::SetPerformed(bool val), arg1->solver());
-PROTECT_FROM_FAILURE(Solver::AddConstraint(Constraint* const ct), arg1);
+PROTECT_FROM_FAILURE(Solver::AddConstraint(Constraint* const c), arg1);
 PROTECT_FROM_FAILURE(Solver::Fail(), arg1);
 #undef PROTECT_FROM_FAILURE
 }  // namespace operations_research
@@ -143,9 +146,6 @@ PROTECT_FROM_FAILURE(Solver::Fail(), arg1);
 %template(CpInt64Vector) std::vector<int64>;
 %template(CpIntVectorVector) std::vector<std::vector<int> >;
 %template(CpInt64VectorVector) std::vector<std::vector<int64> >;
-
-// This needs to be declared here as the camel case rename rule will cause collisions in the C# NodeEvaluator2Vector class.
-%template(NodeEvaluator2Vector) std::vector<::swig_util::NodeEvaluator2*>;
 
 %define CS_TYPEMAP_STDVECTOR_OBJECT(CTYPE, TYPE)
 SWIG_STD_VECTOR_ENHANCED(operations_research::CTYPE*);
@@ -329,15 +329,15 @@ namespace operations_research {
 // properly, so we write our custom wrappers for all methods involving
 // std::function<>.
 %ignore Solver::MakeSearchLog(
-    int branch_count,
+    int branch_period,
     std::function<std::string()> display_callback);
 %ignore Solver::MakeSearchLog(
-    int branch_count,
-    IntVar* objective,
+    int branch_period,
+    IntVar* var,
     std::function<std::string()> display_callback);
 %ignore Solver::MakeSearchLog(
-    int branch_count,
-    OptimizeVar* const objective,
+    int branch_period,
+    OptimizeVar* const opt_var,
     std::function<std::string()> display_callback);
 
 %ignore Solver::MakeActionDemon;
@@ -407,25 +407,21 @@ namespace operations_research {
                              const std::vector<IntVar*>& secondary_vars,
                              IndexEvaluator3 evaluator,
                              EvaluatorLocalSearchOperators op);
-%ignore Solver::MakeLocalSearchObjectiveFilter(
+%ignore Solver::MakeSumObjectiveFilter(
     const std::vector<IntVar*>& vars, IndexEvaluator2 values,
-    IntVar* const objective, Solver::LocalSearchFilterBound filter_enum,
-    Solver::LocalSearchOperation op_enum);
-%ignore Solver::MakeLocalSearchObjectiveFilter(
+    IntVar* const objective, Solver::LocalSearchFilterBound filter_enum);
+%ignore Solver::MakeSumObjectiveFilter(
     const std::vector<IntVar*>& vars, IndexEvaluator2 values,
     ObjectiveWatcher delta_objective_callback, IntVar* const objective,
-    Solver::LocalSearchFilterBound filter_enum,
-    Solver::LocalSearchOperation op_enum);
-%ignore Solver::MakeLocalSearchObjectiveFilter(
+    Solver::LocalSearchFilterBound filter_enum);
+%ignore Solver::MakeSumObjectiveFilter(
     const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
     Solver::IndexEvaluator3 values, IntVar* const objective,
-    Solver::LocalSearchFilterBound filter_enum,
-    Solver::LocalSearchOperation op_enum);
-%ignore Solver::MakeLocalSearchObjectiveFilter(
+    Solver::LocalSearchFilterBound filter_enum);
+%ignore Solver::MakeSumObjectiveFilter(
     const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
     Solver::IndexEvaluator3 values, ObjectiveWatcher delta_objective_callback,
-    IntVar* const objective, Solver::LocalSearchFilterBound filter_enum,
-    Solver::LocalSearchOperation op_enum);
+    IntVar* const objective, Solver::LocalSearchFilterBound filter_enum);
 %ignore Solver::ConcatenateOperators(
     const std::vector<LocalSearchOperator*>& ops,
     std::function<int64(int, int)> evaluator);
@@ -584,48 +580,44 @@ namespace operations_research {
         [evaluator](int64 i, int64 j, int64 k) {
           return evaluator->Run(i, j, k); }, op);
   }
-  LocalSearchFilter* MakeLocalSearchObjectiveFilter(
+  LocalSearchFilter* MakeSumObjectiveFilter(
       const std::vector<IntVar*>& vars, swig_util::LongLongToLong* values,
-      IntVar* const objective, Solver::LocalSearchFilterBound filter_enum,
-      Solver::LocalSearchOperation op_enum) {
-    return $self->MakeLocalSearchObjectiveFilter(
+      IntVar* const objective, Solver::LocalSearchFilterBound filter_enum) {
+    return $self->MakeSumObjectiveFilter(
         vars, [values](int64 i, int64 j) { return values->Run(i, j); },
-        objective, filter_enum, op_enum);
+        objective, filter_enum);
   }
-  LocalSearchFilter* MakeLocalSearchObjectiveFilter(
+  LocalSearchFilter* MakeSumObjectiveFilter(
       const std::vector<IntVar*>& vars, swig_util::LongLongToLong* values,
       swig_util::LongToVoid* delta_objective_callback, IntVar* const objective,
-      Solver::LocalSearchFilterBound filter_enum,
-      Solver::LocalSearchOperation op_enum) {
-    return $self->MakeLocalSearchObjectiveFilter(
+      Solver::LocalSearchFilterBound filter_enum) {
+    return $self->MakeSumObjectiveFilter(
         vars, [values](int64 i, int64 j) { return values->Run(i, j); },
         [delta_objective_callback](int64 i) {
           return delta_objective_callback->Run(i); },
-        objective, filter_enum, op_enum);
+        objective, filter_enum);
   }
-  LocalSearchFilter* MakeLocalSearchObjectiveFilter(
+  LocalSearchFilter* MakeSumObjectiveFilter(
       const std::vector<IntVar*>& vars, const std::vector<IntVar*>& secondary_vars,
       swig_util::LongLongLongToLong* values, IntVar* const objective,
-      Solver::LocalSearchFilterBound filter_enum,
-      Solver::LocalSearchOperation op_enum) {
-    return $self->MakeLocalSearchObjectiveFilter(
+      Solver::LocalSearchFilterBound filter_enum) {
+    return $self->MakeSumObjectiveFilter(
         vars, secondary_vars,
         [values](int64 i, int64 j, int64 k) { return values->Run(i, j, k); },
-        objective, filter_enum, op_enum);
+        objective, filter_enum);
   }
-  LocalSearchFilter* MakeLocalSearchObjectiveFilter(
+  LocalSearchFilter* MakeSumObjectiveFilter(
       const std::vector<IntVar*>& vars,
       const std::vector<IntVar*>& secondary_vars,
       swig_util::LongLongLongToLong* values,
       swig_util::LongToVoid* delta_objective_callback,
-      IntVar* const objective, Solver::LocalSearchFilterBound filter_enum,
-      Solver::LocalSearchOperation op_enum) {
-    return $self->MakeLocalSearchObjectiveFilter(
+      IntVar* const objective, Solver::LocalSearchFilterBound filter_enum) {
+    return $self->MakeSumObjectiveFilter(
         vars, secondary_vars,
         [values](int64 i, int64 j, int64 k) { return values->Run(i, j, k); },
         [delta_objective_callback](int64 i) {
           return delta_objective_callback->Run(i); },
-        objective, filter_enum, op_enum);
+        objective, filter_enum);
   }
   LocalSearchOperator* ConcatenateOperators(
       const std::vector<LocalSearchOperator*>& ops,

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -18,11 +18,12 @@
 #include <vector>
 
 #include "ortools/base/basictypes.h"
+#include "ortools/base/int_type.h"
+#include "ortools/base/int_type_indexed_vector.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
-#include "ortools/base/int_type.h"
-#include "ortools/base/int_type_indexed_vector.h"
+#include "ortools/base/random.h"
 #include "ortools/bop/bop_base.h"
 #include "ortools/bop/bop_parameters.pb.h"
 #include "ortools/bop/bop_solution.h"
@@ -33,7 +34,6 @@
 #include "ortools/sat/sat_solver.h"
 #include "ortools/util/stats.h"
 #include "ortools/util/time_limit.h"
-#include "ortools/base/random.h"
 
 namespace operations_research {
 namespace bop {
@@ -64,7 +64,7 @@ class BopCompleteLNSOptimizer : public BopOptimizerBase {
 //
 // NOTE(user): Using a sat_propagator as the output of the algorithm allows for
 // a really simple and efficient interface for the generator that relies on it.
-// However, if a generator don't rely on it at all, it may slow down a bit the
+// However, if a generator doesn't rely on it at all, it may slow down a bit the
 // code (to investigate). If this happens, we will probably need another
 // function here and a way to select between which one to call.
 class NeighborhoodGenerator {
@@ -174,7 +174,7 @@ class RelationGraphBasedNeighborhood : public NeighborhoodGenerator {
 
   // TODO(user): reuse by_variable_matrix_ from the LS? Note however than we
   // don't need the coefficients here.
-  ITIVector<VariableIndex, std::vector<ConstraintIndex>> columns_;
+  gtl::ITIVector<VariableIndex, std::vector<ConstraintIndex>> columns_;
   MTRandom* random_;
 };
 

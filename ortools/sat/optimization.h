@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -24,6 +24,7 @@
 
 #include "ortools/sat/boolean_problem.pb.h"
 #include "ortools/sat/integer.h"
+#include "ortools/sat/integer_search.h"
 #include "ortools/sat/model.h"
 #include "ortools/sat/sat_base.h"
 #include "ortools/sat/sat_solver.h"
@@ -43,8 +44,10 @@ void MinimizeCore(SatSolver* solver, std::vector<Literal>* core);
 // Like MinimizeCore() with a slower but strictly better heuristic. This
 // algorithm should produce a minimal core with respect to propagation. We put
 // each literal of the initial core "last" at least once, so if such literal can
-// be infered by propagation by any subset of the other literal, it will be
+// be inferred by propagation by any subset of the other literal, it will be
 // removed.
+//
+// Note that this function doest NOT preserve the order of Literal in the core.
 void MinimizeCoreWithPropagation(SatSolver* solver, std::vector<Literal>* core);
 
 // Because the Solve*() functions below are also used in scripts that requires a
@@ -55,10 +58,10 @@ enum LogBehavior { DEFAULT_LOG, STDOUT_LOG };
 
 // All the Solve*() functions below reuse the SatSolver::Status with a slightly
 // different meaning:
-// - MODEL_SAT: The problem has been solved to optimality.
-// - MODEL_UNSAT: Same meaning, the decision version is already unsat.
+// - FEASIBLE: The problem has been solved to optimality.
+// - INFEASIBLE: Same meaning, the decision version is already unsat.
 // - LIMIT_REACHED: we may have some feasible solution (if solution is
-//   non-empty), but the optimality is not proved.
+//   non-empty), but the optimality is not proven.
 
 // Implements the "Fu & Malik" algorithm described in:
 // Zhaohui Fu, Sharad Malik, "On solving the Partial MAX-SAT problem", 2006,
@@ -66,8 +69,8 @@ enum LogBehavior { DEFAULT_LOG, STDOUT_LOG };
 // Testing. (SAT’06), LNCS 4121.
 //
 // This algorithm requires all the objective weights to be the same (CHECKed)
-// and currently only works on minization problems. The problem is assumed to be
-// already loaded into the given solver.
+// and currently only works on minimization problems. The problem is assumed to
+// be already loaded into the given solver.
 //
 // TODO(user): double-check the correctness if the objective coefficients are
 // negative.
@@ -83,7 +86,7 @@ SatSolver::Status SolveWithFuMalik(LogBehavior log,
 //
 // Ansotegui, C., Bonet, M.L., Levy, J.: Solving (weighted) partial MaxSAT
 // through satisﬁability testing. In: Proc. of the 12th Int. Conf. on Theory and
-// Applications of Satisﬁability Testing (SAT’09). pp. 427–440 (2009)
+// Applications of Satisﬁability Testing (SAT’09). pp. 427-440 (2009)
 SatSolver::Status SolveWithWPM1(LogBehavior log,
                                 const LinearBooleanProblem& problem,
                                 SatSolver* solver, std::vector<bool>* solution);
@@ -110,8 +113,8 @@ SatSolver::Status SolveWithLinearScan(LogBehavior log,
                                       std::vector<bool>* solution);
 
 // Similar algorithm as the one used by qmaxsat, this is a linear scan with the
-// at-most k constraint encoded in SAT. This only works on problem with constant
-// weights.
+// at-most k constraint encoded in SAT. This only works on problems with
+// constant weights.
 SatSolver::Status SolveWithCardinalityEncoding(
     LogBehavior log, const LinearBooleanProblem& problem, SatSolver* solver,
     std::vector<bool>* solution);
@@ -122,7 +125,7 @@ SatSolver::Status SolveWithCardinalityEncodingAndCore(
     LogBehavior log, const LinearBooleanProblem& problem, SatSolver* solver,
     std::vector<bool>* solution);
 
-// Model-based API, for now we just provide a basic algorithm that minimize a
+// Model-based API, for now we just provide a basic algorithm that minimizes a
 // given IntegerVariable by solving a sequence of decision problem.
 //
 // The "observer" function will be called each time a new feasible solution is
@@ -142,6 +145,14 @@ SatSolver::Status MinimizeIntegerVariableWithLinearScanAndLazyEncoding(
     const std::function<void(const Model&)>& feasible_solution_observer,
     Model* model);
 
+// Use a low conflict limit and performs a binary search to try to restrict the
+// domain of objective_var.
+void RestrictObjectiveDomainWithBinarySearch(
+    IntegerVariable objective_var,
+    const std::function<LiteralIndex()>& next_decision,
+    const std::function<void(const Model&)>& feasible_solution_observer,
+    Model* model);
+
 // Same as MinimizeIntegerVariableWithLinearScanAndLazyEncoding() but use
 // a core-based approach instead. Note that the given objective_var is just used
 // for reporting the lower-bound and do not need to be linked with its linear
@@ -154,9 +165,8 @@ SatSolver::Status MinimizeWithCoreAndLazyEncoding(
     const std::function<void(const Model&)>& feasible_solution_observer,
     Model* model);
 
-#if defined(USE_CBC) || defined(USE_SCIP)
 // Generalization of the max-HS algorithm (HS stands for Hitting Set). This is
-// similar to MinimizeWithCoreAndLazyEncoding() but it uses an hybrid approach
+// similar to MinimizeWithCoreAndLazyEncoding() but it uses a hybrid approach
 // with a MIP solver to handle the discovered infeasibility cores.
 //
 // See, Jessica Davies and Fahiem Bacchus, "Solving MAXSAT by Solving a
@@ -176,7 +186,6 @@ SatSolver::Status MinimizeWithHittingSetAndLazyEncoding(
     const std::function<LiteralIndex()>& next_decision,
     const std::function<void(const Model&)>& feasible_solution_observer,
     Model* model);
-#endif  // defined(USE_CBC) || defined(USE_SCIP)
 
 }  // namespace sat
 }  // namespace operations_research

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,17 +14,17 @@
 #ifndef OR_TOOLS_BASE_FILE_H_
 #define OR_TOOLS_BASE_FILE_H_
 
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
-#include "ortools/base/integral_types.h"
-#include "ortools/base/logging.h"
-#include "google/protobuf/io/tokenizer.h"
+#include "absl/strings/string_view.h"
 #include "google/protobuf/descriptor.h"
+#include "google/protobuf/io/tokenizer.h"
 #include "google/protobuf/message.h"
 #include "google/protobuf/text_format.h"
-#include "ortools/base/string_view.h"
+#include "ortools/base/integral_types.h"
+#include "ortools/base/logging.h"
 #include "ortools/base/status.h"
 
 // This file defines some IO interfaces for compatibility with Google
@@ -36,7 +36,7 @@ class File {
   static File* Open(const char* const name, const char* const flag);
 
 #ifndef SWIG  // no overloading
-  inline static File* Open(const operations_research::string_view& name,
+  inline static File* Open(const absl::string_view& name,
                            const char* const mode) {
     return Open(name.data(), mode);
   }
@@ -47,7 +47,7 @@ class File {
   static File* OpenOrDie(const char* const name, const char* const flag);
 
 #ifndef SWIG  // no overloading
-  inline static File* OpenOrDie(const operations_research::string_view& name,
+  inline static File* OpenOrDie(const absl::string_view& name,
                                 const char* const flag) {
     return OpenOrDie(name.data(), flag);
   }
@@ -64,8 +64,8 @@ class File {
   // Each line must be no more than max_length bytes.
   char* ReadLine(char* const output, uint64 max_length);
 
-  // Reads the whole file to a std::string, with a maximum length of 'max_length'.
-  // Returns the number of bytes read.
+  // Reads the whole file to a std::string, with a maximum length of
+  // 'max_length'. Returns the number of bytes read.
   int64 ReadToString(std::string* const line, uint64 max_length);
 
   // Writes "size" bytes of buff to file, buff should be pre-allocated.
@@ -95,11 +95,11 @@ class File {
   static void Init();
 
   // Returns the file name.
-  operations_research::string_view filename() const;
+  absl::string_view filename() const;
 
   // Deletes a file.
   static bool Delete(const char* const name);
-  static bool Delete(const operations_research::string_view& name) {
+  static bool Delete(const absl::string_view& name) {
     return Delete(name.data());
   }
 
@@ -109,50 +109,49 @@ class File {
   bool Open() const;
 
  private:
-  File(FILE* const descriptor, const operations_research::string_view& name);
+  File(FILE* const descriptor, const absl::string_view& name);
 
   FILE* f_;
-  const operations_research::string_view name_;
+  const absl::string_view name_;
 };
 
 namespace file {
 inline int Defaults() { return 0xBABA; }
 
 // As of 2016-01, these methods can only be used with flags = file::Defaults().
-util::Status Open(const operations_research::string_view& filename,
-                  const operations_research::string_view& mode, File** f,
-                  int flags);
-File* OpenOrDie(const operations_research::string_view& filename,
-                const operations_research::string_view& mode, int flags);
-util::Status SetTextProto(const operations_research::string_view& filename,
+util::Status Open(const absl::string_view& filename,
+                  const absl::string_view& mode, File** f, int flags);
+File* OpenOrDie(const absl::string_view& filename,
+                const absl::string_view& mode, int flags);
+util::Status SetTextProto(const absl::string_view& filename,
                           const google::protobuf::Message& proto, int flags);
-util::Status SetBinaryProto(const operations_research::string_view& filename,
+util::Status SetBinaryProto(const absl::string_view& filename,
                             const google::protobuf::Message& proto, int flags);
-util::Status SetContents(const operations_research::string_view& filename,
-                         const std::string& contents, int flags);
-util::Status GetContents(const operations_research::string_view& filename,
-                         std::string* output, int flags);
-util::Status WriteString(File* file, const std::string& contents, int flags);
+util::Status SetContents(const absl::string_view& filename,
+                         const absl::string_view& contents, int flags);
+util::Status GetContents(const absl::string_view& filename, std::string* output,
+                         int flags);
+util::Status WriteString(File* file, const absl::string_view& contents,
+                         int flags);
 
-bool ReadFileToString(const operations_research::string_view& file_name,
-                      std::string* output);
+bool ReadFileToString(const absl::string_view& file_name, std::string* output);
 bool WriteStringToFile(const std::string& data,
-                       const operations_research::string_view& file_name);
-bool ReadFileToProto(const operations_research::string_view& file_name,
+                       const absl::string_view& file_name);
+bool ReadFileToProto(const absl::string_view& file_name,
                      google::protobuf::Message* proto);
-void ReadFileToProtoOrDie(const operations_research::string_view& file_name,
+void ReadFileToProtoOrDie(const absl::string_view& file_name,
                           google::protobuf::Message* proto);
 bool WriteProtoToASCIIFile(const google::protobuf::Message& proto,
-                           const operations_research::string_view& file_name);
-void WriteProtoToASCIIFileOrDie(
-    const google::protobuf::Message& proto,
-    const operations_research::string_view& file_name);
+                           const absl::string_view& file_name);
+void WriteProtoToASCIIFileOrDie(const google::protobuf::Message& proto,
+                                const absl::string_view& file_name);
 bool WriteProtoToFile(const google::protobuf::Message& proto,
-                      const operations_research::string_view& file_name);
+                      const absl::string_view& file_name);
 void WriteProtoToFileOrDie(const google::protobuf::Message& proto,
-                           const operations_research::string_view& file_name);
+                           const absl::string_view& file_name);
 
-util::Status Delete(const operations_research::string_view& path, int flags);
+util::Status Delete(const absl::string_view& path, int flags);
+util::Status Exists(const absl::string_view& path, int flags);
 
 }  // namespace file
 

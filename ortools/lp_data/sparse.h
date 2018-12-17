@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -64,7 +64,7 @@ class SparseMatrix {
   //    {1, 2, 3},
   //    {4, 5, 6},
   //    {7, 8, 9}};
-#if !defined(__ANDROID__) && (!defined(_MSC_VER) || _MSC_VER >= 1800)
+#if (!defined(_MSC_VER) || _MSC_VER >= 1800)
   SparseMatrix(
       std::initializer_list<std::initializer_list<Fractional>> init_list);
 #endif
@@ -167,7 +167,7 @@ class SparseMatrix {
   // Returns, in min_magnitude and max_magnitude, the minimum and maximum
   // magnitudes of the non-zero coefficients of the calling object.
   void ComputeMinAndMaxMagnitudes(Fractional* min_magnitude,
-                                  Fractional* max_magnitude);
+                                  Fractional* max_magnitude) const;
 
   // Return the matrix dimension.
   RowIndex num_rows() const { return num_rows_; }
@@ -268,6 +268,15 @@ class MatrixView {
   StrictITIVector<ColIndex, SparseColumn const*> columns_;
 };
 
+extern template void SparseMatrix::PopulateFromTranspose<SparseMatrix>(
+    const SparseMatrix& input);
+extern template void SparseMatrix::PopulateFromPermutedMatrix<SparseMatrix>(
+    const SparseMatrix& a, const RowPermutation& row_perm,
+    const ColumnPermutation& inverse_col_perm);
+extern template void SparseMatrix::PopulateFromPermutedMatrix<MatrixView>(
+    const MatrixView& a, const RowPermutation& row_perm,
+    const ColumnPermutation& inverse_col_perm);
+
 // Another matrix representation which is more efficient than a SparseMatrix but
 // doesn't allow matrix modification. It is faster to construct, uses less
 // memory and provides a better cache locality when iterating over the non-zeros
@@ -300,14 +309,15 @@ class CompactSparseMatrix {
   // Adds a dense column to the CompactSparseMatrix (only the non-zero will be
   // actually stored). This work in O(input.size()) and returns the index of the
   // added column.
-  ColIndex AddDenseColumn(const DenseColumn& input);
+  ColIndex AddDenseColumn(const DenseColumn& dense_column);
 
   // Same as AddDenseColumn(), but only adds the non-zero from the given start.
-  ColIndex AddDenseColumnPrefix(const DenseColumn& input, RowIndex start);
+  ColIndex AddDenseColumnPrefix(const DenseColumn& dense_column,
+                                RowIndex start);
 
   // Same as AddDenseColumn(), but uses the given non_zeros pattern of input.
   // If non_zeros is empty, this actually calls AddDenseColumn().
-  ColIndex AddDenseColumnWithNonZeros(const DenseColumn& input,
+  ColIndex AddDenseColumnWithNonZeros(const DenseColumn& dense_column,
                                       const std::vector<RowIndex>& non_zeros);
 
   // Adds a dense column for which we know the non-zero positions and clears it.
@@ -330,7 +340,7 @@ class CompactSparseMatrix {
   RowIndex num_rows() const { return num_rows_; }
   ColIndex num_cols() const { return num_cols_; }
 
-  // Returns wheter or not this matrix contains any non-zero entries.
+  // Returns whether or not this matrix contains any non-zero entries.
   bool IsEmpty() const {
     DCHECK_EQ(coefficients_.size(), rows_.size());
     return coefficients_.empty();
@@ -341,8 +351,8 @@ class CompactSparseMatrix {
   //   const RowIndex row = compact_matrix_.EntryRow(i);
   //   const Fractional coefficient = compact_matrix_.EntryCoefficient(i);
   // }
-  IntegerRange<EntryIndex> Column(ColIndex col) const {
-    return IntegerRange<EntryIndex>(starts_[col], starts_[col + 1]);
+  ::util::IntegerRange<EntryIndex> Column(ColIndex col) const {
+    return ::util::IntegerRange<EntryIndex>(starts_[col], starts_[col + 1]);
   }
   Fractional EntryCoefficient(EntryIndex i) const { return coefficients_[i]; }
   RowIndex EntryRow(EntryIndex i) const { return rows_[i]; }
@@ -409,20 +419,20 @@ class CompactSparseMatrix {
   // Same as ColumnAddMultipleToDenseColumn() but also adds the new non-zeros to
   // the non_zeros vector. A non-zero is "new" if is_non_zero[row] was false,
   // and we update dense_column[row]. This functions also updates is_non_zero.
-  void ColumnAddMultipleToDenseColumnAndUpdateNonZeros(
-      ColIndex col, Fractional multiplier, DenseColumn* dense_column,
-      StrictITIVector<RowIndex, bool>* is_non_zero,
-      std::vector<RowIndex>* non_zeros) const {
+  void ColumnAddMultipleToSparseScatteredColumn(ColIndex col,
+                                                Fractional multiplier,
+                                                ScatteredColumn* column) const {
     if (multiplier == 0.0) return;
-    RETURN_IF_NULL(dense_column);
+    RETURN_IF_NULL(column);
     for (const EntryIndex i : Column(col)) {
       const RowIndex row = EntryRow(i);
-      (*dense_column)[row] += multiplier * EntryCoefficient(i);
-      if (!(*is_non_zero)[row]) {
-        (*is_non_zero)[row] = true;
-        non_zeros->push_back(row);
+      (*column)[row] += multiplier * EntryCoefficient(i);
+      if (!column->is_non_zero[row]) {
+        column->is_non_zero[row] = true;
+        column->non_zeros.push_back(row);
       }
     }
+    column->non_zeros_are_sorted = false;
   }
 
   // Copies the given column of this matrix into the given dense_column.
@@ -579,10 +589,6 @@ class TriangularMatrix : private CompactSparseMatrix {
   // This also computes the last non-zero row position (if not nullptr).
   void TransposeLowerSolve(DenseColumn* rhs, RowIndex* last_non_zero_row) const;
 
-  // This also computes the non-zero row positions (if not nullptr).
-  void UpperSolveWithNonZeros(DenseColumn* rhs,
-                              RowIndexVector* non_zero_rows) const;
-
   // Hyper-sparse version of the triangular solve functions. The passed
   // non_zero_rows should contain the positions of the symbolic non-zeros of the
   // result in the order in which they need to be accessed (or in the reverse
@@ -701,13 +707,18 @@ class TriangularMatrix : private CompactSparseMatrix {
                                      RowIndexVector* lower_column_rows,
                                      RowIndexVector* upper_column_rows);
 
+  // The upper bound is computed using one of the algorithm presented in
+  // "A Survey of Condition Number Estimation for Triangular Matrices"
+  // https:epubs.siam.org/doi/pdf/10.1137/1029112/
+  Fractional ComputeInverseInfinityNormUpperBound() const;
+  Fractional ComputeInverseInfinityNorm() const;
+
  private:
   // Internal versions of some Solve() functions to avoid code duplication.
   template <bool diagonal_of_ones>
   void LowerSolveStartingAtInternal(ColIndex start, DenseColumn* rhs) const;
-  template <bool diagonal_of_ones, bool with_non_zeros>
-  void UpperSolveWithNonZerosInternal(DenseColumn* rhs,
-                                      RowIndexVector* non_zero_rows) const;
+  template <bool diagonal_of_ones>
+  void UpperSolveInternal(DenseColumn* rhs) const;
   template <bool diagonal_of_ones>
   void TransposeLowerSolveInternal(DenseColumn* rhs,
                                    RowIndex* last_non_zero_row) const;

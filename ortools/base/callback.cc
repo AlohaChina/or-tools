@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,7 +16,8 @@
 namespace operations_research {
 
 void CallbackUtils_::FailIsRepeatable(const char* name) {
-  LOG(FATAL) << "A " << name << " made with NewCallback() "
-                                "is not a repeatable callback!";
+  LOG(FATAL) << "A " << name
+             << " made with NewCallback() "
+                "is not a repeatable callback!";
 }
 }  // namespace operations_research

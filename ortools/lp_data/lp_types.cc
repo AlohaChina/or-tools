@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,9 +15,6 @@
 
 namespace operations_research {
 namespace glop {
-
-// static
-const double ScatteredColumnReference::kDenseThresholdForPreciseSum = 0.8;
 
 std::string GetProblemStatusString(ProblemStatus problem_status) {
   switch (problem_status) {
@@ -128,8 +125,6 @@ ConstraintStatus VariableToConstraintStatus(VariableStatus status) {
   // This will never be reached and is here only to guarantee compilation.
   return ConstraintStatus::FREE;
 }
-
-
 
 }  // namespace glop
 }  // namespace operations_research

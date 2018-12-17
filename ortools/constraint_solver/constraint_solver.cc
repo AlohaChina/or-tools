@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -23,22 +23,20 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include "absl/memory/memory.h"
 #include "ortools/base/random.h"
 
 #include "ortools/base/commandlineflags.h"
+#include "ortools/base/file.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
-#include "ortools/base/stringprintf.h"
-#include "ortools/base/string_view.h"
-#include "ortools/base/file.h"
-#include "ortools/base/recordio.h"
-#include "zlib.h"
 #include "ortools/base/map_util.h"
+#include "ortools/base/recordio.h"
 #include "ortools/base/stl_util.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
-#include "ortools/constraint_solver/model.pb.h"
 #include "ortools/util/tuple_set.h"
+#include "zlib.h"
 
 // These flags are used to set the fields in the DefaultSolverParameters proto.
 DEFINE_bool(cp_trace_propagation, false,
@@ -51,7 +49,6 @@ DEFINE_bool(cp_print_model, false,
             "use PrintModelVisitor on model before solving.");
 DEFINE_bool(cp_model_stats, false,
             "use StatisticsModelVisitor on model before solving.");
-DEFINE_string(cp_export_file, "", "Export model to file using CpModel.");
 DEFINE_bool(cp_disable_solve, false,
             "Force failure at the beginning of a search.");
 DEFINE_string(cp_profile_file, "", "Export profiling overview to file.");
@@ -60,16 +57,8 @@ DEFINE_bool(cp_print_local_search_profile, false,
 DEFINE_bool(cp_name_variables, false, "Force all variables to have names.");
 DEFINE_bool(cp_name_cast_variables, false,
             "Name variables casted from expressions");
-DEFINE_bool(cp_use_compact_table, true,
-            "Use compact table constraint when possible.");
 DEFINE_bool(cp_use_small_table, true,
             "Use small compact table constraint when possible.");
-DEFINE_bool(cp_use_sat_table, false,
-            "If true, use a SAT constraint for all table constraints.");
-DEFINE_int32(cp_ac4r_table_threshold, 2048,
-             "Above this size, allowed assignment constraints will use the "
-             "revised AC-4 implementation of the table constraint.");
-DEFINE_bool(cp_use_mdd_table, false, "Use mdd table");
 DEFINE_bool(cp_use_cumulative_edge_finder, true,
             "Use the O(n log n) cumulative edge finding algorithm described "
             "in 'Edge Finding Filtering Algorithm for Discrete  Cumulative "
@@ -132,15 +121,10 @@ ConstraintSolverParameters Solver::DefaultSolverParameters() {
   params.set_print_local_search_profile(FLAGS_cp_print_local_search_profile);
   params.set_print_model(FLAGS_cp_print_model);
   params.set_print_model_stats(FLAGS_cp_model_stats);
-  params.set_export_file(FLAGS_cp_export_file);
   params.set_disable_solve(FLAGS_cp_disable_solve);
   params.set_name_cast_variables(FLAGS_cp_name_cast_variables);
   params.set_print_added_constraints(FLAGS_cp_print_added_constraints);
-  params.set_use_compact_table(FLAGS_cp_use_compact_table);
   params.set_use_small_table(FLAGS_cp_use_small_table);
-  params.set_use_sat_table(FLAGS_cp_use_sat_table);
-  params.set_ac4r_table_threshold(FLAGS_cp_ac4r_table_threshold);
-  params.set_use_mdd_table(FLAGS_cp_use_mdd_table);
   params.set_use_cumulative_edge_finder(FLAGS_cp_use_cumulative_edge_finder);
   params.set_use_cumulative_time_table(FLAGS_cp_use_cumulative_time_table);
   params.set_use_cumulative_time_table_sync(
@@ -526,7 +510,6 @@ class TrailPacker {
   DISALLOW_COPY_AND_ASSIGN(TrailPacker);
 };
 
-
 template <class T>
 class NoCompressionTrailPacker : public TrailPacker<T> {
  public:
@@ -536,9 +519,9 @@ class NoCompressionTrailPacker : public TrailPacker<T> {
   void Pack(const addrval<T>* block, std::string* packed_block) override {
     DCHECK(block != nullptr);
     DCHECK(packed_block != nullptr);
-    string_view block_str;
-    block_str.set(block, this->input_size());
-    block_str.CopyToString(packed_block);
+    absl::string_view block_str(reinterpret_cast<const char*>(block),
+                                this->input_size());
+    packed_block->assign(block_str.data(), block_str.size());
   }
   void Unpack(const std::string& packed_block, addrval<T>* block) override {
     DCHECK(block != nullptr);
@@ -567,9 +550,9 @@ class ZlibTrailPacker : public TrailPacker<T> {
         compress(reinterpret_cast<Bytef*>(tmp_block_.get()), &size,
                  reinterpret_cast<const Bytef*>(block), this->input_size());
     CHECK_EQ(Z_OK, result);
-    string_view block_str;
-    block_str.set(tmp_block_.get(), size);
-    block_str.CopyToString(packed_block);
+    absl::string_view block_str;
+    block_str = absl::string_view(tmp_block_.get(), size);
+    packed_block->assign(block_str.data(), block_str.size());
   }
 
   void Unpack(const std::string& packed_block, addrval<T>* block) override {
@@ -597,8 +580,8 @@ class CompressedTrail {
       : block_size_(block_size),
         blocks_(nullptr),
         free_blocks_(nullptr),
-        data_(new addrval<T>[ block_size ]),
-        buffer_(new addrval<T>[ block_size ]),
+        data_(new addrval<T>[block_size]),
+        buffer_(new addrval<T>[block_size]),
         buffer_used_(false),
         current_(0),
         size_(0) {
@@ -611,7 +594,9 @@ class CompressedTrail {
         packer_.reset(new ZlibTrailPacker<T>(block_size));
         break;
       }
-      default: { LOG(ERROR) << "Should not be here"; }
+      default: {
+        LOG(ERROR) << "Should not be here";
+      }
     }
 
     // We zero all memory used by addrval arrays.
@@ -713,7 +698,7 @@ class CompressedTrail {
 
 // ----- Trail -----
 
-// Object are explicitely copied using the copy ctor instead of
+// Object are explicitly copied using the copy ctor instead of
 // passing and storing a pointer. As objects are small, copying is
 // much faster than allocating (around 35% on a complete solve).
 
@@ -833,7 +818,7 @@ struct Trail {
 
     target = m->rev_memory_index_;
     for (int curr = rev_memory_.size() - 1; curr >= target; --curr) {
-      // Explicitely call unsized delete
+      // Explicitly call unsized delete
       ::operator delete(reinterpret_cast<char*>(rev_memory_[curr]));
       // The previous cast is necessary to deallocate generic memory
       // described by a void* when passed to the RevAlloc procedure
@@ -984,13 +969,13 @@ class Search {
         jmpbuf_filled_(false),
         backtrack_at_the_end_of_the_search_(true) {}
 
-  ~Search() { STLDeleteElements(&marker_stack_); }
+  ~Search() { gtl::STLDeleteElements(&marker_stack_); }
 
   void EnterSearch();
   void RestartSearch();
   void ExitSearch();
-  void BeginNextDecision(DecisionBuilder* const b);
-  void EndNextDecision(DecisionBuilder* const b, Decision* const d);
+  void BeginNextDecision(DecisionBuilder* const db);
+  void EndNextDecision(DecisionBuilder* const db, Decision* const d);
   void ApplyDecision(Decision* const d);
   void AfterDecision(Decision* const d, bool apply);
   void RefuteDecision(Decision* const d);
@@ -1018,7 +1003,7 @@ class Search {
   void set_created_by_solve(bool c) { created_by_solve_ = c; }
   bool created_by_solve() const { return created_by_solve_; }
   Solver::DecisionModification ModifyDecision();
-  void SetBranchSelector(Solver::BranchSelector s);
+  void SetBranchSelector(Solver::BranchSelector bs);
   void LeftMove() {
     search_depth_++;
     left_search_depth_++;
@@ -1043,6 +1028,10 @@ class Search {
       solver_->Fail();
     }
   }
+  void set_search_context(const std::string& search_context) {
+    search_context_ = search_context;
+  }
+  std::string search_context() const { return search_context_; }
   friend class Solver;
 
  private:
@@ -1068,6 +1057,7 @@ class Search {
   int sentinel_pushed_;
   bool jmpbuf_filled_;
   bool backtrack_at_the_end_of_the_search_;
+  std::string search_context_;
 };
 
 // Backtrack is implemented using 3 primitives:
@@ -1345,7 +1335,6 @@ class BalancingDecision : public Decision {
 
 Decision* Solver::MakeFailDecision() { return fail_decision_.get(); }
 
-
 // ------------------ Solver class -----------------
 
 // These magic numbers are there to make sure we pop the correct
@@ -1371,7 +1360,8 @@ void CheckSolverParameters(const ConstraintSolverParameters& parameters) {
 }
 }  // namespace
 
-Solver::Solver(const std::string& name, const ConstraintSolverParameters& parameters)
+Solver::Solver(const std::string& name,
+               const ConstraintSolverParameters& parameters)
     : name_(name),
       parameters_(parameters),
       random_(ACMRandom::DeterministicSeed()),
@@ -1391,9 +1381,9 @@ Solver::Solver(const std::string& name)
 
 void Solver::Init() {
   CheckSolverParameters(parameters_);
-  queue_.reset(new Queue(this));
-  trail_.reset(
-      new Trail(parameters_.trail_block_size(), parameters_.compress_trail()));
+  queue_ = absl::make_unique<Queue>(this);
+  trail_ = absl::make_unique<Trail>(parameters_.trail_block_size(),
+                                    parameters_.compress_trail());
   state_ = OUTSIDE_SEARCH;
   branches_ = 0;
   fails_ = 0;
@@ -1401,14 +1391,14 @@ void Solver::Init() {
   neighbors_ = 0;
   filtered_neighbors_ = 0;
   accepted_neighbors_ = 0;
-  timer_.reset(new ClockTimer);
+  timer_ = absl::make_unique<ClockTimer>();
   searches_.assign(1, new Search(this, 0));
   fail_stamp_ = GG_ULONGLONG(1);
-  balancing_decision_.reset(new BalancingDecision);
+  balancing_decision_ = absl::make_unique<BalancingDecision>();
   fail_intercept_ = nullptr;
   true_constraint_ = nullptr;
   false_constraint_ = nullptr;
-  fail_decision_.reset(new FailDecision());
+  fail_decision_ = absl::make_unique<FailDecision>();
   constraint_index_ = 0;
   additional_constraint_index_ = 0;
   num_int_vars_ = 0;
@@ -1425,7 +1415,6 @@ void Solver::Init() {
   PushSentinel(SOLVER_CTOR_SENTINEL);
   InitCachedIntConstants();  // to be called after the SENTINEL is set.
   InitCachedConstraint();    // Cache the true constraint.
-  InitBuilders();
   timer_->Restart();
   model_cache_.reset(BuildModelCache(this));
   AddPropagationMonitor(reinterpret_cast<PropagationMonitor*>(demon_profiler_));
@@ -1444,10 +1433,9 @@ Solver::~Solver() {
   DCHECK_EQ(finalType, SENTINEL);
   // Not popping initial SENTINEL in Solver destructor.
   DCHECK_EQ(info.int_info, SOLVER_CTOR_SENTINEL);
-  STLDeleteElements(&searches_);
+  gtl::STLDeleteElements(&searches_);
   DeleteDemonProfiler(demon_profiler_);
   DeleteLocalSearchProfiler(local_search_profiler_);
-  DeleteBuilders();
 }
 
 std::string Solver::DebugString() const {
@@ -1472,22 +1460,16 @@ std::string Solver::DebugString() const {
       out += "PROBLEM_INFEASIBLE";
       break;
   }
-  StringAppendF(&out, ", branches = %" GG_LL_FORMAT "d, fails = %" GG_LL_FORMAT
-                      "d, decisions = %" GG_LL_FORMAT
-                      "d, delayed demon runs = %" GG_LL_FORMAT
-                      "d, var demon runs = %" GG_LL_FORMAT
-                      "d, normal demon runs = %" GG_LL_FORMAT
-                      "d, Run time = %" GG_LL_FORMAT "d ms)",
-                branches_, fails_, decisions_, demon_runs_[DELAYED_PRIORITY],
-                demon_runs_[VAR_PRIORITY], demon_runs_[NORMAL_PRIORITY],
-                wall_time());
+  absl::StrAppendFormat(
+      &out,
+      ", branches = %d, fails = %d, decisions = %d, delayed demon runs = %d, "
+      "var demon runs = %d, normal demon runs = %d, Run time = %d ms)",
+      branches_, fails_, decisions_, demon_runs_[DELAYED_PRIORITY],
+      demon_runs_[VAR_PRIORITY], demon_runs_[NORMAL_PRIORITY], wall_time());
   return out;
 }
 
-int64 Solver::MemoryUsage() {
-  return GetProcessMemoryUsage();
-}
-
+int64 Solver::MemoryUsage() { return GetProcessMemoryUsage(); }
 
 int64 Solver::wall_time() const { return timer_->GetInMs(); }
 
@@ -1635,28 +1617,8 @@ void Solver::AddCastConstraint(CastConstraint* const constraint,
 }
 
 void Solver::Accept(ModelVisitor* const visitor) const {
-  std::vector<SearchMonitor*> monitors;
-  Accept(visitor, monitors, nullptr);
-}
-
-void Solver::Accept(ModelVisitor* const visitor,
-                    const std::vector<SearchMonitor*>& monitors) const {
-  Accept(visitor, monitors, nullptr);
-}
-
-void Solver::Accept(ModelVisitor* const visitor,
-                    const std::vector<SearchMonitor*>& monitors,
-                    DecisionBuilder* const db) const {
   visitor->BeginVisitModel(name_);
   ForAll(constraints_list_, &Constraint::Accept, visitor);
-  if (state_ == IN_ROOT_NODE) {
-    TopLevelSearch()->Accept(visitor);
-  } else {
-    ForAll(monitors, &SearchMonitor::Accept, visitor);
-  }
-  if (db != nullptr) {
-    db->Accept(visitor);
-  }
   visitor->EndVisitModel(name_);
 }
 
@@ -1670,19 +1632,6 @@ void Solver::ProcessConstraints() {
   if (parameters_.print_model_stats()) {
     ModelVisitor* const visitor = MakeStatisticsModelVisitor();
     Accept(visitor);
-  }
-  const std::string export_file = parameters_.export_file();
-  if (!export_file.empty()) {
-    File* file;
-    if (!file::Open(export_file, "wb", &file, file::Defaults()).ok()) {
-      LOG(WARNING) << "Cannot open " << export_file;
-    } else {
-      CpModel export_proto = ExportModel();
-      VLOG(1) << export_proto.DebugString();
-      recordio::RecordWriter writer(file);
-      writer.WriteProtocolMessage(export_proto);
-      writer.Close();
-    }
   }
 
   if (parameters_.disable_solve()) {
@@ -2152,7 +2101,7 @@ bool Solver::NextSolution() {
             case SWITCH_BRANCHES: {
               d = RevAlloc(new ReverseDecision(d));
               // We reverse the decision and fall through the normal code.
-              FALLTHROUGH_INTENDED;
+              ABSL_FALLTHROUGH_INTENDED;
             }
             case NO_CHANGE: {
               decisions_++;
@@ -2333,8 +2282,8 @@ class AddConstraintDecisionBuilder : public DecisionBuilder {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("AddConstraintDecisionBuilder(%s)",
-                        constraint_->DebugString().c_str());
+    return absl::StrFormat("AddConstraintDecisionBuilder(%s)",
+                           constraint_->DebugString());
   }
 
  private:
@@ -2412,7 +2361,8 @@ void Solver::RestartCurrentSearch() {
 // ----- Cast Expression -----
 
 IntExpr* Solver::CastExpression(const IntVar* const var) const {
-  const IntegerCastInfo* const cast_info = FindOrNull(cast_information_, var);
+  const IntegerCastInfo* const cast_info =
+      gtl::FindOrNull(cast_information_, var);
   if (cast_info != nullptr) {
     return cast_info->expression;
   }
@@ -2422,21 +2372,20 @@ IntExpr* Solver::CastExpression(const IntVar* const var) const {
 // --- Propagation object names ---
 
 std::string Solver::GetName(const PropagationBaseObject* object) {
-  const std::string* name = FindOrNull(propagation_object_names_, object);
+  const std::string* name = gtl::FindOrNull(propagation_object_names_, object);
   if (name != nullptr) {
     return *name;
   }
   const IntegerCastInfo* const cast_info =
-      FindOrNull(cast_information_, object);
+      gtl::FindOrNull(cast_information_, object);
   if (cast_info != nullptr && cast_info->expression != nullptr) {
     if (cast_info->expression->HasName()) {
-      return StringPrintf("Var<%s>", cast_info->expression->name().c_str());
+      return absl::StrFormat("Var<%s>", cast_info->expression->name());
     } else if (parameters_.name_cast_variables()) {
-      return StringPrintf("Var<%s>",
-                          cast_info->expression->DebugString().c_str());
+      return absl::StrFormat("Var<%s>", cast_info->expression->DebugString());
     } else {
       const std::string new_name =
-          StringPrintf("CastVar<%d>", anonymous_variable_index_++);
+          absl::StrFormat("CastVar<%d>", anonymous_variable_index_++);
       propagation_object_names_[object] = new_name;
       return new_name;
     }
@@ -2444,14 +2393,15 @@ std::string Solver::GetName(const PropagationBaseObject* object) {
   const std::string base_name = object->BaseName();
   if (parameters_.name_all_variables() && !base_name.empty()) {
     const std::string new_name =
-        StringPrintf("%s_%d", base_name.c_str(), anonymous_variable_index_++);
+        absl::StrFormat("%s_%d", base_name, anonymous_variable_index_++);
     propagation_object_names_[object] = new_name;
     return new_name;
   }
   return empty_name_;
 }
 
-void Solver::SetName(const PropagationBaseObject* object, const std::string& name) {
+void Solver::SetName(const PropagationBaseObject* object,
+                     const std::string& name) {
   if (parameters_.store_names() &&
       GetName(object).compare(name) != 0) {  // in particular if name.empty()
     propagation_object_names_[object] = name;
@@ -2459,8 +2409,8 @@ void Solver::SetName(const PropagationBaseObject* object, const std::string& nam
 }
 
 bool Solver::HasName(const PropagationBaseObject* const object) const {
-  return ContainsKey(propagation_object_names_,
-                     const_cast<PropagationBaseObject*>(object)) ||
+  return gtl::ContainsKey(propagation_object_names_,
+                          const_cast<PropagationBaseObject*>(object)) ||
          (!object->BaseName().empty() && parameters_.name_all_variables());
 }
 
@@ -2732,15 +2682,16 @@ void ModelVisitor::VisitIntegerVariable(const IntVar* const variable,
 }
 
 void ModelVisitor::VisitIntegerVariable(const IntVar* const variable,
-                                        const std::string& operation, int64 value,
-                                        IntVar* const delegate) {
+                                        const std::string& operation,
+                                        int64 value, IntVar* const delegate) {
   if (delegate != nullptr) {
     delegate->Accept(this);
   }
 }
 
 void ModelVisitor::VisitIntervalVariable(const IntervalVar* const variable,
-                                         const std::string& operation, int64 value,
+                                         const std::string& operation,
+                                         int64 value,
                                          IntervalVar* const delegate) {
   if (delegate != nullptr) {
     delegate->Accept(this);
@@ -2753,7 +2704,8 @@ void ModelVisitor::VisitSequenceVariable(const SequenceVar* const variable) {
   }
 }
 
-void ModelVisitor::VisitIntegerArgument(const std::string& arg_name, int64 value) {}
+void ModelVisitor::VisitIntegerArgument(const std::string& arg_name,
+                                        int64 value) {}
 
 void ModelVisitor::VisitIntegerArrayArgument(const std::string& arg_name,
                                              const std::vector<int64>& values) {
@@ -2868,7 +2820,8 @@ void SearchMonitor::Install() {
 }
 
 // ---------- Propagation Monitor -----------
-PropagationMonitor::PropagationMonitor(Solver* const s) : SearchMonitor(s) {}
+PropagationMonitor::PropagationMonitor(Solver* const solver)
+    : SearchMonitor(solver) {}
 
 PropagationMonitor::~PropagationMonitor() {}
 
@@ -2879,7 +2832,8 @@ void PropagationMonitor::Install() {
 }
 
 // ---------- Local Search Monitor -----------
-LocalSearchMonitor::LocalSearchMonitor(Solver* const s) : SearchMonitor(s) {}
+LocalSearchMonitor::LocalSearchMonitor(Solver* const solver)
+    : SearchMonitor(solver) {}
 
 LocalSearchMonitor::~LocalSearchMonitor() {}
 
@@ -3163,7 +3117,9 @@ class LocalSearchMonitorMaster : public LocalSearchMonitor {
   // events.
   void Install() override { SearchMonitor::Install(); }
 
-  std::string DebugString() const override { return "LocalSearchMonitorMaster"; }
+  std::string DebugString() const override {
+    return "LocalSearchMonitorMaster";
+  }
 
  private:
   std::vector<LocalSearchMonitor*> monitors_;
@@ -3180,6 +3136,19 @@ void Solver::AddLocalSearchMonitor(LocalSearchMonitor* const monitor) {
 
 LocalSearchMonitor* Solver::GetLocalSearchMonitor() const {
   return local_search_monitor_.get();
+}
+
+void Solver::SetSearchContext(Search* search,
+                              const std::string& search_context) {
+  search->set_search_context(search_context);
+}
+
+std::string Solver::SearchContext() const {
+  return ActiveSearch()->search_context();
+}
+
+std::string Solver::SearchContext(const Search* search) const {
+  return search->search_context();
 }
 
 // ----------------- Constraint class -------------------
@@ -3201,7 +3170,7 @@ void Constraint::Accept(ModelVisitor* const visitor) const {
 }
 
 bool Constraint::IsCastConstraint() const {
-  return ContainsKey(solver()->cast_constraints_, this);
+  return gtl::ContainsKey(solver()->cast_constraints_, this);
 }
 
 IntVar* Constraint::Var() { return nullptr; }

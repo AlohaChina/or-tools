@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 
 // A reader for files in the MPS format.
 // see http://lpsolve.sourceforge.net/5.5/mps-format.htm
@@ -26,18 +25,21 @@
 #define OR_TOOLS_LP_DATA_MPS_READER_H_
 
 #include <algorithm>  // for max
-#include <unordered_map>
-#include <string>  // for std::string
-#include <vector>  // for vector
+#include <string>     // for std::string
+#include <vector>     // for vector
+#include "absl/container/flat_hash_map.h"
 
-#include "ortools/base/macros.h"  // for DISALLOW_COPY_AND_ASSIGN, NULL
-#include "ortools/base/stringprintf.h"
+#include "ortools/base/commandlineflags.h"
+#include "ortools/base/hash.h"
 #include "ortools/base/int_type.h"
 #include "ortools/base/int_type_indexed_vector.h"
+#include "ortools/base/macros.h"    // for DISALLOW_COPY_AND_ASSIGN, NULL
 #include "ortools/base/map_util.h"  // for FindOrNull, FindWithDefault
-#include "ortools/base/hash.h"
 #include "ortools/lp_data/lp_data.h"
 #include "ortools/lp_data/lp_types.h"
+
+ABSL_DECLARE_FLAG(bool, mps_free_form);
+ABSL_DECLARE_FLAG(bool, mps_stop_after_first_error);
 
 namespace operations_research {
 namespace glop {
@@ -65,7 +67,7 @@ class MPSReader {
   bool LoadFile(const std::string& file_name, LinearProgram* data);
 
   // Loads instance from a file, specifying if free or fixed format is used.
-  bool LoadFileWithMode(const std::string& source, bool free_form,
+  bool LoadFileWithMode(const std::string& file_name, bool free_form,
                         LinearProgram* data);
 
   // Same as load file, but try free form mps on fail.
@@ -101,7 +103,7 @@ class MPSReader {
   std::string GetFirstWord() const;
 
   // Returns true if the line contains a comment (starting with '*') or
-  // if it it is a blank line.
+  // if it is a blank line.
   bool IsCommentOrBlank() const;
 
   // Helper function that returns fields_[offset + index].
@@ -117,7 +119,7 @@ class MPSReader {
   int GetFieldOffset() const { return free_form_ ? fields_.size() & 1 : 0; }
 
   // Line processor.
-  void ProcessLine(char* line);
+  void ProcessLine(const std::string& line);
 
   // Process section NAME in the MPS file.
   void ProcessNameSection();
@@ -158,7 +160,8 @@ class MPSReader {
   } BoundTypeId;
 
   // Stores a bound value of a given type, for a given column name.
-  void StoreBound(const std::string& bound_type_mnemonic, const std::string& column_name,
+  void StoreBound(const std::string& bound_type_mnemonic,
+                  const std::string& column_name,
                   const std::string& bound_value);
 
   // Stores a coefficient value for a column number and a row name.
@@ -166,10 +169,11 @@ class MPSReader {
                         const std::string& row_value);
 
   // Stores a right-hand-side value for a row name.
-  void StoreRightHandSide(const std::string& row_name, const std::string& row_value);
+  void StoreRightHandSide(const std::string& row_name,
+                          const std::string& row_value);
 
   // Stores a range constraint of value row_value for a row name.
-  void StoreRange(const std::string& row_name, const std::string& row_value);
+  void StoreRange(const std::string& row_name, const std::string& range_value);
 
   // Boolean set to true if the reader expects a free-form MPS file.
   bool free_form_;
@@ -207,16 +211,16 @@ class MPSReader {
   SectionId section_;
 
   // Maps section mnemonic --> section id.
-  std::unordered_map<std::string, SectionId> section_name_to_id_map_;
+  absl::flat_hash_map<std::string, SectionId> section_name_to_id_map_;
 
   // Maps row type mnemonic --> row type id.
-  std::unordered_map<std::string, MPSRowType> row_name_to_id_map_;
+  absl::flat_hash_map<std::string, MPSRowType> row_name_to_id_map_;
 
   // Maps bound type mnemonic --> bound type id.
-  std::unordered_map<std::string, BoundTypeId> bound_name_to_id_map_;
+  absl::flat_hash_map<std::string, BoundTypeId> bound_name_to_id_map_;
 
   // Set of bound type mnemonics that constrain variables to be integer.
-  std::unordered_set<std::string> integer_type_names_set_;
+  absl::flat_hash_set<std::string> integer_type_names_set_;
 
   // The current line number in the file being parsed.
   int64 line_num_;

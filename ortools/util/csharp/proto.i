@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -47,13 +47,13 @@
 //        type
 // @param param_name the parameter name
 %define PROTO_INPUT(CppProtoType, CSharpProtoType, param_name)
-%typemap(ctype)  PROTO_TYPE* INPUT, PROTO_TYPE& INPUT "int proto_size, uint8*"
-%typemap(imtype) PROTO_TYPE* INPUT, PROTO_TYPE& INPUT "int proto_size, byte[]"
+%typemap(ctype)  PROTO_TYPE* INPUT, PROTO_TYPE& INPUT "int " #param_name "_size, uint8*"
+%typemap(imtype) PROTO_TYPE* INPUT, PROTO_TYPE& INPUT "int " #param_name "_size, byte[]"
 %typemap(cstype) PROTO_TYPE* INPUT, PROTO_TYPE& INPUT "CSharpProtoType"
 %typemap(csin)   PROTO_TYPE* INPUT, PROTO_TYPE& INPUT "$csinput.CalculateSize(), ProtoHelper.ProtoToByteArray($csinput)"
 %typemap(in)     PROTO_TYPE* INPUT, PROTO_TYPE& INPUT {
   $1 = new CppProtoType;
-  bool parsed_ok = $1->ParseFromArray($input, proto_size);
+  bool parsed_ok = $1->ParseFromArray($input, param_name ## _size);
   if (!parsed_ok) {
     SWIG_CSharpSetPendingException(
         SWIG_CSharpSystemException,
@@ -77,10 +77,7 @@
   byte[] tmp = new byte[4];
   System.IntPtr data = $imcall;
   System.Runtime.InteropServices.Marshal.Copy(data, tmp, 0, 4);
-  int size = Convert.ToInt32(tmp[0]) +
-      Convert.ToInt32(tmp[1]) * 0xFF +
-      Convert.ToInt32(tmp[2]) * 0xFFFF +
-      Convert.ToInt32(tmp[3]) * 0xFFFFFF;
+  int size = System.BitConverter.ToInt32(tmp, 0);
   byte[] buf = new byte[size + 4];
   System.Runtime.InteropServices.Marshal.Copy(data, buf, 0, size + 4);
   // TODO(user): delete the C++ buffer.
@@ -90,8 +87,8 @@
     CSharpProtoType proto = new CSharpProtoType();
     proto.MergeFrom(input);
     return proto;
-  } catch (Google.Protobuf.InvalidProtocolBufferException e) {
-    throw new SystemException(
+  } catch (Google.Protobuf.InvalidProtocolBufferException /*e*/) {
+    throw new System.Exception(
         "Unable to parse CSharpProtoType protocol message.");
   }
 }
@@ -100,8 +97,8 @@
   $result = new uint8[size + 4];
   $1.SerializeWithCachedSizesToArray($result + 4);
   $result[0] = size & 0xFF;
-  $result[1] = (size << 8) & 0xFF;
-  $result[2] = (size << 16) & 0xFF;
-  $result[3] = (size << 24) & 0xFF;
+  $result[1] = (size >> 8) & 0xFF;
+  $result[2] = (size >> 16) & 0xFF;
+  $result[3] = (size >> 24) & 0xFF;
 }
 %enddef // end PROTO2_RETURN

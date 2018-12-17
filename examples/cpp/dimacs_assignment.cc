@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,22 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <unordered_map>
 #include <string>
 #include <vector>
+#include "absl/container/flat_hash_map.h"
 
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
-#include "ortools/base/timer.h"
-#include "ortools/algorithms/hungarian.h"
+#include "absl/strings/str_format.h"
 #include "examples/cpp/parse_dimacs_assignment.h"
 #include "examples/cpp/print_dimacs_assignment.h"
+#include "ortools/algorithms/hungarian.h"
+#include "ortools/base/commandlineflags.h"
+#include "ortools/base/logging.h"
+#include "ortools/base/timer.h"
 #include "ortools/graph/ebert_graph.h"
 #include "ortools/graph/linear_assignment.h"
 
@@ -91,8 +89,8 @@ CostValue BuildAndSolveHungarianInstance(
       hungarian_cost[tail][head] = cost;
     }
   }
-  std::unordered_map<int, int> result;
-  std::unordered_map<int, int> wish_this_could_be_null;
+  absl::flat_hash_map<int, int> result;
+  absl::flat_hash_map<int, int> wish_this_could_be_null;
   WallTimer timer;
   VLOG(1) << "Beginning Hungarian method.";
   timer.Start();
@@ -169,24 +167,23 @@ int SolveDimacsAssignment(int argc, char* argv[]) {
   }
   delete assignment;
   delete graph;
-  return 0;
+  return EXIT_SUCCESS;
 }
 }  // namespace operations_research
 
 static const char* const kUsageTemplate = "usage: %s <filename>";
 
-using ::operations_research::ForwardStarStaticGraph;
 using ::operations_research::ForwardStarGraph;
+using ::operations_research::ForwardStarStaticGraph;
 using ::operations_research::SolveDimacsAssignment;
 using ::operations_research::StarGraph;
-using ::operations_research::StringPrintf;
 
 int main(int argc, char* argv[]) {
   std::string usage;
   if (argc < 1) {
-    usage = StringPrintf(kUsageTemplate, "solve_dimacs_assignment");
+    usage = absl::StrFormat(kUsageTemplate, "solve_dimacs_assignment");
   } else {
-    usage = StringPrintf(kUsageTemplate, argv[0]);
+    usage = absl::StrFormat(kUsageTemplate, argv[0]);
   }
   gflags::SetUsageMessage(usage);
   gflags::ParseCommandLineFlags(&argc, &argv, true);

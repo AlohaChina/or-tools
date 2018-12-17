@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,14 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 // Vector with map from element to index in the vector.
 
 #ifndef OR_TOOLS_UTIL_VECTOR_MAP_H_
 #define OR_TOOLS_UTIL_VECTOR_MAP_H_
 
-#include <unordered_map>
 #include <vector>
+#include "absl/container/flat_hash_map.h"
 #include "ortools/base/map_util.h"
 
 namespace operations_research {
@@ -52,17 +51,21 @@ class VectorMap {
   }
 
   // Will return the index of the element if present, or die otherwise.
-  int IndexOrDie(const T& element) const { return FindOrDie(map_, element); }
+  int IndexOrDie(const T& element) const {
+    return gtl::FindOrDie(map_, element);
+  }
 
   // Returns -1 if the element is not in the vector, or its unique
   // index if it is.
   int Index(const T& element) const {
-    return FindWithDefault(map_, element, -1);
+    return gtl::FindWithDefault(map_, element, -1);
   }
   // TODO(user): explore a int-type version.
 
-  // Returns wether the element has already been added to the vector-map.
-  bool Contains(const T& element) const { return ContainsKey(map_, element); }
+  // Returns whether the element has already been added to the vector-map.
+  bool Contains(const T& element) const {
+    return gtl::ContainsKey(map_, element);
+  }
 
   // Returns the element at position index.
   const T& Element(int index) const {
@@ -106,7 +109,7 @@ class VectorMap {
 
  private:
   std::vector<T> list_;
-  std::unordered_map<T, int> map_;
+  absl::flat_hash_map<T, int> map_;
 };
 
 }  // namespace operations_research

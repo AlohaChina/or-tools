@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -72,8 +72,8 @@ class DualEdgeNorms {
   // - unit_row_left_inverse is the left inverse of the unit row with index
   //   given by the leaving_row. This is also the leaving dual edge.
   void UpdateBeforeBasisPivot(ColIndex entering_col, RowIndex leaving_row,
-                              ScatteredColumnReference direction,
-                              ScatteredColumnReference unit_row_left_inverse);
+                              const ScatteredColumn& direction,
+                              const ScatteredRow& unit_row_left_inverse);
 
   // Sets the algorithm parameters.
   void SetParameters(const GlopParameters& parameters) {
@@ -91,7 +91,7 @@ class DualEdgeNorms {
 
   // Computes the vector tau needed to update the norms using a right solve:
   //     B.tau = (u_i)^T, u_i.B = e_i for i = leaving_row.
-  DenseColumn* ComputeTau(ScatteredColumnReference unit_row_left_inverse);
+  const DenseColumn& ComputeTau(const ScatteredColumn& unit_row_left_inverse);
 
   // Statistics.
   struct Stats : public StatsGroup {

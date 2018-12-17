@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -20,10 +20,10 @@
 #include <string>
 #include <vector>
 
-#include "ortools/base/integral_types.h"
-#include "ortools/base/logging.h"
 #include "ortools/base/int_type.h"
 #include "ortools/base/int_type_indexed_vector.h"
+#include "ortools/base/integral_types.h"
+#include "ortools/base/logging.h"
 #include "ortools/glop/lp_solver.h"
 #include "ortools/glop/parameters.pb.h"
 #include "ortools/lp_data/lp_types.h"
@@ -36,8 +36,8 @@ namespace sat {
 
 using glop::ColIndex;
 using glop::Fractional;
-using glop::RowIndex;
 using glop::kInfinity;
+using glop::RowIndex;
 
 using operations_research::MPConstraintProto;
 using operations_research::MPModelProto;
@@ -98,10 +98,10 @@ bool ConvertMPModelProtoToCpModelProto(const MPModelProto& mp_model,
   }
 
   LOG_IF(WARNING, num_truncated_bounds > 0)
-      << num_truncated_bounds << " bounds where truncated to "
+      << num_truncated_bounds << " bounds were truncated to "
       << kMaxVariableBound << ".";
   LOG_IF(WARNING, num_small_domains > 0)
-      << num_small_domains << " continuous variable domain with less than "
+      << num_small_domains << " continuous variable domain with fewer than "
       << kSmallDomainSize << " values.";
 
   // Variables needed to scale the double coefficients into int64.
@@ -115,8 +115,17 @@ bool ConvertMPModelProtoToCpModelProto(const MPModelProto& mp_model,
   std::vector<double> lower_bounds;
   std::vector<double> upper_bounds;
 
+  // TODO(user): we could use up to kint64max here, but our code is not as
+  // defensive as it should be regarding integer overflow. So we use the
+  // precision of a double.
+  const int64 kScalingTarget = 1LL << 53;
+
   // Add the constraints. We scale each of them individually.
   for (const MPConstraintProto& mp_constraint : mp_model.constraint()) {
+    if (mp_constraint.lower_bound() == -kInfinity &&
+        mp_constraint.upper_bound() == kInfinity) {
+      continue;
+    }
     auto* constraint = cp_model->add_constraints();
     constraint->set_name(mp_constraint.name());
     auto* arg = constraint->mutable_linear();
@@ -133,11 +142,8 @@ bool ConvertMPModelProtoToCpModelProto(const MPModelProto& mp_model,
       lower_bounds.push_back(var_proto.domain(0));
       upper_bounds.push_back(var_proto.domain(var_proto.domain_size() - 1));
     }
-
-    // TODO(user): we could use kint64max directly here if our constraint
-    // propagation code was a bit more careful about integer overflow.
     GetBestScalingOfDoublesToInt64(coefficients, lower_bounds, upper_bounds,
-                                   kint64max / 2, &scaling_factor,
+                                   kScalingTarget, &scaling_factor,
                                    &relative_coeff_error, &scaled_sum_error);
     const int64 gcd = ComputeGcdOfRoundedDoubles(coefficients, scaling_factor);
     max_relative_coeff_error =
@@ -187,9 +193,7 @@ bool ConvertMPModelProtoToCpModelProto(const MPModelProto& mp_model,
           << max_scaled_sum_error;
   VLOG(1) << "Maximum constraint scaling factor: " << max_scaling_factor;
 
-  // Add the objective. We use kint64max / 2 because the objective_var will
-  // also be added to the objective constraint.
-  const int64 kMaxObjective = kint64max / 2;
+  // Add the objective.
   coefficients.clear();
   lower_bounds.clear();
   upper_bounds.clear();
@@ -203,7 +207,7 @@ bool ConvertMPModelProtoToCpModelProto(const MPModelProto& mp_model,
   }
   if (!coefficients.empty() || mp_model.objective_offset() != 0.0) {
     GetBestScalingOfDoublesToInt64(coefficients, lower_bounds, upper_bounds,
-                                   kMaxObjective, &scaling_factor,
+                                   kScalingTarget, &scaling_factor,
                                    &relative_coeff_error, &scaled_sum_error);
     const int64 gcd = ComputeGcdOfRoundedDoubles(coefficients, scaling_factor);
     max_relative_coeff_error =
@@ -526,7 +530,8 @@ bool SolveLpAndUseIntegerVariableToStartLNS(const glop::LinearProgram& lp,
   glop::LPSolver solver;
   const glop::ProblemStatus& status = solver.Solve(lp);
   if (status != glop::ProblemStatus::OPTIMAL &&
-      status != glop::ProblemStatus::PRIMAL_FEASIBLE) return false;
+      status != glop::ProblemStatus::PRIMAL_FEASIBLE)
+    return false;
   int num_variable_fixed = 0;
   for (ColIndex col(0); col < lp.num_variables(); ++col) {
     const Fractional tolerance = 1e-5;

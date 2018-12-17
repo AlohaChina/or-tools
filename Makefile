@@ -1,11 +1,18 @@
 # Top level declarations
-help:
-	@echo Please define target:
-	@echo "  - C++: cc test_cc clean_cc"
-	@echo "  - Python: python test_python clean_python"
-	@echo "  - Java: java test_java clean_java"
-	@echo "  - .NET: csharp test_csharp clean_csharp "
-	@echo "  - all: all test clean"
+.PHONY: help
+help: help_all
+
+.PHONY: all
+all: build_all
+
+.PHONY: test
+test: test_all
+
+.PHONY: clean
+clean: clean_all
+
+.PHONY: detect
+detect: detect_all
 
 # OR_ROOT is the minimal prefix to define the root of or-tools, if we
 # are compiling in the or-tools root, it is empty. Otherwise, it is
@@ -27,10 +34,14 @@ else
   endif
 endif
 
-.PHONY : python cc java csharp sat third_party_check
-all: third_party_check cc java python csharp
-	@echo Or-tools have been built for $(BUILT_LANGUAGES)
-clean: clean_cc clean_java clean_python clean_csharp clean_compat
+# Delete all implicit rules to speed up makefile
+.SUFFIXES:
+# Remove some rules from gmake that .SUFFIXES does not remove.
+SUFFIXES =
+
+# Keep all intermediate files
+# ToDo: try to remove it later
+.SECONDARY:
 
 # Read version.
 include $(OR_ROOT)Version.txt
@@ -49,24 +60,78 @@ include $(OR_ROOT)makefiles/Makefile.$(SYSTEM).mk
 # Rules to fetch and build third party dependencies.
 include $(OR_ROOT)makefiles/Makefile.third_party.$(SYSTEM).mk
 
+# Check SOURCE argument
+SOURCE_SUFFIX = $(suffix $(SOURCE))
+# will contain “/any/path/foo.cc” on unix and “\\any\\path\\foo.cc” on windows
+SOURCE_PATH = $(subst /,$S,$(SOURCE))
+SOURCE_NAME= $(basename $(notdir $(SOURCE)))
+ifeq ($(SOURCE),) # Those rules will be used if SOURCE is empty
+.PHONY: build run
+build run:
+	$(error no source file provided, the "$@" target must be used like so: \
+ make $@ SOURCE=relative/path/to/filename.extension)
+else
+ifeq (,$(wildcard $(SOURCE)))
+$(error File "$(SOURCE)" does not exist !)
+endif
+endif
+
 # Include .mk files.
 include $(OR_ROOT)makefiles/Makefile.cpp.mk
 include $(OR_ROOT)makefiles/Makefile.python.mk
 include $(OR_ROOT)makefiles/Makefile.java.mk
-include $(OR_ROOT)makefiles/Makefile.csharp.mk
+include $(OR_ROOT)makefiles/Makefile.dotnet.mk
 include $(OR_ROOT)makefiles/Makefile.archive.mk
-include $(OR_ROOT)makefiles/Makefile.install.mk
-
-# Include test
-include $(OR_ROOT)makefiles/Makefile.test.mk
 
 # Finally include user makefile if it exists
 -include $(OR_ROOT)Makefile.user
 
-#check if "make third_party" have been run or not
-third_party_check:
-ifeq ($(wildcard dependencies/install/include/gflags/gflags.h),)
-	@echo "One of the third party files was not found! did you run 'make third_party'?" && exit 1
+.PHONY: help_usage
+help_usage:
+	@echo Use one of the following targets:
+	@echo help, help_all:	Print this help.
+	@echo all:	Build OR-Tools for all available languages \(need a call to \"make third_party\" first\).
+	@echo test, test_all:	Test OR-Tools for all available languages.
+	@echo clean, clean_all:	Clean output from previous build for all available languages \(won\'t clean third party\).
+	@echo detect, detect_all:	Show variables used to build OR-Tools for all available languages.
+ifeq ($(SYSTEM),win)
+	@echo off & echo(
+else
+	@echo
+endif
+
+.PHONY: help_all
+help_all: help_usage help_third_party help_cc help_python help_java help_dotnet help_archive
+
+.PHONY: build_all
+build_all: cc python java dotnet
+	@echo Or-tools have been built for $(BUILT_LANGUAGES)
+
+.PHONY: test_all
+test_all: test_cc test_python test_java test_dotnet
+	@echo Or-tools have been built and tested for $(BUILT_LANGUAGES)
+
+.PHONY: clean_all
+clean_all: clean_cc clean_python clean_java clean_dotnet clean_compat clean_archive
+	-$(DELREC) $(BIN_DIR)
+	-$(DELREC) $(LIB_DIR)
+	-$(DELREC) $(OBJ_DIR)
+	-$(DELREC) $(GEN_PATH)
+	@echo Or-tools have been cleaned for $(BUILT_LANGUAGES)
+
+.PHONY: detect_all
+detect_all: detect_port detect_third_party detect_cc detect_python detect_java detect_dotnet detect_archive
+	@echo SOURCE = $(SOURCE)
+	@echo SOURCE_PATH = $(SOURCE_PATH)
+	@echo SOURCE_NAME = $(SOURCE_NAME)
+	@echo SOURCE_SUFFIX = $(SOURCE_SUFFIX)
+ifeq ($(SYSTEM),win)
+	@echo off & echo(
+else
+	@echo
 endif
 
 print-%  : ; @echo $* = $($*)
+
+.PHONY: FORCE
+FORCE:

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,7 +15,7 @@
 
 #include <utility>
 
-#include "ortools/base/stringprintf.h"
+#include "absl/strings/str_format.h"
 #include "ortools/base/thorough_hash.h"
 #include "ortools/util/saturated_arithmetic.h"
 
@@ -99,9 +99,10 @@ bool ComputeBooleanLinearExpressionCanonicalForm(
   return true;
 }
 
-bool ApplyLiteralMapping(const ITIVector<LiteralIndex, LiteralIndex>& mapping,
-                         std::vector<LiteralWithCoeff>* cst,
-                         Coefficient* bound_shift, Coefficient* max_value) {
+bool ApplyLiteralMapping(
+    const gtl::ITIVector<LiteralIndex, LiteralIndex>& mapping,
+    std::vector<LiteralWithCoeff>* cst, Coefficient* bound_shift,
+    Coefficient* max_value) {
   int index = 0;
   Coefficient shift_due_to_fixed_variables(0);
   for (const LiteralWithCoeff& entry : *cst) {
@@ -276,10 +277,10 @@ std::string MutableUpperBoundedLinearConstraint::DebugString() {
   std::string result;
   for (BooleanVariable var : PossibleNonZeros()) {
     if (!result.empty()) result += " + ";
-    result += StringPrintf("%lld[%s]", GetCoefficient(var).value(),
-                           GetLiteral(var).DebugString().c_str());
+    result += absl::StrFormat("%d[%s]", GetCoefficient(var).value(),
+                              GetLiteral(var).DebugString());
   }
-  result += StringPrintf(" <= %lld", rhs_.value());
+  result += absl::StrFormat(" <= %d", rhs_.value());
   return result;
 }
 
@@ -423,7 +424,7 @@ UpperBoundedLinearConstraint::UpperBoundedLinearConstraint(
   starts_.push_back(literals_.size());
 
   hash_ = ThoroughHash(reinterpret_cast<const char*>(cst.data()),
-                          cst.size() * sizeof(LiteralWithCoeff));
+                       cst.size() * sizeof(LiteralWithCoeff));
 }
 
 void UpperBoundedLinearConstraint::AddToConflict(
@@ -724,7 +725,7 @@ void UpperBoundedLinearConstraint::ResolvePBConflict(
 
   // When we add the two constraints together, the slack of the result for the
   // trail < limit_trail_index - 1 must be negative. We know that its value is
-  // <= slack1 + slack2 - std::min(coeffs), so we have nothing to do if this bound is
+  // <= slack1 + slack2 - min(coeffs), so we have nothing to do if this bound is
   // already negative.
   const Coefficient conflict_var_coeff = conflict->GetCoefficient(var);
   const Coefficient min_coeffs = std::min(var_coeff, conflict_var_coeff);
@@ -743,7 +744,7 @@ void UpperBoundedLinearConstraint::ResolvePBConflict(
   // slack bound:
   //
   //   (slack - diff) + (conflict_slack - conflict_diff)
-  //      - std::min(var_coeff - diff, conflict_var_coeff - conflict_diff).
+  //      - min(var_coeff - diff, conflict_var_coeff - conflict_diff).
   //
   // For all diff in [0, slack)
   // For all conflict_diff in [0, conflict_slack)
@@ -947,7 +948,7 @@ void PbConstraints::Untrail(const Trail& trail, int trail_index) {
     for (ConstraintIndexWithCoeff& update : to_update_[literal.Index()]) {
       thresholds_[update.index] += update.coefficient;
 
-      // Only the constraints which where inspected during Propagate() need
+      // Only the constraints which were inspected during Propagate() need
       // inspection during Untrail().
       if (update.need_untrail_inspection) {
         update.need_untrail_inspection = false;
@@ -961,12 +962,12 @@ void PbConstraints::Untrail(const Trail& trail, int trail_index) {
   }
 }
 
-gtl::Span<Literal> PbConstraints::Reason(const Trail& trail,
+absl::Span<const Literal> PbConstraints::Reason(const Trail& trail,
                                                 int trail_index) const {
   SCOPED_TIME_STAT(&stats_);
   const PbConstraintsEnqueueHelper::ReasonInfo& reason_info =
       enqueue_helper_.reasons[trail_index];
-  std::vector<Literal>* reason = trail.GetVectorToStoreReason(trail_index);
+  std::vector<Literal>* reason = trail.GetEmptyVectorToStoreReason(trail_index);
   reason_info.pb_constraint->FillReason(trail, reason_info.source_trail_index,
                                         trail[trail_index].Variable(), reason);
   return *reason;
@@ -1085,7 +1086,7 @@ void PbConstraints::UpdateActivityIncrement() {
 }
 
 void PbConstraints::DeleteConstraintMarkedForDeletion() {
-  ITIVector<ConstraintIndex, ConstraintIndex> index_mapping(
+  gtl::ITIVector<ConstraintIndex, ConstraintIndex> index_mapping(
       constraints_.size(), ConstraintIndex(-1));
   ConstraintIndex new_index(0);
   for (ConstraintIndex i(0); i < constraints_.size(); ++i) {

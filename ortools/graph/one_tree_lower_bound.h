@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -32,18 +32,18 @@
 // 1) let T be the set of 1-trees on the nodes;
 // 2) let U be the set of tours on the nodes; U is a subset of T (tours are
 //    1-trees with all degrees equal to 2), therefore:
-//      std::min(t in T) Cost(t) <= std::min(t in U) Cost(t)
+//      min(t in T) Cost(t) <= min(t in U) Cost(t)
 //    and
-//      std::min(t in T) WeighedCost(t) <= std::min(t in U) WeighedCost(t)
+//      min(t in T) WeighedCost(t) <= min(t in U) WeighedCost(t)
 // 3) weighed_cost(i,j) = cost(i,j) + weight[i] + weight[j], therefore:
 //      for all t in T, WeighedCost(t) = Cost(t) + Sum(weight[i] * degree[i])
 //    and
 //      for all i in U, WeighedCost(t) = Cost(t) + Sum(weight[i] * 2)
-// 4) let t* in U s.t. WeighedCost(t*) = std::min(t in U) WeighedCost(t), therefore:
-//      std::min(t in T)  (Cost(t) + Sum(weight[i] * degree[i]))
+// 4) let t* in U s.t. WeighedCost(t*) = min(t in U) WeighedCost(t), therefore:
+//      min(t in T)  (Cost(t) + Sum(weight[i] * degree[i]))
 //      <= Cost(t*) + Sum(weight[i] * 2)
 //    and
-//      std::min(t in T)  (Cost(t) + Sum(weight[i] * (degree[i] - 2))) <= Cost(t*)
+//      min(t in T)  (Cost(t) + Sum(weight[i] * (degree[i] - 2))) <= Cost(t*)
 //    and
 //      cost(minimum 1-tree) + Sum(weight[i] * (degree[i] - 2)) <= Cost(t*)
 //    and
@@ -89,7 +89,7 @@
 // "Validation of subgradient optimization", Mathematical Programming 6:62-88.
 // It derives from the original Held-Karp formulation:
 //   step(m) = lambda(m) * (wlb - w(m)) / Sum((degree[i] - 2)^2),
-// where wlb is a lower bound to std::max(w(m)) and lambda(m) in [0, 2].
+// where wlb is a lower bound to max(w(m)) and lambda(m) in [0, 2].
 // Help-Karp prove that
 // if w(m') > w(m) and 0 < step < 2 * (w(m') - w(m))/norm(degree(m) - 2)^2,
 // then weight(m+1) is closer to w' than w from which they derive the above
@@ -292,7 +292,7 @@ template <typename CostFunction>
 void AddArcsFromMinimumSpanningTree(int number_of_nodes,
                                     const CostFunction& cost,
                                     std::set<std::pair<int, int>>* arcs) {
-  CompleteGraph<int, int> graph(number_of_nodes);
+  util::CompleteGraph<int, int> graph(number_of_nodes);
   const std::vector<int> mst =
       BuildPrimMinimumSpanningTree(graph, [&cost, &graph](int arc) {
         return cost(graph.Tail(arc), graph.Head(arc));
@@ -386,7 +386,7 @@ double ComputeOneTreeLowerBoundWithAlgorithm(int number_of_nodes,
   // minimum spanning tree; this will add arcs which are likely to be "good"
   // 1-tree arcs.
   AddArcsFromMinimumSpanningTree(number_of_nodes - 1, cost, &nearest);
-  ListGraph<int, int> graph(number_of_nodes - 1, nearest.size());
+  util::ListGraph<int, int> graph(number_of_nodes - 1, nearest.size());
   for (const auto& arc : nearest) {
     graph.AddArc(arc.first, arc.second);
   }
@@ -417,7 +417,7 @@ double ComputeOneTreeLowerBoundWithAlgorithm(int number_of_nodes,
   // Compute lower bound using the complete graph on the best weights. This is
   // necessary as the MSTs computed on nearest neighbors is not guaranteed to
   // lead to a lower bound.
-  CompleteGraph<int, int> complete_graph(number_of_nodes - 1);
+  util::CompleteGraph<int, int> complete_graph(number_of_nodes - 1);
   CostType one_tree_cost = 0;
   // TODO(user): We are not caching here since this would take O(n^2) memory;
   // however the Kruskal algorithm will expand all arcs also consuming O(n^2)

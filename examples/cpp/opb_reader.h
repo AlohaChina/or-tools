@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,16 +14,17 @@
 #ifndef OR_TOOLS_SAT_OPB_READER_H_
 #define OR_TOOLS_SAT_OPB_READER_H_
 
+#include <algorithm>
+#include <memory>
 #include <string>
 #include <vector>
 
-#include "ortools/base/integral_types.h"
+#include "absl/strings/str_split.h"
+#include "ortools/base/filelineiter.h"
 #include "ortools/base/logging.h"
+#include "ortools/base/macros.h"
 #include "ortools/base/strtoint.h"
-#include "ortools/base/file.h"
-#include "ortools/base/split.h"
 #include "ortools/sat/boolean_problem.pb.h"
-#include "ortools/util/filelineiter.h"
 
 namespace operations_research {
 namespace sat {
@@ -65,7 +66,7 @@ class OpbReader {
 
   void ProcessNewLine(LinearBooleanProblem* problem, const std::string& line) {
     const std::vector<std::string> words =
-        strings::Split(line, ' ', strings::SkipEmpty());
+        absl::StrSplit(line, ' ', absl::SkipEmpty());
     if (words.empty() || words[0].empty() || words[0][0] == '*') {
       return;
     }

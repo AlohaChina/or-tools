@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,23 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include <algorithm>
 #include <cmath>
-#include <unordered_map>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
-#include "ortools/base/join.h"
 #include "ortools/base/map_util.h"
-#include "ortools/base/stl_util.h"
 #include "ortools/base/mathutil.h"
+#include "ortools/base/stl_util.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/bitset.h"
@@ -291,7 +290,7 @@ class DomainIntVar : public IntVar {
       return Solver::VAR_PRIORITY;
     }
     std::string DebugString() const override {
-      return StringPrintf("Handler(%s)", var_->DebugString().c_str());
+      return absl::StrFormat("Handler(%s)", var_->DebugString());
     }
 
    private:
@@ -448,10 +447,11 @@ class DomainIntVar : public IntVar {
         if (variable_->Bound()) {
           return solver()->MakeIntConst(1);
         } else {
-          const std::string vname = variable_->HasName() ? variable_->name()
-                                                    : variable_->DebugString();
-          const std::string bname = StringPrintf("Watch<%s == %" GG_LL_FORMAT "d>",
-                                            vname.c_str(), value);
+          const std::string vname = variable_->HasName()
+                                        ? variable_->name()
+                                        : variable_->DebugString();
+          const std::string bname =
+              absl::StrFormat("Watch<%s == %d>", vname, value);
           IntVar* const boolvar = solver()->MakeBoolVar(bname);
           watchers_.UnsafeRevInsert(value, boolvar);
           if (posted_.Switched()) {
@@ -615,7 +615,7 @@ class DomainIntVar : public IntVar {
     }
 
     std::string DebugString() const override {
-      return StringPrintf("ValueWatcher(%s)", variable_->DebugString().c_str());
+      return absl::StrFormat("ValueWatcher(%s)", variable_->DebugString());
     }
 
    private:
@@ -681,10 +681,11 @@ class DomainIntVar : public IntVar {
         if (variable_->Bound()) {
           return solver()->MakeIntConst(1);
         } else {
-          const std::string vname = variable_->HasName() ? variable_->name()
-                                                    : variable_->DebugString();
-          const std::string bname = StringPrintf("Watch<%s == %" GG_LL_FORMAT "d>",
-                                            vname.c_str(), value);
+          const std::string vname = variable_->HasName()
+                                        ? variable_->name()
+                                        : variable_->DebugString();
+          const std::string bname =
+              absl::StrFormat("Watch<%s == %d>", vname, value);
           IntVar* const boolvar = solver()->MakeBoolVar(bname);
           RevInsert(index, boolvar);
           if (posted_.Switched()) {
@@ -857,8 +858,7 @@ class DomainIntVar : public IntVar {
     }
 
     std::string DebugString() const override {
-      return StringPrintf("DenseValueWatcher(%s)",
-                          variable_->DebugString().c_str());
+      return absl::StrFormat("DenseValueWatcher(%s)", variable_->DebugString());
     }
 
    private:
@@ -936,10 +936,11 @@ class DomainIntVar : public IntVar {
         if (variable_->Min() >= value) {
           return solver()->MakeIntConst(1);
         } else {
-          const std::string vname = variable_->HasName() ? variable_->name()
-                                                    : variable_->DebugString();
-          const std::string bname = StringPrintf("Watch<%s >= %" GG_LL_FORMAT "d>",
-                                            vname.c_str(), value);
+          const std::string vname = variable_->HasName()
+                                        ? variable_->name()
+                                        : variable_->DebugString();
+          const std::string bname =
+              absl::StrFormat("Watch<%s >= %d>", vname, value);
           IntVar* const boolvar = solver()->MakeBoolVar(bname);
           watchers_.UnsafeRevInsert(value, boolvar);
           if (posted_.Switched()) {
@@ -1061,8 +1062,7 @@ class DomainIntVar : public IntVar {
     }
 
     std::string DebugString() const override {
-      return StringPrintf("UpperBoundWatcher(%s)",
-                          variable_->DebugString().c_str());
+      return absl::StrFormat("UpperBoundWatcher(%s)", variable_->DebugString());
     }
 
    private:
@@ -1176,10 +1176,11 @@ class DomainIntVar : public IntVar {
         if (variable_->Min() >= value) {
           return solver()->MakeIntConst(1);
         } else {
-          const std::string vname = variable_->HasName() ? variable_->name()
-                                                    : variable_->DebugString();
-          const std::string bname = StringPrintf("Watch<%s >= %" GG_LL_FORMAT "d>",
-                                            vname.c_str(), value);
+          const std::string vname = variable_->HasName()
+                                        ? variable_->name()
+                                        : variable_->DebugString();
+          const std::string bname =
+              absl::StrFormat("Watch<%s >= %d>", vname, value);
           IntVar* const boolvar = solver()->MakeBoolVar(bname);
           RevInsert(value - offset_, boolvar);
           if (posted_.Switched()) {
@@ -1308,8 +1309,8 @@ class DomainIntVar : public IntVar {
     }
 
     std::string DebugString() const override {
-      return StringPrintf("DenseUpperBoundWatcher(%s)",
-                          variable_->DebugString().c_str());
+      return absl::StrFormat("DenseUpperBoundWatcher(%s)",
+                             variable_->DebugString());
     }
 
    private:
@@ -1322,7 +1323,8 @@ class DomainIntVar : public IntVar {
   };
 
   // ----- Main Class -----
-  DomainIntVar(Solver* const s, int64 vmin, int64 vmax, const std::string& name);
+  DomainIntVar(Solver* const s, int64 vmin, int64 vmax,
+               const std::string& name);
   DomainIntVar(Solver* const s, const std::vector<int64>& sorted_values,
                const std::string& name);
   ~DomainIntVar() override;
@@ -1331,7 +1333,7 @@ class DomainIntVar : public IntVar {
   void SetMin(int64 m) override;
   int64 Max() const override { return max_.Value(); }
   void SetMax(int64 m) override;
-  void SetRange(int64 l, int64 u) override;
+  void SetRange(int64 mi, int64 ma) override;
   void SetValue(int64 v) override;
   bool Bound() const override { return (min_.Value() == max_.Value()); }
   int64 Value() const override {
@@ -1393,7 +1395,7 @@ class DomainIntVar : public IntVar {
       return cache->Var();
     } else {
       if (value_watcher_ == nullptr) {
-        if (Max() - Min() <= 256) {
+        if (CapSub(Max(), Min()) <= 256) {
           solver()->SaveAndSetValue(
               reinterpret_cast<void**>(&value_watcher_),
               reinterpret_cast<void*>(
@@ -1466,7 +1468,7 @@ class DomainIntVar : public IntVar {
       return cache->Var();
     } else {
       if (bound_watcher_ == nullptr) {
-        if (Max() - Min() <= 256) {
+        if (CapSub(Max(), Min()) <= 256) {
           solver()->SaveAndSetValue(
               reinterpret_cast<void**>(&bound_watcher_),
               reinterpret_cast<void*>(solver()->RevAlloc(
@@ -1492,7 +1494,7 @@ class DomainIntVar : public IntVar {
   Constraint* SetIsGreaterOrEqual(const std::vector<int64>& values,
                                   const std::vector<IntVar*>& vars) {
     if (bound_watcher_ == nullptr) {
-      if (Max() - Min() <= 256) {
+      if (CapSub(Max(), Min()) <= 256) {
         solver()->SaveAndSetValue(
             reinterpret_cast<void**>(&bound_watcher_),
             reinterpret_cast<void*>(solver()->RevAlloc(
@@ -1531,7 +1533,8 @@ class DomainIntVar : public IntVar {
   void CleanInProcess();
   uint64 Size() const override {
     if (bits_ != nullptr) return bits_->Size();
-    return (max_.Value() - min_.Value() + 1);
+    return (static_cast<uint64>(max_.Value()) -
+            static_cast<uint64>(min_.Value()) + 1);
   }
   bool Contains(int64 v) const override {
     if (v < min_.Value() || v > max_.Value()) return false;
@@ -1722,11 +1725,9 @@ class SimpleBitSet : public DomainIntVar::BitSet {
 
   std::string DebugString() const override {
     std::string out;
-    SStringPrintf(&out,
-                  "SimpleBitSet(%" GG_LL_FORMAT "d..%" GG_LL_FORMAT "d : ",
-                  omin_, omax_);
+    absl::StrAppendFormat(&out, "SimpleBitSet(%d..%d : ", omin_, omax_);
     for (int i = 0; i < bsize_; ++i) {
-      StringAppendF(&out, "%llx", bits_[i]);
+      absl::StrAppendFormat(&out, "%x", bits_[i]);
     }
     out += ")";
     return out;
@@ -1760,13 +1761,11 @@ class SimpleBitSet : public DomainIntVar::BitSet {
         } else {
           if (cumul) {
             if (v == start_cumul + 1) {
-              StringAppendF(&out, "%" GG_LL_FORMAT "d ", start_cumul);
+              absl::StrAppendFormat(&out, "%d ", start_cumul);
             } else if (v == start_cumul + 2) {
-              StringAppendF(&out, "%" GG_LL_FORMAT "d %" GG_LL_FORMAT "d ",
-                            start_cumul, v - 1);
+              absl::StrAppendFormat(&out, "%d %d ", start_cumul, v - 1);
             } else {
-              StringAppendF(&out, "%" GG_LL_FORMAT "d..%" GG_LL_FORMAT "d ",
-                            start_cumul, v - 1);
+              absl::StrAppendFormat(&out, "%d..%d ", start_cumul, v - 1);
             }
             cumul = false;
           }
@@ -1774,17 +1773,15 @@ class SimpleBitSet : public DomainIntVar::BitSet {
       }
       if (cumul) {
         if (max == start_cumul + 1) {
-          StringAppendF(&out, "%" GG_LL_FORMAT "d %" GG_LL_FORMAT "d",
-                        start_cumul, max);
+          absl::StrAppendFormat(&out, "%d %d", start_cumul, max);
         } else {
-          StringAppendF(&out, "%" GG_LL_FORMAT "d..%" GG_LL_FORMAT "d",
-                        start_cumul, max);
+          absl::StrAppendFormat(&out, "%d..%d", start_cumul, max);
         }
       } else {
-        StringAppendF(&out, "%" GG_LL_FORMAT "d", max);
+        absl::StrAppendFormat(&out, "%d", max);
       }
     } else {
-      StringAppendF(&out, "%" GG_LL_FORMAT "d", min);
+      absl::StrAppendFormat(&out, "%d", min);
     }
     return out;
   }
@@ -1938,9 +1935,7 @@ class SmallBitSet : public DomainIntVar::BitSet {
   uint64 Size() const override { return size_.Value(); }
 
   std::string DebugString() const override {
-    return StringPrintf("SmallBitSet(%" GG_LL_FORMAT "d..%" GG_LL_FORMAT
-                        "d : %llx)",
-                        omin_, omax_, bits_);
+    return absl::StrFormat("SmallBitSet(%d..%d : %llx)", omin_, omax_, bits_);
   }
 
   void DelayRemoveValue(int64 val) override {
@@ -1975,13 +1970,11 @@ class SmallBitSet : public DomainIntVar::BitSet {
         } else {
           if (cumul) {
             if (v == start_cumul + 1) {
-              StringAppendF(&out, "%" GG_LL_FORMAT "d ", start_cumul);
+              absl::StrAppendFormat(&out, "%d ", start_cumul);
             } else if (v == start_cumul + 2) {
-              StringAppendF(&out, "%" GG_LL_FORMAT "d %" GG_LL_FORMAT "d ",
-                            start_cumul, v - 1);
+              absl::StrAppendFormat(&out, "%d %d ", start_cumul, v - 1);
             } else {
-              StringAppendF(&out, "%" GG_LL_FORMAT "d..%" GG_LL_FORMAT "d ",
-                            start_cumul, v - 1);
+              absl::StrAppendFormat(&out, "%d..%d ", start_cumul, v - 1);
             }
             cumul = false;
           }
@@ -1989,17 +1982,15 @@ class SmallBitSet : public DomainIntVar::BitSet {
       }
       if (cumul) {
         if (max == start_cumul + 1) {
-          StringAppendF(&out, "%" GG_LL_FORMAT "d %" GG_LL_FORMAT "d",
-                        start_cumul, max);
+          absl::StrAppendFormat(&out, "%d %d", start_cumul, max);
         } else {
-          StringAppendF(&out, "%" GG_LL_FORMAT "d..%" GG_LL_FORMAT "d",
-                        start_cumul, max);
+          absl::StrAppendFormat(&out, "%d..%d", start_cumul, max);
         }
       } else {
-        StringAppendF(&out, "%" GG_LL_FORMAT "d", max);
+        absl::StrAppendFormat(&out, "%d", max);
       }
     } else {
-      StringAppendF(&out, "%" GG_LL_FORMAT "d", min);
+      absl::StrAppendFormat(&out, "%d", min);
     }
     return out;
   }
@@ -2259,8 +2250,9 @@ void DomainIntVar::SetMin(int64 m) {
   } else {
     CheckOldMin();
     const int64 new_min =
-        (bits_ == nullptr ? m : bits_->ComputeNewMin(m, min_.Value(),
-                                                     max_.Value()));
+        (bits_ == nullptr
+             ? m
+             : bits_->ComputeNewMin(m, min_.Value(), max_.Value()));
     min_.SetValue(solver(), new_min);
     if (min_.Value() > max_.Value()) {
       solver()->Fail();
@@ -2282,8 +2274,9 @@ void DomainIntVar::SetMax(int64 m) {
   } else {
     CheckOldMax();
     const int64 new_max =
-        (bits_ == nullptr ? m : bits_->ComputeNewMax(m, min_.Value(),
-                                                     max_.Value()));
+        (bits_ == nullptr
+             ? m
+             : bits_->ComputeNewMax(m, min_.Value(), max_.Value()));
     max_.SetValue(solver(), new_max);
     if (min_.Value() > max_.Value()) {
       solver()->Fail();
@@ -2312,8 +2305,9 @@ void DomainIntVar::SetRange(int64 mi, int64 ma) {
       if (mi > min_.Value()) {
         CheckOldMin();
         const int64 new_min =
-            (bits_ == nullptr ? mi : bits_->ComputeNewMin(mi, min_.Value(),
-                                                          max_.Value()));
+            (bits_ == nullptr
+                 ? mi
+                 : bits_->ComputeNewMin(mi, min_.Value(), max_.Value()));
         min_.SetValue(solver(), new_min);
       }
       if (min_.Value() > ma) {
@@ -2322,8 +2316,9 @@ void DomainIntVar::SetRange(int64 mi, int64 ma) {
       if (ma < max_.Value()) {
         CheckOldMax();
         const int64 new_max =
-            (bits_ == nullptr ? ma : bits_->ComputeNewMax(ma, min_.Value(),
-                                                          max_.Value()));
+            (bits_ == nullptr
+                 ? ma
+                 : bits_->ComputeNewMax(ma, min_.Value(), max_.Value()));
         max_.SetValue(solver(), new_max);
       }
       if (min_.Value() > max_.Value()) {
@@ -2482,12 +2477,11 @@ std::string DomainIntVar::DebugString() const {
     out = "DomainIntVar(";
   }
   if (min_.Value() == max_.Value()) {
-    StringAppendF(&out, "%" GG_LL_FORMAT "d", min_.Value());
+    absl::StrAppendFormat(&out, "%d", min_.Value());
   } else if (bits_ != nullptr) {
     out.append(bits_->pretty_DebugString(min_.Value(), max_.Value()));
   } else {
-    StringAppendF(&out, "%" GG_LL_FORMAT "d..%" GG_LL_FORMAT "d", min_.Value(),
-                  max_.Value());
+    absl::StrAppendFormat(&out, "%d..%d", min_.Value(), max_.Value());
   }
   out += ")";
   return out;
@@ -2511,7 +2505,7 @@ class ConcreteBooleanVar : public BooleanVar {
       return Solver::VAR_PRIORITY;
     }
     std::string DebugString() const override {
-      return StringPrintf("Handler(%s)", var_->DebugString().c_str());
+      return absl::StrFormat("Handler(%s)", var_->DebugString());
     }
 
    private:
@@ -2613,9 +2607,9 @@ class IntConst : public IntVar {
     std::string out;
     if (solver()->HasName(this)) {
       const std::string& var_name = name();
-      SStringPrintf(&out, "%s(%" GG_LL_FORMAT "d)", var_name.c_str(), value_);
+      absl::StrAppendFormat(&out, "%s(%d)", var_name, value_);
     } else {
-      SStringPrintf(&out, "IntConst(%" GG_LL_FORMAT "d)", value_);
+      absl::StrAppendFormat(&out, "IntConst(%d)", value_);
     }
     return out;
   }
@@ -2650,7 +2644,7 @@ class IntConst : public IntVar {
     if (solver()->HasName(this)) {
       return PropagationBaseObject::name();
     } else {
-      return StrCat(value_);
+      return absl::StrCat(value_);
     }
   }
 
@@ -2679,11 +2673,9 @@ class PlusCstVar : public IntVar {
 
   std::string DebugString() const override {
     if (HasName()) {
-      return StringPrintf("%s(%s + %" GG_LL_FORMAT "d)", name().c_str(),
-                          var_->DebugString().c_str(), cst_);
+      return absl::StrFormat("%s(%s + %d)", name(), var_->DebugString(), cst_);
     } else {
-      return StringPrintf("(%s + %" GG_LL_FORMAT "d)",
-                          var_->DebugString().c_str(), cst_);
+      return absl::StrFormat("(%s + %d)", var_->DebugString(), cst_);
     }
   }
 
@@ -2992,10 +2984,9 @@ bool SubCstIntVar::Contains(int64 v) const { return var_->Contains(cst_ - v); }
 
 std::string SubCstIntVar::DebugString() const {
   if (cst_ == 1 && var_->VarType() == BOOLEAN_VAR) {
-    return StringPrintf("Not(%s)", var_->DebugString().c_str());
+    return absl::StrFormat("Not(%s)", var_->DebugString());
   } else {
-    return StringPrintf("(%" GG_LL_FORMAT "d - %s)", cst_,
-                        var_->DebugString().c_str());
+    return absl::StrFormat("(%d - %s)", cst_, var_->DebugString());
   }
 }
 
@@ -3003,10 +2994,9 @@ std::string SubCstIntVar::name() const {
   if (solver()->HasName(this)) {
     return PropagationBaseObject::name();
   } else if (cst_ == 1 && var_->VarType() == BOOLEAN_VAR) {
-    return StringPrintf("Not(%s)", var_->name().c_str());
+    return absl::StrFormat("Not(%s)", var_->name());
   } else {
-    return StringPrintf("(%" GG_LL_FORMAT "d - %s)", cst_,
-                        var_->name().c_str());
+    return absl::StrFormat("(%d - %s)", cst_, var_->name());
   }
 }
 
@@ -3118,7 +3108,7 @@ uint64 OppIntVar::Size() const { return var_->Size(); }
 bool OppIntVar::Contains(int64 v) const { return var_->Contains(-v); }
 
 std::string OppIntVar::DebugString() const {
-  return StringPrintf("-(%s)", var_->DebugString().c_str());
+  return absl::StrFormat("-(%s)", var_->DebugString());
 }
 
 // ----- Utility functions -----
@@ -3172,8 +3162,7 @@ class TimesCstIntVar : public IntVar {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("(%s * %" GG_LL_FORMAT "d)",
-                        var_->DebugString().c_str(), cst_);
+    return absl::StrFormat("(%s * %d)", var_->DebugString(), cst_);
   }
 
   int VarType() const override { return VAR_TIMES_CST; }
@@ -3604,13 +3593,12 @@ class PlusIntExpr : public BaseIntExpr {
   }
 
   std::string name() const override {
-    return StringPrintf("(%s + %s)", left_->name().c_str(),
-                        right_->name().c_str());
+    return absl::StrFormat("(%s + %s)", left_->name(), right_->name());
   }
 
   std::string DebugString() const override {
-    return StringPrintf("(%s + %s)", left_->DebugString().c_str(),
-                        right_->DebugString().c_str());
+    return absl::StrFormat("(%s + %s)", left_->DebugString(),
+                           right_->DebugString());
   }
 
   void WhenRange(Demon* d) override {
@@ -3697,13 +3685,12 @@ class SafePlusIntExpr : public BaseIntExpr {
   bool Bound() const override { return (left_->Bound() && right_->Bound()); }
 
   std::string name() const override {
-    return StringPrintf("(%s + %s)", left_->name().c_str(),
-                        right_->name().c_str());
+    return absl::StrFormat("(%s + %s)", left_->name(), right_->name());
   }
 
   std::string DebugString() const override {
-    return StringPrintf("(%s + %s)", left_->DebugString().c_str(),
-                        right_->DebugString().c_str());
+    return absl::StrFormat("(%s + %s)", left_->DebugString(),
+                           right_->DebugString());
   }
 
   void WhenRange(Demon* d) override {
@@ -3737,12 +3724,10 @@ class PlusIntCstExpr : public BaseIntExpr {
   void SetMax(int64 m) override { expr_->SetMax(CapSub(m, value_)); }
   bool Bound() const override { return (expr_->Bound()); }
   std::string name() const override {
-    return StringPrintf("(%s + %" GG_LL_FORMAT "d)", expr_->name().c_str(),
-                        value_);
+    return absl::StrFormat("(%s + %d)", expr_->name(), value_);
   }
   std::string DebugString() const override {
-    return StringPrintf("(%s + %" GG_LL_FORMAT "d)",
-                        expr_->DebugString().c_str(), value_);
+    return absl::StrFormat("(%s + %d)", expr_->DebugString(), value_);
   }
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
   IntVar* CastToVar() override;
@@ -3826,13 +3811,12 @@ class SubIntExpr : public BaseIntExpr {
   bool Bound() const override { return (left_->Bound() && right_->Bound()); }
 
   std::string name() const override {
-    return StringPrintf("(%s - %s)", left_->name().c_str(),
-                        right_->name().c_str());
+    return absl::StrFormat("(%s - %s)", left_->name(), right_->name());
   }
 
   std::string DebugString() const override {
-    return StringPrintf("(%s - %s)", left_->DebugString().c_str(),
-                        right_->DebugString().c_str());
+    return absl::StrFormat("(%s - %s)", left_->DebugString(),
+                           right_->DebugString());
   }
 
   void WhenRange(Demon* d) override {
@@ -3913,12 +3897,10 @@ class SubIntCstExpr : public BaseIntExpr {
   void SetMax(int64 m) override { expr_->SetMin(CapSub(value_, m)); }
   bool Bound() const override { return (expr_->Bound()); }
   std::string name() const override {
-    return StringPrintf("(%" GG_LL_FORMAT "d - %s)", value_,
-                        expr_->name().c_str());
+    return absl::StrFormat("(%d - %s)", value_, expr_->name());
   }
   std::string DebugString() const override {
-    return StringPrintf("(%" GG_LL_FORMAT "d - %s)", value_,
-                        expr_->DebugString().c_str());
+    return absl::StrFormat("(%d - %s)", value_, expr_->DebugString());
   }
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
   IntVar* CastToVar() override;
@@ -3959,10 +3941,10 @@ class OppIntExpr : public BaseIntExpr {
   void SetMax(int64 m) override { expr_->SetMin(-m); }
   bool Bound() const override { return (expr_->Bound()); }
   std::string name() const override {
-    return StringPrintf("(-%s)", expr_->name().c_str());
+    return absl::StrFormat("(-%s)", expr_->name());
   }
   std::string DebugString() const override {
-    return StringPrintf("(-%s)", expr_->DebugString().c_str());
+    return absl::StrFormat("(-%s)", expr_->DebugString());
   }
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
   IntVar* CastToVar() override;
@@ -3997,13 +3979,11 @@ class TimesIntCstExpr : public BaseIntExpr {
   bool Bound() const override { return (expr_->Bound()); }
 
   std::string name() const override {
-    return StringPrintf("(%s * %" GG_LL_FORMAT "d)", expr_->name().c_str(),
-                        value_);
+    return absl::StrFormat("(%s * %d)", expr_->name(), value_);
   }
 
   std::string DebugString() const override {
-    return StringPrintf("(%s * %" GG_LL_FORMAT "d)",
-                        expr_->DebugString().c_str(), value_);
+    return absl::StrFormat("(%s * %d)", expr_->DebugString(), value_);
   }
 
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
@@ -4291,12 +4271,11 @@ class TimesIntExpr : public BaseIntExpr {
   void SetMax(int64 m) override;
   bool Bound() const override;
   std::string name() const override {
-    return StringPrintf("(%s * %s)", left_->name().c_str(),
-                        right_->name().c_str());
+    return absl::StrFormat("(%s * %s)", left_->name(), right_->name());
   }
   std::string DebugString() const override {
-    return StringPrintf("(%s * %s)", left_->DebugString().c_str(),
-                        right_->DebugString().c_str());
+    return absl::StrFormat("(%s * %s)", left_->DebugString(),
+                           right_->DebugString());
   }
   void WhenRange(Demon* d) override {
     left_->WhenRange(d);
@@ -4350,12 +4329,11 @@ class TimesPosIntExpr : public BaseIntExpr {
   void SetMax(int64 m) override;
   bool Bound() const override;
   std::string name() const override {
-    return StringPrintf("(%s * %s)", left_->name().c_str(),
-                        right_->name().c_str());
+    return absl::StrFormat("(%s * %s)", left_->name(), right_->name());
   }
   std::string DebugString() const override {
-    return StringPrintf("(%s * %s)", left_->DebugString().c_str(),
-                        right_->DebugString().c_str());
+    return absl::StrFormat("(%s * %s)", left_->DebugString(),
+                           right_->DebugString());
   }
   void WhenRange(Demon* d) override {
     left_->WhenRange(d);
@@ -4408,12 +4386,11 @@ class SafeTimesPosIntExpr : public BaseIntExpr {
             (left_->Bound() && right_->Bound()));
   }
   std::string name() const override {
-    return StringPrintf("(%s * %s)", left_->name().c_str(),
-                        right_->name().c_str());
+    return absl::StrFormat("(%s * %s)", left_->name(), right_->name());
   }
   std::string DebugString() const override {
-    return StringPrintf("(%s * %s)", left_->DebugString().c_str(),
-                        right_->DebugString().c_str());
+    return absl::StrFormat("(%s * %s)", left_->DebugString(),
+                           right_->DebugString());
   }
   void WhenRange(Demon* d) override {
     left_->WhenRange(d);
@@ -4452,12 +4429,11 @@ class TimesBooleanPosIntExpr : public BaseIntExpr {
   void SetRange(int64 mi, int64 ma) override;
   bool Bound() const override;
   std::string name() const override {
-    return StringPrintf("(%s * %s)", boolvar_->name().c_str(),
-                        expr_->name().c_str());
+    return absl::StrFormat("(%s * %s)", boolvar_->name(), expr_->name());
   }
   std::string DebugString() const override {
-    return StringPrintf("(%s * %s)", boolvar_->DebugString().c_str(),
-                        expr_->DebugString().c_str());
+    return absl::StrFormat("(%s * %s)", boolvar_->DebugString(),
+                           expr_->DebugString());
   }
   void WhenRange(Demon* d) override {
     boolvar_->WhenRange(d);
@@ -4549,7 +4525,7 @@ class TimesBooleanIntExpr : public BaseIntExpr {
       }
       default: {
         DCHECK_EQ(BooleanVar::kUnboundBooleanVarValue, boolvar_->RawValue());
-        return std::min(0LL, expr_->Min());
+        return std::min(int64{0}, expr_->Min());
       }
     }
   }
@@ -4564,7 +4540,7 @@ class TimesBooleanIntExpr : public BaseIntExpr {
       }
       default: {
         DCHECK_EQ(BooleanVar::kUnboundBooleanVarValue, boolvar_->RawValue());
-        return std::max(0LL, expr_->Max());
+        return std::max(int64{0}, expr_->Max());
       }
     }
   }
@@ -4573,12 +4549,11 @@ class TimesBooleanIntExpr : public BaseIntExpr {
   void SetRange(int64 mi, int64 ma) override;
   bool Bound() const override;
   std::string name() const override {
-    return StringPrintf("(%s * %s)", boolvar_->name().c_str(),
-                        expr_->name().c_str());
+    return absl::StrFormat("(%s * %s)", boolvar_->name(), expr_->name());
   }
   std::string DebugString() const override {
-    return StringPrintf("(%s * %s)", boolvar_->DebugString().c_str(),
-                        expr_->DebugString().c_str());
+    return absl::StrFormat("(%s * %s)", boolvar_->DebugString(),
+                           expr_->DebugString());
   }
   void WhenRange(Demon* d) override {
     boolvar_->WhenRange(d);
@@ -4661,8 +4636,8 @@ void TimesBooleanIntExpr::Range(int64* mi, int64* ma) {
     }
     default: {
       DCHECK_EQ(BooleanVar::kUnboundBooleanVarValue, boolvar_->RawValue());
-      *mi = std::min(0LL, expr_->Min());
-      *ma = std::max(0LL, expr_->Max());
+      *mi = std::min(int64{0}, expr_->Min());
+      *ma = std::max(int64{0}, expr_->Max());
       break;
     }
   }
@@ -4739,13 +4714,11 @@ class DivPosIntCstExpr : public BaseIntExpr {
   }
 
   std::string name() const override {
-    return StringPrintf("(%s div %" GG_LL_FORMAT "d)", expr_->name().c_str(),
-                        value_);
+    return absl::StrFormat("(%s div %d)", expr_->name(), value_);
   }
 
   std::string DebugString() const override {
-    return StringPrintf("(%s div %" GG_LL_FORMAT "d)",
-                        expr_->DebugString().c_str(), value_);
+    return absl::StrFormat("(%s div %d)", expr_->DebugString(), value_);
   }
 
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
@@ -4815,12 +4788,11 @@ class DivPosIntExpr : public BaseIntExpr {
   }
 
   std::string name() const override {
-    return StringPrintf("(%s div %s)", num_->name().c_str(),
-                        denom_->name().c_str());
+    return absl::StrFormat("(%s div %s)", num_->name(), denom_->name());
   }
   std::string DebugString() const override {
-    return StringPrintf("(%s div %s)", num_->DebugString().c_str(),
-                        denom_->DebugString().c_str());
+    return absl::StrFormat("(%s div %s)", num_->DebugString(),
+                           denom_->DebugString());
   }
   void WhenRange(Demon* d) override {
     num_->WhenRange(d);
@@ -4880,13 +4852,12 @@ class DivPosPosIntExpr : public BaseIntExpr {
   }
 
   std::string name() const override {
-    return StringPrintf("(%s div %s)", num_->name().c_str(),
-                        denom_->name().c_str());
+    return absl::StrFormat("(%s div %s)", num_->name(), denom_->name());
   }
 
   std::string DebugString() const override {
-    return StringPrintf("(%s div %s)", num_->DebugString().c_str(),
-                        denom_->DebugString().c_str());
+    return absl::StrFormat("(%s div %s)", num_->DebugString(),
+                           denom_->DebugString());
   }
 
   void WhenRange(Demon* d) override {
@@ -5051,12 +5022,11 @@ class DivIntExpr : public BaseIntExpr {
   }
 
   std::string name() const override {
-    return StringPrintf("(%s div %s)", num_->name().c_str(),
-                        denom_->name().c_str());
+    return absl::StrFormat("(%s div %s)", num_->name(), denom_->name());
   }
   std::string DebugString() const override {
-    return StringPrintf("(%s div %s)", num_->DebugString().c_str(),
-                        denom_->DebugString().c_str());
+    return absl::StrFormat("(%s div %s)", num_->DebugString(),
+                           denom_->DebugString());
   }
   void WhenRange(Demon* d) override {
     num_->WhenRange(d);
@@ -5126,8 +5096,8 @@ class IntAbsConstraint : public CastConstraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("IntAbsConstraint(%s, %s)", sub_->DebugString().c_str(),
-                        target_var_->DebugString().c_str());
+    return absl::StrFormat("IntAbsConstraint(%s, %s)", sub_->DebugString(),
+                           target_var_->DebugString());
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -5219,11 +5189,11 @@ class IntAbs : public BaseIntExpr {
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
 
   std::string name() const override {
-    return StringPrintf("IntAbs(%s)", expr_->name().c_str());
+    return absl::StrFormat("IntAbs(%s)", expr_->name());
   }
 
   std::string DebugString() const override {
-    return StringPrintf("IntAbs(%s)", expr_->DebugString().c_str());
+    return absl::StrFormat("IntAbs(%s)", expr_->DebugString());
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -5238,7 +5208,7 @@ class IntAbs : public BaseIntExpr {
     int64 max_value = 0;
     Range(&min_value, &max_value);
     Solver* const s = solver();
-    const std::string name = StringPrintf("AbsVar(%s)", expr_->name().c_str());
+    const std::string name = absl::StrFormat("AbsVar(%s)", expr_->name());
     IntVar* const target = s->MakeIntVar(min_value, max_value, name);
     CastConstraint* const ct =
         s->RevAlloc(new IntAbsConstraint(s, expr_->Var(), target));
@@ -5306,10 +5276,10 @@ class IntSquare : public BaseIntExpr {
   bool Bound() const override { return expr_->Bound(); }
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
   std::string name() const override {
-    return StringPrintf("IntSquare(%s)", expr_->name().c_str());
+    return absl::StrFormat("IntSquare(%s)", expr_->name());
   }
   std::string DebugString() const override {
-    return StringPrintf("IntSquare(%s)", expr_->DebugString().c_str());
+    return absl::StrFormat("IntSquare(%s)", expr_->DebugString());
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -5391,13 +5361,11 @@ class BasePower : public BaseIntExpr {
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
 
   std::string name() const override {
-    return StringPrintf("IntPower(%s, %" GG_LL_FORMAT "d)",
-                        expr_->name().c_str(), pow_);
+    return absl::StrFormat("IntPower(%s, %d)", expr_->name(), pow_);
   }
 
   std::string DebugString() const override {
-    return StringPrintf("IntPower(%s, %" GG_LL_FORMAT "d)",
-                        expr_->DebugString().c_str(), pow_);
+    return absl::StrFormat("IntPower(%s, %d)", expr_->DebugString(), pow_);
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -5609,12 +5577,11 @@ class MinIntExpr : public BaseIntExpr {
     }
   }
   std::string name() const override {
-    return StringPrintf("MinIntExpr(%s, %s)", left_->name().c_str(),
-                        right_->name().c_str());
+    return absl::StrFormat("MinIntExpr(%s, %s)", left_->name(), right_->name());
   }
   std::string DebugString() const override {
-    return StringPrintf("MinIntExpr(%s, %s)", left_->DebugString().c_str(),
-                        right_->DebugString().c_str());
+    return absl::StrFormat("MinIntExpr(%s, %s)", left_->DebugString(),
+                           right_->DebugString());
   }
   void WhenRange(Demon* d) override {
     left_->WhenRange(d);
@@ -5665,13 +5632,12 @@ class MinCstIntExpr : public BaseIntExpr {
   }
 
   std::string name() const override {
-    return StringPrintf("MinCstIntExpr(%s, %" GG_LL_FORMAT "d)",
-                        expr_->name().c_str(), value_);
+    return absl::StrFormat("MinCstIntExpr(%s, %d)", expr_->name(), value_);
   }
 
   std::string DebugString() const override {
-    return StringPrintf("MinCstIntExpr(%s, %" GG_LL_FORMAT "d)",
-                        expr_->DebugString().c_str(), value_);
+    return absl::StrFormat("MinCstIntExpr(%s, %d)", expr_->DebugString(),
+                           value_);
   }
 
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
@@ -5718,13 +5684,12 @@ class MaxIntExpr : public BaseIntExpr {
   }
 
   std::string name() const override {
-    return StringPrintf("MaxIntExpr(%s, %s)", left_->name().c_str(),
-                        right_->name().c_str());
+    return absl::StrFormat("MaxIntExpr(%s, %s)", left_->name(), right_->name());
   }
 
   std::string DebugString() const override {
-    return StringPrintf("MaxIntExpr(%s, %s)", left_->DebugString().c_str(),
-                        right_->DebugString().c_str());
+    return absl::StrFormat("MaxIntExpr(%s, %s)", left_->DebugString(),
+                           right_->DebugString());
   }
 
   void WhenRange(Demon* d) override {
@@ -5776,13 +5741,12 @@ class MaxCstIntExpr : public BaseIntExpr {
   }
 
   std::string name() const override {
-    return StringPrintf("MaxCstIntExpr(%s, %" GG_LL_FORMAT "d)",
-                        expr_->name().c_str(), value_);
+    return absl::StrFormat("MaxCstIntExpr(%s, %d)", expr_->name(), value_);
   }
 
   std::string DebugString() const override {
-    return StringPrintf("MaxCstIntExpr(%s, %" GG_LL_FORMAT "d)",
-                        expr_->DebugString().c_str(), value_);
+    return absl::StrFormat("MaxCstIntExpr(%s, %d)", expr_->DebugString(),
+                           value_);
   }
 
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
@@ -5889,19 +5853,15 @@ class SimpleConvexPiecewiseExpr : public BaseIntExpr {
   }
 
   std::string name() const override {
-    return StringPrintf("ConvexPiecewiseExpr(%s, ec = %" GG_LL_FORMAT
-                        "d, ed = %" GG_LL_FORMAT "d, ld = %" GG_LL_FORMAT
-                        "d, lc = %" GG_LL_FORMAT "d)",
-                        expr_->name().c_str(), early_cost_, early_date_,
-                        late_date_, late_cost_);
+    return absl::StrFormat(
+        "ConvexPiecewiseExpr(%s, ec = %d, ed = %d, ld = %d, lc = %d)",
+        expr_->name(), early_cost_, early_date_, late_date_, late_cost_);
   }
 
   std::string DebugString() const override {
-    return StringPrintf("ConvexPiecewiseExpr(%s, ec = %" GG_LL_FORMAT
-                        "d, ed = %" GG_LL_FORMAT "d, ld = %" GG_LL_FORMAT
-                        "d, lc = %" GG_LL_FORMAT "d)",
-                        expr_->DebugString().c_str(), early_cost_, early_date_,
-                        late_date_, late_cost_);
+    return absl::StrFormat(
+        "ConvexPiecewiseExpr(%s, ec = %d, ed = %d, ld = %d, lc = %d)",
+        expr_->DebugString(), early_cost_, early_date_, late_date_, late_cost_);
   }
 
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
@@ -5977,15 +5937,13 @@ class SemiContinuousExpr : public BaseIntExpr {
   }
 
   std::string name() const override {
-    return StringPrintf("SemiContinuous(%s, fixed_charge = %" GG_LL_FORMAT
-                        "d, step = %" GG_LL_FORMAT "d)",
-                        expr_->name().c_str(), fixed_charge_, step_);
+    return absl::StrFormat("SemiContinuous(%s, fixed_charge = %d, step = %d)",
+                           expr_->name(), fixed_charge_, step_);
   }
 
   std::string DebugString() const override {
-    return StringPrintf("SemiContinuous(%s, fixed_charge = %" GG_LL_FORMAT
-                        "d, step = %" GG_LL_FORMAT "d)",
-                        expr_->DebugString().c_str(), fixed_charge_, step_);
+    return absl::StrFormat("SemiContinuous(%s, fixed_charge = %d, step = %d)",
+                           expr_->DebugString(), fixed_charge_, step_);
   }
 
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
@@ -6048,15 +6006,13 @@ class SemiContinuousStepOneExpr : public BaseIntExpr {
   }
 
   std::string name() const override {
-    return StringPrintf(
-        "SemiContinuousStepOne(%s, fixed_charge = %" GG_LL_FORMAT "d)",
-        expr_->name().c_str(), fixed_charge_);
+    return absl::StrFormat("SemiContinuousStepOne(%s, fixed_charge = %d)",
+                           expr_->name(), fixed_charge_);
   }
 
   std::string DebugString() const override {
-    return StringPrintf(
-        "SemiContinuousStepOne(%s, fixed_charge = %" GG_LL_FORMAT "d)",
-        expr_->DebugString().c_str(), fixed_charge_);
+    return absl::StrFormat("SemiContinuousStepOne(%s, fixed_charge = %d)",
+                           expr_->DebugString(), fixed_charge_);
   }
 
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
@@ -6116,15 +6072,13 @@ class SemiContinuousStepZeroExpr : public BaseIntExpr {
   }
 
   std::string name() const override {
-    return StringPrintf(
-        "SemiContinuousStepZero(%s, fixed_charge = %" GG_LL_FORMAT "d)",
-        expr_->name().c_str(), fixed_charge_);
+    return absl::StrFormat("SemiContinuousStepZero(%s, fixed_charge = %d)",
+                           expr_->name(), fixed_charge_);
   }
 
   std::string DebugString() const override {
-    return StringPrintf(
-        "SemiContinuousStepZero(%s, fixed_charge = %" GG_LL_FORMAT "d)",
-        expr_->DebugString().c_str(), fixed_charge_);
+    return absl::StrFormat("SemiContinuousStepZero(%s, fixed_charge = %d)",
+                           expr_->DebugString(), fixed_charge_);
   }
 
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }
@@ -6167,8 +6121,8 @@ class LinkExprAndVar : public CastConstraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("cast(%s, %s)", expr_->DebugString().c_str(),
-                        target_var_->DebugString().c_str());
+    return absl::StrFormat("cast(%s, %s)", expr_->DebugString(),
+                           target_var_->DebugString());
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -6271,9 +6225,9 @@ class ExprWithEscapeValue : public BaseIntExpr {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("ConditionExpr(%s, %s, %" GG_LL_FORMAT "d)",
-                        condition_->DebugString().c_str(),
-                        expression_->DebugString().c_str(), unperformed_value_);
+    return absl::StrFormat("ConditionExpr(%s, %s, %d)",
+                           condition_->DebugString(),
+                           expression_->DebugString(), unperformed_value_);
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -6336,8 +6290,8 @@ class LinkExprAndDomainIntVar : public CastConstraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("cast(%s, %s)", expr_->DebugString().c_str(),
-                        target_var_->DebugString().c_str());
+    return absl::StrFormat("cast(%s, %s)", expr_->DebugString(),
+                           target_var_->DebugString());
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -6432,7 +6386,7 @@ IntVar* Solver::MakeIntVar(const std::vector<int64>& values,
   if (values.size() == 1) return MakeIntConst(values[0], name);
   // Sort and remove duplicates.
   std::vector<int64> unique_sorted_values = values;
-  STLSortAndRemoveDuplicates(&unique_sorted_values);
+  gtl::STLSortAndRemoveDuplicates(&unique_sorted_values);
   // Case when we have a single value, after clean-up.
   if (unique_sorted_values.size() == 1) return MakeIntConst(values[0], name);
   // Case when the values are a dense interval of integers.
@@ -6480,7 +6434,8 @@ IntVar* Solver::MakeIntVar(const std::vector<int64>& values) {
   return MakeIntVar(values, "");
 }
 
-IntVar* Solver::MakeIntVar(const std::vector<int>& values, const std::string& name) {
+IntVar* Solver::MakeIntVar(const std::vector<int>& values,
+                           const std::string& name) {
   return MakeIntVar(ToInt64Vector(values), name);
 }
 
@@ -6513,15 +6468,16 @@ std::string IndexedName(const std::string& prefix, int index, int max_index) {
 #else
   const int digits = max_index > 0 ? static_cast<int>(log10(max_index)) + 1: 1;
 #endif
-  return StringPrintf("%s%0*d", prefix.c_str(), digits, index);
+  return absl::StrFormat("%s%0*d", prefix, digits, index);
 #else
-  return StrCat(prefix, index);
+  return absl::StrCat(prefix, index);
 #endif
 }
 }  // namespace
 
 void Solver::MakeIntVarArray(int var_count, int64 vmin, int64 vmax,
-                             const std::string& name, std::vector<IntVar*>* vars) {
+                             const std::string& name,
+                             std::vector<IntVar*>* vars) {
   for (int i = 0; i < var_count; ++i) {
     vars->push_back(MakeIntVar(vmin, vmax, IndexedName(name, i, var_count)));
   }
@@ -6571,65 +6527,66 @@ void Solver::InitCachedIntConstants() {
   }
 }
 
-IntExpr* Solver::MakeSum(IntExpr* const l, IntExpr* const r) {
-  CHECK_EQ(this, l->solver());
-  CHECK_EQ(this, r->solver());
-  if (r->Bound()) {
-    return MakeSum(l, r->Min());
+IntExpr* Solver::MakeSum(IntExpr* const left, IntExpr* const right) {
+  CHECK_EQ(this, left->solver());
+  CHECK_EQ(this, right->solver());
+  if (right->Bound()) {
+    return MakeSum(left, right->Min());
   }
-  if (l->Bound()) {
-    return MakeSum(r, l->Min());
+  if (left->Bound()) {
+    return MakeSum(right, left->Min());
   }
-  if (l == r) {
-    return MakeProd(l, 2);
+  if (left == right) {
+    return MakeProd(left, 2);
   }
-  IntExpr* cache =
-      model_cache_->FindExprExprExpression(l, r, ModelCache::EXPR_EXPR_SUM);
+  IntExpr* cache = model_cache_->FindExprExprExpression(
+      left, right, ModelCache::EXPR_EXPR_SUM);
   if (cache == nullptr) {
-    cache =
-        model_cache_->FindExprExprExpression(r, l, ModelCache::EXPR_EXPR_SUM);
+    cache = model_cache_->FindExprExprExpression(right, left,
+                                                 ModelCache::EXPR_EXPR_SUM);
   }
   if (cache != nullptr) {
     return cache;
   } else {
     IntExpr* const result =
-        AddOverflows(l->Max(), r->Max()) || AddOverflows(l->Min(), r->Min())
-            ? RegisterIntExpr(RevAlloc(new SafePlusIntExpr(this, l, r)))
-            : RegisterIntExpr(RevAlloc(new PlusIntExpr(this, l, r)));
-    model_cache_->InsertExprExprExpression(result, l, r,
+        AddOverflows(left->Max(), right->Max()) ||
+                AddOverflows(left->Min(), right->Min())
+            ? RegisterIntExpr(RevAlloc(new SafePlusIntExpr(this, left, right)))
+            : RegisterIntExpr(RevAlloc(new PlusIntExpr(this, left, right)));
+    model_cache_->InsertExprExprExpression(result, left, right,
                                            ModelCache::EXPR_EXPR_SUM);
     return result;
   }
 }
 
-IntExpr* Solver::MakeSum(IntExpr* const e, int64 v) {
-  CHECK_EQ(this, e->solver());
-  if (e->Bound()) {
-    return MakeIntConst(e->Min() + v);
+IntExpr* Solver::MakeSum(IntExpr* const expr, int64 value) {
+  CHECK_EQ(this, expr->solver());
+  if (expr->Bound()) {
+    return MakeIntConst(expr->Min() + value);
   }
-  if (v == 0) {
-    return e;
+  if (value == 0) {
+    return expr;
   }
-  IntExpr* result =
-      Cache()->FindExprConstantExpression(e, v, ModelCache::EXPR_CONSTANT_SUM);
+  IntExpr* result = Cache()->FindExprConstantExpression(
+      expr, value, ModelCache::EXPR_CONSTANT_SUM);
   if (result == nullptr) {
-    if (e->IsVar() && !AddOverflows(v, e->Max()) &&
-        !AddOverflows(v, e->Min())) {
-      IntVar* const var = e->Var();
+    if (expr->IsVar() && !AddOverflows(value, expr->Max()) &&
+        !AddOverflows(value, expr->Min())) {
+      IntVar* const var = expr->Var();
       switch (var->VarType()) {
         case DOMAIN_INT_VAR: {
           result = RegisterIntExpr(RevAlloc(new PlusCstDomainIntVar(
-              this, reinterpret_cast<DomainIntVar*>(var), v)));
+              this, reinterpret_cast<DomainIntVar*>(var), value)));
           break;
         }
         case CONST_VAR: {
-          result = RegisterIntExpr(MakeIntConst(var->Min() + v));
+          result = RegisterIntExpr(MakeIntConst(var->Min() + value));
           break;
         }
         case VAR_ADD_CST: {
           PlusCstVar* const add_var = reinterpret_cast<PlusCstVar*>(var);
           IntVar* const sub_var = add_var->SubVar();
-          const int64 new_constant = v + add_var->Constant();
+          const int64 new_constant = value + add_var->Constant();
           if (new_constant == 0) {
             result = sub_var;
           } else {
@@ -6648,7 +6605,7 @@ IntExpr* Solver::MakeSum(IntExpr* const e, int64 v) {
         case CST_SUB_VAR: {
           SubCstIntVar* const add_var = reinterpret_cast<SubCstIntVar*>(var);
           IntVar* const sub_var = add_var->SubVar();
-          const int64 new_constant = v + add_var->Constant();
+          const int64 new_constant = value + add_var->Constant();
           result = RegisterIntExpr(
               RevAlloc(new SubCstIntVar(this, sub_var, new_constant)));
           break;
@@ -6657,36 +6614,37 @@ IntExpr* Solver::MakeSum(IntExpr* const e, int64 v) {
           OppIntVar* const add_var = reinterpret_cast<OppIntVar*>(var);
           IntVar* const sub_var = add_var->SubVar();
           result =
-              RegisterIntExpr(RevAlloc(new SubCstIntVar(this, sub_var, v)));
+              RegisterIntExpr(RevAlloc(new SubCstIntVar(this, sub_var, value)));
           break;
         }
         default:
-          result = RegisterIntExpr(RevAlloc(new PlusCstIntVar(this, var, v)));
+          result =
+              RegisterIntExpr(RevAlloc(new PlusCstIntVar(this, var, value)));
       }
     } else {
-      result = RegisterIntExpr(RevAlloc(new PlusIntCstExpr(this, e, v)));
+      result = RegisterIntExpr(RevAlloc(new PlusIntCstExpr(this, expr, value)));
     }
-    Cache()->InsertExprConstantExpression(result, e, v,
+    Cache()->InsertExprConstantExpression(result, expr, value,
                                           ModelCache::EXPR_CONSTANT_SUM);
   }
   return result;
 }
 
-IntExpr* Solver::MakeDifference(IntExpr* const l, IntExpr* const r) {
-  CHECK_EQ(this, l->solver());
-  CHECK_EQ(this, r->solver());
-  if (l->Bound()) {
-    return MakeDifference(l->Min(), r);
+IntExpr* Solver::MakeDifference(IntExpr* const left, IntExpr* const right) {
+  CHECK_EQ(this, left->solver());
+  CHECK_EQ(this, right->solver());
+  if (left->Bound()) {
+    return MakeDifference(left->Min(), right);
   }
-  if (r->Bound()) {
-    return MakeSum(l, -r->Min());
+  if (right->Bound()) {
+    return MakeSum(left, -right->Min());
   }
   IntExpr* sub_left = nullptr;
   IntExpr* sub_right = nullptr;
   int64 left_coef = 1;
   int64 right_coef = 1;
-  if (IsProduct(l, &sub_left, &left_coef) &&
-      IsProduct(r, &sub_right, &right_coef)) {
+  if (IsProduct(left, &sub_left, &left_coef) &&
+      IsProduct(right, &sub_right, &right_coef)) {
     const int64 abs_gcd =
         MathUtil::GCD64(std::abs(left_coef), std::abs(right_coef));
     if (abs_gcd != 0 && abs_gcd != 1) {
@@ -6696,41 +6654,42 @@ IntExpr* Solver::MakeDifference(IntExpr* const l, IntExpr* const r) {
     }
   }
 
-  IntExpr* result =
-      Cache()->FindExprExprExpression(l, r, ModelCache::EXPR_EXPR_DIFFERENCE);
+  IntExpr* result = Cache()->FindExprExprExpression(
+      left, right, ModelCache::EXPR_EXPR_DIFFERENCE);
   if (result == nullptr) {
-    if (!SubOverflows(l->Min(), r->Max()) &&
-        !SubOverflows(l->Max(), r->Min())) {
-      result = RegisterIntExpr(RevAlloc(new SubIntExpr(this, l, r)));
+    if (!SubOverflows(left->Min(), right->Max()) &&
+        !SubOverflows(left->Max(), right->Min())) {
+      result = RegisterIntExpr(RevAlloc(new SubIntExpr(this, left, right)));
     } else {
-      result = RegisterIntExpr(RevAlloc(new SafeSubIntExpr(this, l, r)));
+      result = RegisterIntExpr(RevAlloc(new SafeSubIntExpr(this, left, right)));
     }
-    Cache()->InsertExprExprExpression(result, l, r,
+    Cache()->InsertExprExprExpression(result, left, right,
                                       ModelCache::EXPR_EXPR_DIFFERENCE);
   }
   return result;
 }
 
-// warning: this is 'v - e'.
-IntExpr* Solver::MakeDifference(int64 v, IntExpr* const e) {
-  CHECK_EQ(this, e->solver());
-  if (e->Bound()) {
-    return MakeIntConst(v - e->Min());
+// warning: this is 'value - expr'.
+IntExpr* Solver::MakeDifference(int64 value, IntExpr* const expr) {
+  CHECK_EQ(this, expr->solver());
+  if (expr->Bound()) {
+    return MakeIntConst(value - expr->Min());
   }
-  if (v == 0) {
-    return MakeOpposite(e);
+  if (value == 0) {
+    return MakeOpposite(expr);
   }
   IntExpr* result = Cache()->FindExprConstantExpression(
-      e, v, ModelCache::EXPR_CONSTANT_DIFFERENCE);
+      expr, value, ModelCache::EXPR_CONSTANT_DIFFERENCE);
   if (result == nullptr) {
-    if (e->IsVar() && e->Min() != kint64min && !SubOverflows(v, e->Min()) &&
-        !SubOverflows(v, e->Max())) {
-      IntVar* const var = e->Var();
+    if (expr->IsVar() && expr->Min() != kint64min &&
+        !SubOverflows(value, expr->Min()) &&
+        !SubOverflows(value, expr->Max())) {
+      IntVar* const var = expr->Var();
       switch (var->VarType()) {
         case VAR_ADD_CST: {
           PlusCstVar* const add_var = reinterpret_cast<PlusCstVar*>(var);
           IntVar* const sub_var = add_var->SubVar();
-          const int64 new_constant = v - add_var->Constant();
+          const int64 new_constant = value - add_var->Constant();
           if (new_constant == 0) {
             result = sub_var;
           } else {
@@ -6742,85 +6701,87 @@ IntExpr* Solver::MakeDifference(int64 v, IntExpr* const e) {
         case CST_SUB_VAR: {
           SubCstIntVar* const add_var = reinterpret_cast<SubCstIntVar*>(var);
           IntVar* const sub_var = add_var->SubVar();
-          const int64 new_constant = v - add_var->Constant();
+          const int64 new_constant = value - add_var->Constant();
           result = MakeSum(sub_var, new_constant);
           break;
         }
         case OPP_VAR: {
           OppIntVar* const add_var = reinterpret_cast<OppIntVar*>(var);
           IntVar* const sub_var = add_var->SubVar();
-          result = MakeSum(sub_var, v);
+          result = MakeSum(sub_var, value);
           break;
         }
         default:
-          result = RegisterIntExpr(RevAlloc(new SubCstIntVar(this, var, v)));
+          result =
+              RegisterIntExpr(RevAlloc(new SubCstIntVar(this, var, value)));
       }
     } else {
-      result = RegisterIntExpr(RevAlloc(new SubIntCstExpr(this, e, v)));
+      result = RegisterIntExpr(RevAlloc(new SubIntCstExpr(this, expr, value)));
     }
-    Cache()->InsertExprConstantExpression(result, e, v,
+    Cache()->InsertExprConstantExpression(result, expr, value,
                                           ModelCache::EXPR_CONSTANT_DIFFERENCE);
   }
   return result;
 }
 
-IntExpr* Solver::MakeOpposite(IntExpr* const e) {
-  CHECK_EQ(this, e->solver());
-  if (e->Bound()) {
-    return MakeIntConst(-e->Min());
+IntExpr* Solver::MakeOpposite(IntExpr* const expr) {
+  CHECK_EQ(this, expr->solver());
+  if (expr->Bound()) {
+    return MakeIntConst(-expr->Min());
   }
-  IntExpr* result = Cache()->FindExprExpression(e, ModelCache::EXPR_OPPOSITE);
+  IntExpr* result =
+      Cache()->FindExprExpression(expr, ModelCache::EXPR_OPPOSITE);
   if (result == nullptr) {
-    if (e->IsVar()) {
-      result = RegisterIntVar(RevAlloc(new OppIntExpr(this, e))->Var());
+    if (expr->IsVar()) {
+      result = RegisterIntVar(RevAlloc(new OppIntExpr(this, expr))->Var());
     } else {
-      result = RegisterIntExpr(RevAlloc(new OppIntExpr(this, e)));
+      result = RegisterIntExpr(RevAlloc(new OppIntExpr(this, expr)));
     }
-    Cache()->InsertExprExpression(result, e, ModelCache::EXPR_OPPOSITE);
+    Cache()->InsertExprExpression(result, expr, ModelCache::EXPR_OPPOSITE);
   }
   return result;
 }
 
-IntExpr* Solver::MakeProd(IntExpr* const e, int64 v) {
-  CHECK_EQ(this, e->solver());
-  IntExpr* result =
-      Cache()->FindExprConstantExpression(e, v, ModelCache::EXPR_CONSTANT_PROD);
+IntExpr* Solver::MakeProd(IntExpr* const expr, int64 value) {
+  CHECK_EQ(this, expr->solver());
+  IntExpr* result = Cache()->FindExprConstantExpression(
+      expr, value, ModelCache::EXPR_CONSTANT_PROD);
   if (result != nullptr) {
     return result;
   } else {
-    IntExpr* expr = nullptr;
+    IntExpr* m_expr = nullptr;
     int64 coefficient = 1;
-    if (IsProduct(e, &expr, &coefficient)) {
-      coefficient *= v;
+    if (IsProduct(expr, &m_expr, &coefficient)) {
+      coefficient *= value;
     } else {
-      expr = e;
-      coefficient = v;
+      m_expr = expr;
+      coefficient = value;
     }
-    if (expr->Bound()) {
-      return MakeIntConst(coefficient * expr->Min());
+    if (m_expr->Bound()) {
+      return MakeIntConst(coefficient * m_expr->Min());
     } else if (coefficient == 1) {
-      return expr;
+      return m_expr;
     } else if (coefficient == -1) {
-      return MakeOpposite(expr);
+      return MakeOpposite(m_expr);
     } else if (coefficient > 0) {
-      if (expr->Max() > kint64max / coefficient ||
-          expr->Min() < kint64min / coefficient) {
+      if (m_expr->Max() > kint64max / coefficient ||
+          m_expr->Min() < kint64min / coefficient) {
         result = RegisterIntExpr(
-            RevAlloc(new SafeTimesPosIntCstExpr(this, expr, coefficient)));
+            RevAlloc(new SafeTimesPosIntCstExpr(this, m_expr, coefficient)));
       } else {
         result = RegisterIntExpr(
-            RevAlloc(new TimesPosIntCstExpr(this, expr, coefficient)));
+            RevAlloc(new TimesPosIntCstExpr(this, m_expr, coefficient)));
       }
     } else if (coefficient == 0) {
       result = MakeIntConst(0);
     } else {  // coefficient < 0.
       result = RegisterIntExpr(
-          RevAlloc(new TimesIntNegCstExpr(this, expr, coefficient)));
+          RevAlloc(new TimesIntNegCstExpr(this, m_expr, coefficient)));
     }
-    if (expr->IsVar() && !FLAGS_cp_disable_expression_optimization) {
+    if (m_expr->IsVar() && !FLAGS_cp_disable_expression_optimization) {
       result = result->Var();
     }
-    Cache()->InsertExprConstantExpression(result, e, v,
+    Cache()->InsertExprConstantExpression(result, expr, value,
                                           ModelCache::EXPR_CONSTANT_PROD);
     return result;
   }
@@ -6870,81 +6831,84 @@ void ExtractProduct(IntExpr** const expr, int64* const coefficient,
 }
 }  // namespace
 
-IntExpr* Solver::MakeProd(IntExpr* const l, IntExpr* const r) {
-  if (l->Bound()) {
-    return MakeProd(r, l->Min());
+IntExpr* Solver::MakeProd(IntExpr* const left, IntExpr* const right) {
+  if (left->Bound()) {
+    return MakeProd(right, left->Min());
   }
 
-  if (r->Bound()) {
-    return MakeProd(l, r->Min());
+  if (right->Bound()) {
+    return MakeProd(left, right->Min());
   }
 
   // ----- Discover squares and powers -----
 
-  IntExpr* left = l;
-  IntExpr* right = r;
+  IntExpr* m_left = left;
+  IntExpr* m_right = right;
   int64 left_exponant = 1;
   int64 right_exponant = 1;
-  ExtractPower(&left, &left_exponant);
-  ExtractPower(&right, &right_exponant);
+  ExtractPower(&m_left, &left_exponant);
+  ExtractPower(&m_right, &right_exponant);
 
-  if (left == right) {
-    return MakePower(left, left_exponant + right_exponant);
+  if (m_left == m_right) {
+    return MakePower(m_left, left_exponant + right_exponant);
   }
 
   // ----- Discover nested products -----
 
-  left = l;
-  right = r;
+  m_left = left;
+  m_right = right;
   int64 coefficient = 1;
   bool modified = false;
 
-  ExtractProduct(&left, &coefficient, &modified);
-  ExtractProduct(&right, &coefficient, &modified);
+  ExtractProduct(&m_left, &coefficient, &modified);
+  ExtractProduct(&m_right, &coefficient, &modified);
   if (modified) {
-    return MakeProd(MakeProd(left, right), coefficient);
+    return MakeProd(MakeProd(m_left, m_right), coefficient);
   }
 
   // ----- Standard build -----
 
-  CHECK_EQ(this, l->solver());
-  CHECK_EQ(this, r->solver());
-  IntExpr* result =
-      model_cache_->FindExprExprExpression(l, r, ModelCache::EXPR_EXPR_PROD);
+  CHECK_EQ(this, left->solver());
+  CHECK_EQ(this, right->solver());
+  IntExpr* result = model_cache_->FindExprExprExpression(
+      left, right, ModelCache::EXPR_EXPR_PROD);
   if (result == nullptr) {
-    result =
-        model_cache_->FindExprExprExpression(r, l, ModelCache::EXPR_EXPR_PROD);
+    result = model_cache_->FindExprExprExpression(right, left,
+                                                  ModelCache::EXPR_EXPR_PROD);
   }
   if (result != nullptr) {
     return result;
   }
-  if (l->IsVar() && l->Var()->VarType() == BOOLEAN_VAR) {
-    if (r->Min() >= 0) {
+  if (left->IsVar() && left->Var()->VarType() == BOOLEAN_VAR) {
+    if (right->Min() >= 0) {
       result = RegisterIntExpr(RevAlloc(new TimesBooleanPosIntExpr(
-          this, reinterpret_cast<BooleanVar*>(l), r)));
+          this, reinterpret_cast<BooleanVar*>(left), right)));
     } else {
-      result = RegisterIntExpr(RevAlloc(
-          new TimesBooleanIntExpr(this, reinterpret_cast<BooleanVar*>(l), r)));
+      result = RegisterIntExpr(RevAlloc(new TimesBooleanIntExpr(
+          this, reinterpret_cast<BooleanVar*>(left), right)));
     }
-  } else if (r->IsVar() &&
-             reinterpret_cast<IntVar*>(r)->VarType() == BOOLEAN_VAR) {
-    if (l->Min() >= 0) {
+  } else if (right->IsVar() &&
+             reinterpret_cast<IntVar*>(right)->VarType() == BOOLEAN_VAR) {
+    if (left->Min() >= 0) {
       result = RegisterIntExpr(RevAlloc(new TimesBooleanPosIntExpr(
-          this, reinterpret_cast<BooleanVar*>(r), l)));
+          this, reinterpret_cast<BooleanVar*>(right), left)));
     } else {
-      result = RegisterIntExpr(RevAlloc(
-          new TimesBooleanIntExpr(this, reinterpret_cast<BooleanVar*>(r), l)));
+      result = RegisterIntExpr(RevAlloc(new TimesBooleanIntExpr(
+          this, reinterpret_cast<BooleanVar*>(right), left)));
     }
-  } else if (l->Min() >= 0 && r->Min() >= 0) {
-    if (CapProd(l->Max(), r->Max()) == kint64max) {  // Potential overflow.
-      result = RegisterIntExpr(RevAlloc(new SafeTimesPosIntExpr(this, l, r)));
+  } else if (left->Min() >= 0 && right->Min() >= 0) {
+    if (CapProd(left->Max(), right->Max()) ==
+        kint64max) {  // Potential overflow.
+      result =
+          RegisterIntExpr(RevAlloc(new SafeTimesPosIntExpr(this, left, right)));
     } else {
-      result = RegisterIntExpr(RevAlloc(new TimesPosIntExpr(this, l, r)));
+      result =
+          RegisterIntExpr(RevAlloc(new TimesPosIntExpr(this, left, right)));
     }
   } else {
-    result = RegisterIntExpr(RevAlloc(new TimesIntExpr(this, l, r)));
+    result = RegisterIntExpr(RevAlloc(new TimesIntExpr(this, left, right)));
   }
-  model_cache_->InsertExprExprExpression(result, l, r,
+  model_cache_->InsertExprExprExpression(result, left, right,
                                          ModelCache::EXPR_EXPR_PROD);
   return result;
 }
@@ -6987,32 +6951,32 @@ IntExpr* Solver::MakeDiv(IntExpr* const numerator, IntExpr* const denominator) {
   return result;
 }
 
-IntExpr* Solver::MakeDiv(IntExpr* const e, int64 v) {
-  CHECK(e != nullptr);
-  CHECK_EQ(this, e->solver());
-  if (e->Bound()) {
-    return MakeIntConst(e->Min() / v);
-  } else if (v == 1) {
-    return e;
-  } else if (v == -1) {
-    return MakeOpposite(e);
-  } else if (v > 0) {
-    return RegisterIntExpr(RevAlloc(new DivPosIntCstExpr(this, e, v)));
-  } else if (v == 0) {
+IntExpr* Solver::MakeDiv(IntExpr* const expr, int64 value) {
+  CHECK(expr != nullptr);
+  CHECK_EQ(this, expr->solver());
+  if (expr->Bound()) {
+    return MakeIntConst(expr->Min() / value);
+  } else if (value == 1) {
+    return expr;
+  } else if (value == -1) {
+    return MakeOpposite(expr);
+  } else if (value > 0) {
+    return RegisterIntExpr(RevAlloc(new DivPosIntCstExpr(this, expr, value)));
+  } else if (value == 0) {
     LOG(FATAL) << "Cannot divide by 0";
     return nullptr;
   } else {
     return RegisterIntExpr(
-        MakeOpposite(RevAlloc(new DivPosIntCstExpr(this, e, -v))));
+        MakeOpposite(RevAlloc(new DivPosIntCstExpr(this, expr, -value))));
     // TODO(user) : implement special case.
   }
 }
 
-Constraint* Solver::MakeAbsEquality(IntVar* const sub, IntVar* const abs_var) {
-  if (Cache()->FindExprExpression(sub, ModelCache::EXPR_ABS) == nullptr) {
-    Cache()->InsertExprExpression(abs_var, sub, ModelCache::EXPR_ABS);
+Constraint* Solver::MakeAbsEquality(IntVar* const var, IntVar* const abs_var) {
+  if (Cache()->FindExprExpression(var, ModelCache::EXPR_ABS) == nullptr) {
+    Cache()->InsertExprExpression(abs_var, var, ModelCache::EXPR_ABS);
   }
-  return RevAlloc(new IntAbsConstraint(this, sub, abs_var));
+  return RevAlloc(new IntAbsConstraint(this, var, abs_var));
 }
 
 IntExpr* Solver::MakeAbs(IntExpr* const e) {
@@ -7036,29 +7000,29 @@ IntExpr* Solver::MakeAbs(IntExpr* const e) {
   return result;
 }
 
-IntExpr* Solver::MakeSquare(IntExpr* const e) {
-  CHECK_EQ(this, e->solver());
-  if (e->Bound()) {
-    const int64 v = e->Min();
+IntExpr* Solver::MakeSquare(IntExpr* const expr) {
+  CHECK_EQ(this, expr->solver());
+  if (expr->Bound()) {
+    const int64 v = expr->Min();
     return MakeIntConst(v * v);
   }
-  IntExpr* result = Cache()->FindExprExpression(e, ModelCache::EXPR_SQUARE);
+  IntExpr* result = Cache()->FindExprExpression(expr, ModelCache::EXPR_SQUARE);
   if (result == nullptr) {
-    if (e->Min() >= 0) {
-      result = RegisterIntExpr(RevAlloc(new PosIntSquare(this, e)));
+    if (expr->Min() >= 0) {
+      result = RegisterIntExpr(RevAlloc(new PosIntSquare(this, expr)));
     } else {
-      result = RegisterIntExpr(RevAlloc(new IntSquare(this, e)));
+      result = RegisterIntExpr(RevAlloc(new IntSquare(this, expr)));
     }
-    Cache()->InsertExprExpression(result, e, ModelCache::EXPR_SQUARE);
+    Cache()->InsertExprExpression(result, expr, ModelCache::EXPR_SQUARE);
   }
   return result;
 }
 
-IntExpr* Solver::MakePower(IntExpr* const e, int64 n) {
-  CHECK_EQ(this, e->solver());
+IntExpr* Solver::MakePower(IntExpr* const expr, int64 n) {
+  CHECK_EQ(this, expr->solver());
   CHECK_GE(n, 0);
-  if (e->Bound()) {
-    const int64 v = e->Min();
+  if (expr->Bound()) {
+    const int64 v = expr->Min();
     if (v >= OverflowLimit(n)) {  // Overflow.
       return MakeIntConst(kint64max);
     }
@@ -7068,119 +7032,120 @@ IntExpr* Solver::MakePower(IntExpr* const e, int64 n) {
     case 0:
       return MakeIntConst(1);
     case 1:
-      return e;
+      return expr;
     case 2:
-      return MakeSquare(e);
+      return MakeSquare(expr);
     default: {
       IntExpr* result = nullptr;
       if (n % 2 == 0) {  // even.
-        if (e->Min() >= 0) {
-          result = RegisterIntExpr(RevAlloc(new PosIntEvenPower(this, e, n)));
+        if (expr->Min() >= 0) {
+          result =
+              RegisterIntExpr(RevAlloc(new PosIntEvenPower(this, expr, n)));
         } else {
-          result = RegisterIntExpr(RevAlloc(new IntEvenPower(this, e, n)));
+          result = RegisterIntExpr(RevAlloc(new IntEvenPower(this, expr, n)));
         }
       } else {
-        result = RegisterIntExpr(RevAlloc(new IntOddPower(this, e, n)));
+        result = RegisterIntExpr(RevAlloc(new IntOddPower(this, expr, n)));
       }
       return result;
     }
   }
 }
 
-IntExpr* Solver::MakeMin(IntExpr* const l, IntExpr* const r) {
-  CHECK_EQ(this, l->solver());
-  CHECK_EQ(this, r->solver());
-  if (l->Bound()) {
-    return MakeMin(r, l->Min());
+IntExpr* Solver::MakeMin(IntExpr* const left, IntExpr* const right) {
+  CHECK_EQ(this, left->solver());
+  CHECK_EQ(this, right->solver());
+  if (left->Bound()) {
+    return MakeMin(right, left->Min());
   }
-  if (r->Bound()) {
-    return MakeMin(l, r->Min());
+  if (right->Bound()) {
+    return MakeMin(left, right->Min());
   }
-  if (l->Min() >= r->Max()) {
-    return r;
+  if (left->Min() >= right->Max()) {
+    return right;
   }
-  if (r->Min() >= l->Max()) {
-    return l;
+  if (right->Min() >= left->Max()) {
+    return left;
   }
-  return RegisterIntExpr(RevAlloc(new MinIntExpr(this, l, r)));
+  return RegisterIntExpr(RevAlloc(new MinIntExpr(this, left, right)));
 }
 
-IntExpr* Solver::MakeMin(IntExpr* const e, int64 v) {
-  CHECK_EQ(this, e->solver());
-  if (v <= e->Min()) {
-    return MakeIntConst(v);
+IntExpr* Solver::MakeMin(IntExpr* const expr, int64 value) {
+  CHECK_EQ(this, expr->solver());
+  if (value <= expr->Min()) {
+    return MakeIntConst(value);
   }
-  if (e->Bound()) {
-    return MakeIntConst(std::min(e->Min(), v));
+  if (expr->Bound()) {
+    return MakeIntConst(std::min(expr->Min(), value));
   }
-  if (e->Max() <= v) {
-    return e;
+  if (expr->Max() <= value) {
+    return expr;
   }
-  return RegisterIntExpr(RevAlloc(new MinCstIntExpr(this, e, v)));
+  return RegisterIntExpr(RevAlloc(new MinCstIntExpr(this, expr, value)));
 }
 
-IntExpr* Solver::MakeMin(IntExpr* const e, int v) {
-  return MakeMin(e, static_cast<int64>(v));
+IntExpr* Solver::MakeMin(IntExpr* const expr, int value) {
+  return MakeMin(expr, static_cast<int64>(value));
 }
 
-IntExpr* Solver::MakeMax(IntExpr* const l, IntExpr* const r) {
-  CHECK_EQ(this, l->solver());
-  CHECK_EQ(this, r->solver());
-  if (l->Bound()) {
-    return MakeMax(r, l->Min());
+IntExpr* Solver::MakeMax(IntExpr* const left, IntExpr* const right) {
+  CHECK_EQ(this, left->solver());
+  CHECK_EQ(this, right->solver());
+  if (left->Bound()) {
+    return MakeMax(right, left->Min());
   }
-  if (r->Bound()) {
-    return MakeMax(l, r->Min());
+  if (right->Bound()) {
+    return MakeMax(left, right->Min());
   }
-  if (l->Min() >= r->Max()) {
-    return l;
+  if (left->Min() >= right->Max()) {
+    return left;
   }
-  if (r->Min() >= l->Max()) {
-    return r;
+  if (right->Min() >= left->Max()) {
+    return right;
   }
-  return RegisterIntExpr(RevAlloc(new MaxIntExpr(this, l, r)));
+  return RegisterIntExpr(RevAlloc(new MaxIntExpr(this, left, right)));
 }
 
-IntExpr* Solver::MakeMax(IntExpr* const e, int64 v) {
-  CHECK_EQ(this, e->solver());
-  if (e->Bound()) {
-    return MakeIntConst(std::max(e->Min(), v));
+IntExpr* Solver::MakeMax(IntExpr* const expr, int64 value) {
+  CHECK_EQ(this, expr->solver());
+  if (expr->Bound()) {
+    return MakeIntConst(std::max(expr->Min(), value));
   }
-  if (v <= e->Min()) {
-    return e;
+  if (value <= expr->Min()) {
+    return expr;
   }
-  if (e->Max() <= v) {
-    return MakeIntConst(v);
+  if (expr->Max() <= value) {
+    return MakeIntConst(value);
   }
-  return RegisterIntExpr(RevAlloc(new MaxCstIntExpr(this, e, v)));
+  return RegisterIntExpr(RevAlloc(new MaxCstIntExpr(this, expr, value)));
 }
 
-IntExpr* Solver::MakeMax(IntExpr* const e, int v) {
-  return MakeMax(e, static_cast<int64>(v));
+IntExpr* Solver::MakeMax(IntExpr* const expr, int value) {
+  return MakeMax(expr, static_cast<int64>(value));
 }
 
-IntExpr* Solver::MakeConvexPiecewiseExpr(IntExpr* e, int64 early_cost,
+IntExpr* Solver::MakeConvexPiecewiseExpr(IntExpr* expr, int64 early_cost,
                                          int64 early_date, int64 late_date,
                                          int64 late_cost) {
   return RegisterIntExpr(RevAlloc(new SimpleConvexPiecewiseExpr(
-      this, e, early_cost, early_date, late_date, late_cost)));
+      this, expr, early_cost, early_date, late_date, late_cost)));
 }
 
-IntExpr* Solver::MakeSemiContinuousExpr(IntExpr* const e, int64 fixed_charge,
+IntExpr* Solver::MakeSemiContinuousExpr(IntExpr* const expr, int64 fixed_charge,
                                         int64 step) {
   if (step == 0) {
     if (fixed_charge == 0) {
       return MakeIntConst(0LL);
     } else {
       return RegisterIntExpr(
-          RevAlloc(new SemiContinuousStepZeroExpr(this, e, fixed_charge)));
+          RevAlloc(new SemiContinuousStepZeroExpr(this, expr, fixed_charge)));
     }
   } else if (step == 1) {
     return RegisterIntExpr(
-        RevAlloc(new SemiContinuousStepOneExpr(this, e, fixed_charge)));
+        RevAlloc(new SemiContinuousStepOneExpr(this, expr, fixed_charge)));
   } else {
     return RegisterIntExpr(
-        RevAlloc(new SemiContinuousExpr(this, e, fixed_charge, step)));
+        RevAlloc(new SemiContinuousExpr(this, expr, fixed_charge, step)));
   }
   // TODO(user) : benchmark with virtualization of
   // PosIntDivDown and PosIntDivUp - or function pointers.
@@ -7219,13 +7184,13 @@ class PiecewiseLinearExpr : public BaseIntExpr {
     expr_->SetRange(range.first, range.second);
   }
   std::string name() const override {
-    return StringPrintf("PiecewiseLinear(%s, f = %s)", expr_->name().c_str(),
-                        f_.DebugString().c_str());
+    return absl::StrFormat("PiecewiseLinear(%s, f = %s)", expr_->name(),
+                           f_.DebugString());
   }
 
   std::string DebugString() const override {
-    return StringPrintf("PiecewiseLinear(%s, f = %s)",
-                        expr_->DebugString().c_str(), f_.DebugString().c_str());
+    return absl::StrFormat("PiecewiseLinear(%s, f = %s)", expr_->DebugString(),
+                           f_.DebugString());
   }
 
   void WhenRange(Demon* d) override { expr_->WhenRange(d); }

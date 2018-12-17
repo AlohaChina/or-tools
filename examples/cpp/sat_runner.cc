@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,39 +11,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <csignal>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "absl/memory/memory.h"
+#include "absl/strings/match.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
+#include "examples/cpp/opb_reader.h"
+#include "examples/cpp/sat_cnf_reader.h"
+#include "google/protobuf/text_format.h"
+#include "ortools/algorithms/sparse_permutation.h"
 #include "ortools/base/commandlineflags.h"
-#include "ortools/base/commandlineflags.h"
+#include "ortools/base/file.h"
+#include "ortools/base/int_type.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
+#include "ortools/base/status.h"
 #include "ortools/base/strtoint.h"
 #include "ortools/base/timer.h"
-#include "ortools/base/file.h"
-#include "google/protobuf/descriptor.h"
-#include "google/protobuf/message.h"
-#include "google/protobuf/text_format.h"
-#include "ortools/base/stringpiece_utils.h"
-#include "ortools/base/strutil.h"
-#include "ortools/base/threadpool.h"
-#include "ortools/algorithms/sparse_permutation.h"
 #include "ortools/sat/boolean_problem.h"
+#include "ortools/sat/boolean_problem.pb.h"
 #include "ortools/sat/cp_model.pb.h"
 #include "ortools/sat/cp_model_solver.h"
-#include "ortools/sat/drat.h"
-#include "examples/cpp/opb_reader.h"
+#include "ortools/sat/drat_proof_handler.h"
+#include "ortools/sat/lp_utils.h"
+#include "ortools/sat/model.h"
 #include "ortools/sat/optimization.h"
-#include "examples/cpp/sat_cnf_reader.h"
-#include "ortools/base/join.h"
+#include "ortools/sat/pb_constraint.h"
+#include "ortools/sat/sat_base.h"
+#include "ortools/sat/sat_parameters.pb.h"
 #include "ortools/sat/sat_solver.h"
 #include "ortools/sat/simplification.h"
 #include "ortools/sat/symmetry.h"
 #include "ortools/util/file_util.h"
+#include "ortools/util/sigint.h"
 #include "ortools/util/time_limit.h"
-#include "ortools/base/random.h"
-#include "ortools/base/status.h"
 
 DEFINE_string(
     input, "",
@@ -108,7 +116,6 @@ DEFINE_bool(presolve, true,
 
 DEFINE_bool(probing, false, "If true, presolve the problem using probing.");
 
-
 DEFINE_bool(use_cp_model, true,
             "Whether to interpret everything as a CpModelProto or "
             "to read by default a CpModelProto.");
@@ -117,10 +124,6 @@ DEFINE_bool(reduce_memory_usage, false,
             "If true, do not keep a copy of the original problem in memory."
             "This reduce the memory usage, but disable the solution cheking at "
             "the end.");
-
-DEFINE_string(
-    drat_output, "",
-    "If non-empty, a proof in DRAT format will be written to this file.");
 
 namespace operations_research {
 namespace sat {
@@ -137,25 +140,31 @@ double GetScaledTrivialBestBound(const LinearBooleanProblem& problem) {
   return AddOffsetAndScaleObjectiveValue(problem, best_bound);
 }
 
-void LoadBooleanProblem(const std::string& filename, LinearBooleanProblem* problem,
-                        CpModelProto* cp_model) {
-  if (strings::EndsWith(filename, ".opb") ||
-      strings::EndsWith(filename, ".opb.bz2")) {
+bool LoadBooleanProblem(const std::string& filename,
+                        LinearBooleanProblem* problem, CpModelProto* cp_model) {
+  if (absl::EndsWith(filename, ".opb") ||
+      absl::EndsWith(filename, ".opb.bz2")) {
     OpbReader reader;
     if (!reader.Load(filename, problem)) {
       LOG(FATAL) << "Cannot load file '" << filename << "'.";
     }
-  } else if (strings::EndsWith(filename, ".cnf") ||
-             strings::EndsWith(filename, ".cnf.gz") ||
-             strings::EndsWith(filename, ".wcnf") ||
-             strings::EndsWith(filename, ".wcnf.gz")) {
+  } else if (absl::EndsWith(filename, ".cnf") ||
+             absl::EndsWith(filename, ".cnf.gz") ||
+             absl::EndsWith(filename, ".wcnf") ||
+             absl::EndsWith(filename, ".wcnf.gz")) {
     SatCnfReader reader;
     if (FLAGS_fu_malik || FLAGS_linear_scan || FLAGS_wpm1 || FLAGS_qmaxsat ||
         FLAGS_core_enc) {
       reader.InterpretCnfAsMaxSat(true);
     }
-    if (!reader.Load(filename, problem)) {
-      LOG(FATAL) << "Cannot load file '" << filename << "'.";
+    if (FLAGS_use_cp_model) {
+      if (!reader.Load(filename, cp_model)) {
+        LOG(FATAL) << "Cannot load file '" << filename << "'.";
+      }
+    } else {
+      if (!reader.Load(filename, problem)) {
+        LOG(FATAL) << "Cannot load file '" << filename << "'.";
+      }
     }
   } else if (FLAGS_use_cp_model) {
     LOG(INFO) << "Reading a CpModelProto.";
@@ -164,15 +173,17 @@ void LoadBooleanProblem(const std::string& filename, LinearBooleanProblem* probl
     LOG(INFO) << "Reading a LinearBooleanProblem.";
     *problem = ReadFileToProtoOrDie<LinearBooleanProblem>(filename);
   }
+  return true;
 }
 
 std::string SolutionString(const LinearBooleanProblem& problem,
-                      const std::vector<bool>& assignment) {
+                           const std::vector<bool>& assignment) {
   std::string output;
   BooleanVariable limit(problem.original_num_variables());
   for (BooleanVariable index(0); index < limit; ++index) {
     if (index > 0) output += " ";
-    StrAppend(&output, Literal(index, assignment[index.value()]).SignedValue());
+    absl::StrAppend(&output,
+                    Literal(index, assignment[index.value()]).SignedValue());
   }
   return output;
 }
@@ -190,35 +201,24 @@ int Run() {
 
   // Parse the --params flag.
   if (!FLAGS_params.empty()) {
-    CHECK(google::protobuf::TextFormat::MergeFromString(FLAGS_params, &parameters))
+    CHECK(google::protobuf::TextFormat::MergeFromString(FLAGS_params,
+                                                        &parameters))
         << FLAGS_params;
   }
-
 
   // Initialize the solver.
   std::unique_ptr<SatSolver> solver(new SatSolver());
   solver->SetParameters(parameters);
 
-  // Create a DratWriter?
-  std::unique_ptr<DratWriter> drat_writer;
-  if (!FLAGS_drat_output.empty()) {
-    File* output;
-    CHECK_OK(file::Open(FLAGS_drat_output, "w", &output, file::Defaults()));
-    drat_writer.reset(new DratWriter(/*in_binary_format=*/false, output));
-    solver->SetDratWriter(drat_writer.get());
-  }
-
-  // The global time limit.
-  std::unique_ptr<TimeLimit> time_limit(TimeLimit::FromParameters(parameters));
-
-  // Catch ^C.
-  bool interrupt_solve = false;
-  time_limit->RegisterExternalBooleanAsLimit(&interrupt_solve);
-
   // Read the problem.
   LinearBooleanProblem problem;
   CpModelProto cp_model;
-  LoadBooleanProblem(FLAGS_input, &problem, &cp_model);
+  if (!LoadBooleanProblem(FLAGS_input, &problem, &cp_model)) {
+    CpSolverResponse response;
+    response.set_status(CpSolverStatus::MODEL_INVALID);
+    LOG(INFO) << CpSolverResponseStats(response);
+    return EXIT_SUCCESS;
+  }
   if (FLAGS_use_cp_model && cp_model.variables_size() == 0) {
     LOG(INFO) << "Converting to CpModelProto ...";
     cp_model = BooleanProblemToCpModelproto(problem);
@@ -226,19 +226,32 @@ int Run() {
 
   // TODO(user): clean this hack. Ideally LinearBooleanProblem should be
   // completely replaced by the more general CpModelProto.
-  if (cp_model.variables_size() != 0) {
+  if (!cp_model.variables().empty()) {
+    problem.Clear();  // We no longer need it, release memory.
+    std::atomic<bool> stopped(false);
     Model model;
-    model.GetOrCreate<SatSolver>()->SetParameters(parameters);
-    model.SetSingleton(std::move(time_limit));
+    model.Add(NewSatParameters(parameters));
+    model.GetOrCreate<TimeLimit>()->RegisterExternalBooleanAsLimit(&stopped);
+    model.GetOrCreate<SigintHandler>()->Register(
+        [&stopped]() { stopped = true; });
     LOG(INFO) << CpModelStats(cp_model);
     const CpSolverResponse response = SolveCpModel(cp_model, &model);
     LOG(INFO) << CpSolverResponseStats(response);
 
+    if (!FLAGS_output.empty()) {
+      if (absl::EndsWith(FLAGS_output, ".txt")) {
+        CHECK_OK(file::SetTextProto(FLAGS_output, response, file::Defaults()));
+      } else {
+        CHECK_OK(
+            file::SetBinaryProto(FLAGS_output, response, file::Defaults()));
+      }
+    }
+
     // The SAT competition requires a particular exit code and since we don't
     // really use it for any other purpose, we comply.
-    if (response.status() == CpSolverStatus::MODEL_SAT) return 10;
-    if (response.status() == CpSolverStatus::MODEL_UNSAT) return 20;
-    return 0;
+    if (response.status() == CpSolverStatus::FEASIBLE) return 10;
+    if (response.status() == CpSolverStatus::INFEASIBLE) return 20;
+    return EXIT_SUCCESS;
   }
 
   if (FLAGS_strict_validity) {
@@ -282,10 +295,6 @@ int Run() {
     LOG(INFO) << "UNSAT when setting the objective constraint.";
   }
 
-  if (drat_writer != nullptr) {
-    drat_writer->SetNumVariables(solver->NumVariables());
-  }
-
   // Symmetries!
   //
   // TODO(user): To make this compatible with presolve, we just need to run
@@ -316,7 +325,7 @@ int Run() {
     }
     if (result == SatSolver::LIMIT_REACHED) {
       if (FLAGS_qmaxsat) {
-        solver.reset(new SatSolver());
+        solver = absl::make_unique<SatSolver>();
         solver->SetParameters(parameters);
         CHECK(LoadBooleanProblem(problem, solver.get()));
         result = SolveWithCardinalityEncoding(STDOUT_LOG, problem, solver.get(),
@@ -338,13 +347,15 @@ int Run() {
     parameters.set_log_search_progress(true);
     solver->SetParameters(parameters);
     if (FLAGS_presolve) {
-      result = SolveWithPresolve(&solver, &solution, drat_writer.get());
-      if (result == SatSolver::MODEL_SAT) {
+      std::unique_ptr<TimeLimit> time_limit =
+          TimeLimit::FromParameters(parameters);
+      result = SolveWithPresolve(&solver, time_limit.get(), &solution, nullptr);
+      if (result == SatSolver::FEASIBLE) {
         CHECK(IsAssignmentValid(problem, solution));
       }
     } else {
       result = solver->Solve();
-      if (result == SatSolver::MODEL_SAT) {
+      if (result == SatSolver::FEASIBLE) {
         ExtractAssignment(problem, *solver, &solution);
         CHECK(IsAssignmentValid(problem, solution));
       }
@@ -352,7 +363,7 @@ int Run() {
   }
 
   // Print the solution status.
-  if (result == SatSolver::MODEL_SAT) {
+  if (result == SatSolver::FEASIBLE) {
     if (FLAGS_fu_malik || FLAGS_linear_scan || FLAGS_wpm1 || FLAGS_core_enc) {
       printf("s OPTIMUM FOUND\n");
       CHECK(!solution.empty());
@@ -375,17 +386,17 @@ int Run() {
     }
     if (!FLAGS_output.empty()) {
       CHECK(!FLAGS_reduce_memory_usage) << "incompatible";
-      if (result == SatSolver::MODEL_SAT) {
+      if (result == SatSolver::FEASIBLE) {
         StoreAssignment(solver->Assignment(), problem.mutable_assignment());
       }
-      if (strings::EndsWith(FLAGS_output, ".txt")) {
+      if (absl::EndsWith(FLAGS_output, ".txt")) {
         CHECK_OK(file::SetTextProto(FLAGS_output, problem, file::Defaults()));
       } else {
         CHECK_OK(file::SetBinaryProto(FLAGS_output, problem, file::Defaults()));
       }
     }
   }
-  if (result == SatSolver::MODEL_UNSAT) {
+  if (result == SatSolver::INFEASIBLE) {
     printf("s UNSATISFIABLE\n");
   }
 
@@ -405,18 +416,18 @@ int Run() {
 
   // Print final statistics.
   printf("c booleans: %d\n", solver->NumVariables());
-  printf("c conflicts: %lld\n", solver->num_failures());
-  printf("c branches: %lld\n", solver->num_branches());
-  printf("c propagations: %lld\n", solver->num_propagations());
+  absl::PrintF("c conflicts: %d\n", solver->num_failures());
+  absl::PrintF("c branches: %d\n", solver->num_branches());
+  absl::PrintF("c propagations: %d\n", solver->num_propagations());
   printf("c walltime: %f\n", wall_timer.Get());
   printf("c usertime: %f\n", user_timer.Get());
   printf("c deterministic_time: %f\n", solver->deterministic_time());
 
   // The SAT competition requires a particular exit code and since we don't
   // really use it for any other purpose, we comply.
-  if (result == SatSolver::MODEL_SAT) return 10;
-  if (result == SatSolver::MODEL_UNSAT) return 20;
-  return 0;
+  if (result == SatSolver::FEASIBLE) return 10;
+  if (result == SatSolver::INFEASIBLE) return 20;
+  return EXIT_SUCCESS;
 }
 
 }  // namespace
@@ -428,7 +439,12 @@ static const char kUsage[] =
     "This program solves a given Boolean linear problem.";
 
 int main(int argc, char** argv) {
+  // By default, we want to show how the solver progress. Note that this needs
+  // to be set before InitGoogle() which has the nice side-effect of allowing
+  // the user to override it.
+  //  absl::SetFlag(&FLAGS_vmodule, "*cp_model*=1");
   gflags::SetUsageMessage(kUsage);
   gflags::ParseCommandLineFlags(&argc, &argv, true);
+  absl::SetFlag(&FLAGS_alsologtostderr, true);
   return operations_research::sat::Run();
 }

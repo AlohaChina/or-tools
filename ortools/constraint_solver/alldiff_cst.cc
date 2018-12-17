@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -20,9 +20,9 @@
 #include <utility>
 #include <vector>
 
+#include "absl/strings/str_format.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/string_array.h"
@@ -36,8 +36,7 @@ class BaseAllDifferent : public Constraint {
       : Constraint(s), vars_(vars) {}
   ~BaseAllDifferent() override {}
   std::string DebugStringInternal(const std::string& name) const {
-    return StringPrintf("%s(%s)", name.c_str(),
-                        JoinDebugStringPtr(vars_, ", ").c_str());
+    return absl::StrFormat("%s(%s)", name, JoinDebugStringPtr(vars_, ", "));
   }
 
  protected:
@@ -146,8 +145,8 @@ class RangeBipartiteMatching {
       : solver_(solver),
         size_(size),
         intervals_(new Interval[size + 1]),
-        min_sorted_(new Interval* [size]),
-        max_sorted_(new Interval* [size]),
+        min_sorted_(new Interval*[size]),
+        max_sorted_(new Interval*[size]),
         bounds_(new int64[2 * size + 2]),
         tree_(new int[2 * size + 2]),
         diff_(new int64[2 * size + 2]),
@@ -340,8 +339,8 @@ class RangeBipartiteMatching {
   Solver* const solver_;
   const int size_;
   std::unique_ptr<Interval[]> intervals_;
-  std::unique_ptr<Interval* []> min_sorted_;
-  std::unique_ptr<Interval* []> max_sorted_;
+  std::unique_ptr<Interval*[]> min_sorted_;
+  std::unique_ptr<Interval*[]> max_sorted_;
   // bounds_[1..active_size_] hold set of min & max in the n intervals_
   // while bounds_[0] and bounds_[active_size_ + 1] allow sentinels.
   std::unique_ptr<int64[]> bounds_;
@@ -496,9 +495,8 @@ class SortConstraint : public Constraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("Sort(%s, %s)",
-                        JoinDebugStringPtr(ovars_, ", ").c_str(),
-                        JoinDebugStringPtr(svars_, ", ").c_str());
+    return absl::StrFormat("Sort(%s, %s)", JoinDebugStringPtr(ovars_, ", "),
+                           JoinDebugStringPtr(svars_, ", "));
   }
 
  private:
@@ -574,8 +572,8 @@ class AllDifferentExcept : public Constraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf("AllDifferentExcept([%s], %" GG_LL_FORMAT "d",
-                        JoinDebugStringPtr(vars_, ", ").c_str(), escape_value_);
+    return absl::StrFormat("AllDifferentExcept([%s], %d",
+                           JoinDebugStringPtr(vars_, ", "), escape_value_);
   }
 
   void Accept(ModelVisitor* const visitor) const override {
@@ -665,10 +663,10 @@ class NullIntersectArrayExcept : public Constraint {
   }
 
   std::string DebugString() const override {
-    return StringPrintf(
-        "NullIntersectArray([%s], [%s], escape = %" GG_LL_FORMAT "d",
-        JoinDebugStringPtr(first_vars_, ", ").c_str(),
-        JoinDebugStringPtr(second_vars_, ", ").c_str(), escape_value_);
+    return absl::StrFormat("NullIntersectArray([%s], [%s], escape = %d",
+                           JoinDebugStringPtr(first_vars_, ", "),
+                           JoinDebugStringPtr(second_vars_, ", "),
+                           escape_value_);
   }
 
   void Accept(ModelVisitor* const visitor) const override {

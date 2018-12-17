@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,17 +15,17 @@
 
 #include <algorithm>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/strings/str_format.h"
 #include "ortools/base/commandlineflags.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
+#include "ortools/base/hash.h"
 #include "ortools/base/int_type.h"
 #include "ortools/base/int_type_indexed_vector.h"
+#include "ortools/base/integral_types.h"
+#include "ortools/base/logging.h"
 #include "ortools/base/map_util.h"
-#include "ortools/base/hash.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/flatzinc/logging.h"
@@ -73,7 +73,7 @@ class SatPropagator : public Constraint {
     CHECK(solver()->IsBooleanVar(expr, &expr_var, &expr_negated));
     SATDLOG << "  - SAT: Parse " << expr->DebugString() << " to "
             << expr_var->DebugString() << "/" << expr_negated << FZENDL;
-    if (ContainsKey(indices_, expr_var)) {
+    if (gtl::ContainsKey(indices_, expr_var)) {
       return sat::Literal(indices_[expr_var], !expr_negated);
     }
     const sat::BooleanVariable var = sat_.NewBooleanVariable();
@@ -165,7 +165,7 @@ class SatPropagator : public Constraint {
   sat::SatSolver* sat() { return &sat_; }
 
   std::string DebugString() const override {
-    return StringPrintf("SatConstraint(%d variables)", sat_.NumVariables());
+    return absl::StrFormat("SatConstraint(%d variables)", sat_.NumVariables());
   }
 
   void Accept(ModelVisitor* visitor) const override {
@@ -175,7 +175,7 @@ class SatPropagator : public Constraint {
  private:
   sat::SatSolver sat_;
   std::vector<IntVar*> vars_;
-  std::unordered_map<IntVar*, sat::BooleanVariable> indices_;
+  absl::flat_hash_map<IntVar*, sat::BooleanVariable> indices_;
   std::vector<sat::Literal> bound_literals_;
   NumericalRev<int> sat_decision_level_;
   std::vector<Demon*> demons_;

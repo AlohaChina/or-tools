@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -23,6 +23,6 @@ namespace util_hash {
 inline uint64 MurmurHash64(const char *buf, const size_t len) {
   return ::operations_research::ThoroughHash(buf, len);
 }
-}
+}  // namespace util_hash
 
 #endif  // OR_TOOLS_BASE_MURMUR_H_

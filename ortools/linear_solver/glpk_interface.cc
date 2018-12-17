@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,19 +17,19 @@
 
 #include <cmath>
 #include <cstddef>
-#include <unordered_map>
 #include <limits>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/memory/memory.h"
+#include "absl/strings/str_format.h"
 #include "ortools/base/commandlineflags.h"
+#include "ortools/base/hash.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
 #include "ortools/base/timer.h"
-#include "ortools/base/hash.h"
 #include "ortools/linear_solver/linear_solver.h"
 
 extern "C" {
@@ -160,7 +160,7 @@ class GLPKInterface : public MPSolverInterface {
   void ExtractObjective() override;
 
   std::string SolverVersion() const override {
-    return StringPrintf("GLPK %s", glp_version());
+    return absl::StrFormat("GLPK %s", glp_version());
   }
 
   void* underlying_solver() override { return reinterpret_cast<void*>(lp_); }
@@ -217,7 +217,7 @@ GLPKInterface::GLPKInterface(MPSolver* const solver, bool mip)
   lp_ = glp_create_prob();
   glp_set_prob_name(lp_, solver_->name_.c_str());
   glp_set_obj_dir(lp_, GLP_MIN);
-  mip_callback_info_.reset(new GLPKInformation(maximize_));
+  mip_callback_info_ = absl::make_unique<GLPKInformation>(maximize_);
 }
 
 // Frees the LP memory allocations.
@@ -356,7 +356,7 @@ void GLPKInterface::SetObjectiveOffset(double value) {
 // Clear objective of all its terms (linear)
 void GLPKInterface::ClearObjective() {
   InvalidateSolutionSynchronization();
-  for (CoeffEntry entry : solver_->objective_->coefficients_) {
+  for (const auto& entry : solver_->objective_->coefficients_) {
     const int mpsolver_var_index = entry.first->index();
     // Variable may have not been extracted yet.
     if (!variable_is_extracted(mpsolver_var_index)) {
@@ -431,7 +431,7 @@ void GLPKInterface::ExtractOneConstraint(MPConstraint* const constraint,
                                          double* const coefs) {
   // GLPK convention is to start indexing at 1.
   int k = 1;
-  for (CoeffEntry entry : constraint->coefficients_) {
+  for (const auto& entry : constraint->coefficients_) {
     DCHECK(variable_is_extracted(entry.first->index()));
     indices[k] = MPSolverIndexToGlpkIndex(entry.first->index());
     coefs[k] = entry.second;
@@ -453,7 +453,7 @@ void GLPKInterface::ExtractNewConstraints() {
       set_constraint_as_extracted(i, true);
       if (ct->name().empty()) {
         glp_set_row_name(lp_, MPSolverIndexToGlpkIndex(i),
-                         StringPrintf("ct_%i", i).c_str());
+                         absl::StrFormat("ct_%i", i).c_str());
       } else {
         glp_set_row_name(lp_, MPSolverIndexToGlpkIndex(i), ct->name().c_str());
       }
@@ -476,7 +476,7 @@ void GLPKInterface::ExtractNewConstraints() {
       int k = 1;
       for (int i = 0; i < solver_->constraints_.size(); ++i) {
         MPConstraint* ct = solver_->constraints_[i];
-        for (CoeffEntry entry : ct->coefficients_) {
+        for (const auto& entry : ct->coefficients_) {
           DCHECK(variable_is_extracted(entry.first->index()));
           constraint_indices[k] = MPSolverIndexToGlpkIndex(ct->index());
           variable_indices[k] = MPSolverIndexToGlpkIndex(entry.first->index());
@@ -506,7 +506,7 @@ void GLPKInterface::ExtractNewConstraints() {
 void GLPKInterface::ExtractObjective() {
   // Linear objective: set objective coefficients for all variables
   // (some might have been modified).
-  for (CoeffEntry entry : solver_->objective_->coefficients_) {
+  for (const auto& entry : solver_->objective_->coefficients_) {
     glp_set_obj_coef(lp_, MPSolverIndexToGlpkIndex(entry.first->index()),
                      entry.second);
   }
@@ -533,7 +533,7 @@ MPSolver::ResultStatus GLPKInterface::Solve(const MPSolverParameters& param) {
   }
 
   ExtractModel();
-  VLOG(1) << StringPrintf("Model built in %.3f seconds.", timer.Get());
+  VLOG(1) << absl::StrFormat("Model built in %.3f seconds.", timer.Get());
 
   // Configure parameters at every solve, even when the model has not
   // been changed, in case some of the parameters such as the time
@@ -561,8 +561,8 @@ MPSolver::ResultStatus GLPKInterface::Solve(const MPSolverParameters& param) {
       return result_status_;
     }
   }
-  VLOG(1) << StringPrintf("GLPK Status: %i (time spent: %.3f seconds).",
-                          solver_status, timer.Get());
+  VLOG(1) << absl::StrFormat("GLPK Status: %i (time spent: %.3f seconds).",
+                             solver_status, timer.Get());
 
   // Get the results.
   if (mip_) {

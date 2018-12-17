@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,16 +15,13 @@ using System;
 using System.Collections.Generic;
 using Google.OrTools.ConstraintSolver;
 
-public class CpTestNewSearch
-{
-  static void Main()
-  {
+public class CpTestNewSearch {
+  static void Main() {
     Solver solver = new Google.OrTools.ConstraintSolver.Solver("p");
 
     // creating dummy variables
     List<IntVar> vars = new List<IntVar>();
-    for (int i = 0; i < 200000; i++)
-    {
+    for (int i = 0; i < 200000; i++) {
       vars.Add(solver.MakeIntVar(0, 1));
     }
 
@@ -37,14 +34,16 @@ public class CpTestNewSearch
 
     solver.NewSearch(db, new OptimizeVar(solver, true, globalSum.Var(), 100));
 
+    // force Garbage Collector
     GC.Collect();
     GC.WaitForPendingFinalizers();
 
-    while (solver.NextSolution())
-    {
-      Console.WriteLine("solution " + globalSum.Var().Value());
+    // Try to read all solutions
+    int count = 0;
+    while (solver.NextSolution()) {
+      count++;
+      //Console.WriteLine("solution " + globalSum.Var().Value());
     }
-    Console.WriteLine("fini");
-    Console.ReadLine();
+    Console.WriteLine("Solutions: " + count);
   }
 }

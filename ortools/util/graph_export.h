@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,15 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #ifndef OR_TOOLS_UTIL_GRAPH_EXPORT_H_
 #define OR_TOOLS_UTIL_GRAPH_EXPORT_H_
 
 #include <string>
 
+#include "ortools/base/file.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
-#include "ortools/base/file.h"
 
 namespace operations_research {
 // ----- Export to graph file -----
@@ -44,10 +43,12 @@ class GraphExporter {
 
   // Write node in GML or DOT format.
   virtual void WriteNode(const std::string& name, const std::string& label,
-                         const std::string& shape, const std::string& color) = 0;
+                         const std::string& shape,
+                         const std::string& color) = 0;
 
   // Adds one link in the generated graph.
-  virtual void WriteLink(const std::string& source, const std::string& destination,
+  virtual void WriteLink(const std::string& source,
+                         const std::string& destination,
                          const std::string& label) = 0;
 
   // Creates a graph exporter that will write to file with a given format.

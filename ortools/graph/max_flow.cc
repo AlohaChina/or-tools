@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,12 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include "ortools/graph/max_flow.h"
 
 #include <algorithm>
 
-#include "ortools/base/stringprintf.h"
+#include "absl/memory/memory.h"
+#include "absl/strings/str_format.h"
+#include "ortools/graph/graph.h"
 #include "ortools/graph/graphs.h"
 
 namespace operations_research {
@@ -46,6 +47,10 @@ FlowQuantity SimpleMaxFlow::Capacity(ArcIndex arc) const {
   return arc_capacity_[arc];
 }
 
+void SimpleMaxFlow::SetArcCapacity(ArcIndex arc, FlowQuantity capacity) {
+  arc_capacity_[arc] = capacity;
+}
+
 SimpleMaxFlow::Status SimpleMaxFlow::Solve(NodeIndex source, NodeIndex sink) {
   const ArcIndex num_arcs = arc_capacity_.size();
   arc_flow_.assign(num_arcs, 0);
@@ -58,15 +63,15 @@ SimpleMaxFlow::Status SimpleMaxFlow::Solve(NodeIndex source, NodeIndex sink) {
   if (source >= num_nodes_ || sink >= num_nodes_) {
     return OPTIMAL;
   }
-  underlying_graph_.reset(new Graph(num_nodes_, num_arcs));
+  underlying_graph_ = absl::make_unique<Graph>(num_nodes_, num_arcs);
   underlying_graph_->AddNode(source);
   underlying_graph_->AddNode(sink);
   for (int arc = 0; arc < num_arcs; ++arc) {
     underlying_graph_->AddArc(arc_tail_[arc], arc_head_[arc]);
   }
   underlying_graph_->Build(&arc_permutation_);
-  underlying_max_flow_.reset(
-      new GenericMaxFlow<Graph>(underlying_graph_.get(), source, sink));
+  underlying_max_flow_ = absl::make_unique<GenericMaxFlow<Graph>>(
+      underlying_graph_.get(), source, sink);
   for (ArcIndex arc = 0; arc < num_arcs; ++arc) {
     ArcIndex permuted_arc =
         arc < arc_permutation_.size() ? arc_permutation_[arc] : arc;
@@ -311,18 +316,18 @@ bool GenericMaxFlow<Graph>::CheckRelabelPrecondition(NodeIndex node) const {
 
 template <typename Graph>
 std::string GenericMaxFlow<Graph>::DebugString(const std::string& context,
-                                          ArcIndex arc) const {
+                                               ArcIndex arc) const {
   const NodeIndex tail = Tail(arc);
   const NodeIndex head = Head(arc);
-  return StringPrintf(
+  return absl::StrFormat(
       "%s Arc %d, from %d to %d, "
-      "Capacity = %lld, Residual capacity = %lld, "
-      "Flow = residual capacity for reverse arc = %lld, "
+      "Capacity = %d, Residual capacity = %d, "
+      "Flow = residual capacity for reverse arc = %d, "
       "Height(tail) = %d, Height(head) = %d, "
-      "Excess(tail) = %lld, Excess(head) = %lld",
-      context.c_str(), arc, tail, head, Capacity(arc),
-      residual_arc_capacity_[arc], Flow(arc), node_potential_[tail],
-      node_potential_[head], node_excess_[tail], node_excess_[head]);
+      "Excess(tail) = %d, Excess(head) = %d",
+      context, arc, tail, head, Capacity(arc), residual_arc_capacity_[arc],
+      Flow(arc), node_potential_[tail], node_potential_[head],
+      node_excess_[tail], node_excess_[head]);
 }
 
 template <typename Graph>
@@ -981,8 +986,8 @@ FlowModel GenericMaxFlow<Graph>::CreateFlowModel() {
 // TODO(user): moves this code out of a .cc file and include it at the end of
 // the header so it can work with any graph implementation ?
 template class GenericMaxFlow<StarGraph>;
-template class GenericMaxFlow<ReverseArcListGraph<> >;
-template class GenericMaxFlow<ReverseArcStaticGraph<> >;
-template class GenericMaxFlow<ReverseArcMixedGraph<> >;
+template class GenericMaxFlow<::util::ReverseArcListGraph<>>;
+template class GenericMaxFlow<::util::ReverseArcStaticGraph<>>;
+template class GenericMaxFlow<::util::ReverseArcMixedGraph<>>;
 
 }  // namespace operations_research

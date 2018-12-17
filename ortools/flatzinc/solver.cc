@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,14 +14,14 @@
 #include "ortools/flatzinc/solver.h"
 
 #include <string>
-#include <unordered_set>
 
+#include "absl/container/flat_hash_set.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
+#include "ortools/base/hash.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
-#include "ortools/base/join.h"
 #include "ortools/base/map_util.h"
-#include "ortools/base/hash.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/flatzinc/checker.h"
 #include "ortools/flatzinc/constraints.h"
@@ -50,7 +50,6 @@ FlatzincParameters::FlatzincParameters()
       logging(false),
       statistics(false),
       verbose_impact(false),
-      restart_log_size(-1.0),
       run_all_heuristics(false),
       heuristic_period(100),
       log_period(1000000),
@@ -70,7 +69,7 @@ FlatzincParameters::FlatzincParameters()
 // ----- Solver -----
 
 int64 Solver::SolutionValue(IntegerVariable* var) const {
-  IntExpr* const result = FindPtrOrNull(data_.extracted_map(), var);
+  IntExpr* const result = gtl::FindPtrOrNull(data_.extracted_map(), var);
   if (result != nullptr) {
     if (result->IsVar()) {
       return result->Var()->Value();
@@ -93,21 +92,19 @@ std::string Solver::SolutionString(const SolutionOutputSpecs& output) const {
   if (output.variable != nullptr) {
     const int64 value = SolutionValue(output.variable);
     if (output.display_as_boolean) {
-      return StringPrintf("%s = %s;", output.name.c_str(),
-                          value == 1 ? "true" : "false");
+      return absl::StrFormat("%s = %s;", output.name,
+                             value == 1 ? "true" : "false");
     } else {
-      return StringPrintf("%s = %" GG_LL_FORMAT "d;", output.name.c_str(),
-                          value);
+      return absl::StrFormat("%s = %d;", output.name, value);
     }
   } else {
     const int bound_size = output.bounds.size();
     std::string result =
-        StringPrintf("%s = array%dd(", output.name.c_str(), bound_size);
+        absl::StrFormat("%s = array%dd(", output.name, bound_size);
     for (int i = 0; i < bound_size; ++i) {
       if (output.bounds[i].max_value != 0) {
-        result.append(StringPrintf("%" GG_LL_FORMAT "d..%" GG_LL_FORMAT "d, ",
-                                   output.bounds[i].min_value,
-                                   output.bounds[i].max_value));
+        result.append(absl::StrFormat("%d..%d, ", output.bounds[i].min_value,
+                                      output.bounds[i].max_value));
       } else {
         result.append("{},");
       }
@@ -116,9 +113,9 @@ std::string Solver::SolutionString(const SolutionOutputSpecs& output) const {
     for (int i = 0; i < output.flat_variables.size(); ++i) {
       const int64 value = SolutionValue(output.flat_variables[i]);
       if (output.display_as_boolean) {
-        result.append(StringPrintf(value ? "true" : "false"));
+        result.append(value ? "true" : "false");
       } else {
-        StrAppend(&result, value);
+        absl::StrAppend(&result, value);
       }
       if (i != output.flat_variables.size() - 1) {
         result.append(", ");
@@ -149,16 +146,16 @@ namespace {
 struct ConstraintsWithRequiredVariables {
   Constraint* ct;
   int index;
-  std::unordered_set<IntegerVariable*> required;
+  absl::flat_hash_set<IntegerVariable*> required;
 
   ConstraintsWithRequiredVariables(
       Constraint* cte, int i,
-      const std::unordered_set<IntegerVariable*>& defined)
+      const absl::flat_hash_set<IntegerVariable*>& defined)
       : ct(cte), index(i) {
     // Collect required variables.
     for (const Argument& arg : ct->arguments) {
       for (IntegerVariable* const var : arg.variables) {
-        if (var != cte->target_variable && ContainsKey(defined, var)) {
+        if (var != cte->target_variable && gtl::ContainsKey(defined, var)) {
           required.insert(var);
         }
       }
@@ -166,8 +163,8 @@ struct ConstraintsWithRequiredVariables {
   }
 
   std::string DebugString() const {
-    return StringPrintf("Ctio(%s, %d, deps_size = %lu)", ct->type.c_str(),
-                        index, required.size());
+    return absl::StrFormat("Ctio(%s, %d, deps_size = %u)", ct->type, index,
+                           required.size());
   }
 };
 
@@ -202,7 +199,7 @@ bool Solver::Extract() {
   int extracted_variables = 0;
   int extracted_constants = 0;
   int skipped_variables = 0;
-  std::unordered_set<IntegerVariable*> defined_variables;
+  absl::flat_hash_set<IntegerVariable*> defined_variables;
   for (IntegerVariable* const var : model_.variables()) {
     if (var->defining_constraint == nullptr && var->active) {
       data_.Extract(var);
@@ -233,8 +230,8 @@ bool Solver::Extract() {
   int index = 0;
   std::vector<ConstraintsWithRequiredVariables*> to_sort;
   std::vector<Constraint*> sorted;
-  std::unordered_map<const IntegerVariable*,
-                     std::vector<ConstraintsWithRequiredVariables*>>
+  absl::flat_hash_map<const IntegerVariable*,
+                      std::vector<ConstraintsWithRequiredVariables*>>
       dependencies;
   for (Constraint* ct : model_.constraints()) {
     if (ct != nullptr && ct->active) {
@@ -264,7 +261,7 @@ bool Solver::Extract() {
       // variable)
       // And we clean all of them (mark as non target).
       std::vector<IntegerVariable*> required_vars(ctio->required.begin(),
-                                             ctio->required.end());
+                                                  ctio->required.end());
       for (IntegerVariable* const fz_var : required_vars) {
         FZDLOG << "  - clean " << fz_var->DebugString() << FZENDL;
         if (fz_var->defining_constraint != nullptr) {
@@ -284,7 +281,7 @@ bool Solver::Extract() {
     // TODO(user): Implement recovery mode.
     sorted.push_back(ctio->ct);
     IntegerVariable* const var = ctio->ct->target_variable;
-    if (var != nullptr && ContainsKey(dependencies, var)) {
+    if (var != nullptr && gtl::ContainsKey(dependencies, var)) {
       FZDLOG << "  - clean " << var->DebugString() << FZENDL;
       for (ConstraintsWithRequiredVariables* const to_clean :
            dependencies[var]) {
@@ -378,7 +375,7 @@ void Solver::ParseSearchAnnotations(bool ignore_unknown,
   }
 
   FZLOG << "  - parsing search annotations" << FZENDL;
-  std::unordered_set<IntVar*> added;
+  absl::flat_hash_set<IntVar*> added;
   for (const Annotation& ann : flat_annotations) {
     FZLOG << "  - parse " << ann.DebugString() << FZENDL;
     if (ann.IsFunctionCallWithIdentifier("int_search")) {
@@ -391,7 +388,7 @@ void Solver::ParseSearchAnnotations(bool ignore_unknown,
       for (IntegerVariable* const fz_var : fz_vars) {
         IntVar* const to_add = data_.Extract(fz_var)->Var();
         const int occ = statistics_.NumVariableOccurrences(fz_var);
-        if (!ContainsKey(added, to_add) && !to_add->Bound()) {
+        if (!gtl::ContainsKey(added, to_add) && !to_add->Bound()) {
           added.insert(to_add);
           int_vars.push_back(to_add);
           occurrences.push_back(occ);
@@ -458,7 +455,7 @@ void Solver::ParseSearchAnnotations(bool ignore_unknown,
       for (IntegerVariable* const fz_var : fz_vars) {
         IntVar* const to_add = data_.Extract(fz_var)->Var();
         const int occ = statistics_.NumVariableOccurrences(fz_var);
-        if (!ContainsKey(added, to_add) && !to_add->Bound()) {
+        if (!gtl::ContainsKey(added, to_add) && !to_add->Bound()) {
           added.insert(to_add);
           bool_vars.push_back(to_add);
           occurrences.push_back(occ);
@@ -490,7 +487,7 @@ void Solver::ParseSearchAnnotations(bool ignore_unknown,
 
   // Create the active_variables array, push smaller variables first.
   for (IntVar* const var : active_variables_) {
-    if (!ContainsKey(added, var) && !var->Bound()) {
+    if (!gtl::ContainsKey(added, var) && !var->Bound()) {
       if (var->Size() < 0xFFFF) {
         added.insert(var);
         active_variables->push_back(var);
@@ -499,7 +496,7 @@ void Solver::ParseSearchAnnotations(bool ignore_unknown,
     }
   }
   for (IntVar* const var : active_variables_) {
-    if (!ContainsKey(added, var) && !var->Bound()) {
+    if (!gtl::ContainsKey(added, var) && !var->Bound()) {
       if (var->Size() >= 0xFFFF) {
         added.insert(var);
         active_variables->push_back(var);
@@ -514,13 +511,13 @@ void Solver::ParseSearchAnnotations(bool ignore_unknown,
 void Solver::CollectOutputVariables(std::vector<IntVar*>* out) {
   for (const SolutionOutputSpecs& output : model_.output()) {
     if (output.variable != nullptr) {
-      if (!ContainsKey(implied_variables_, output.variable)) {
+      if (!gtl::ContainsKey(implied_variables_, output.variable)) {
         out->push_back(data_.Extract(output.variable)->Var());
       }
     }
     for (IntegerVariable* const var : output.flat_variables) {
       if (var->defining_constraint == nullptr &&
-          !ContainsKey(implied_variables_, var)) {
+          !gtl::ContainsKey(implied_variables_, var)) {
         out->push_back(data_.Extract(var)->Var());
       }
     }
@@ -532,18 +529,18 @@ void Solver::AddCompletionDecisionBuilders(
     const std::vector<IntVar*>& defined_variables,
     const std::vector<IntVar*>& active_variables, SearchLimit* limit,
     std::vector<DecisionBuilder*>* builders) {
-  std::unordered_set<IntVar*> defined_set(defined_variables.begin(),
-                                          defined_variables.end());
+  absl::flat_hash_set<IntVar*> defined_set(defined_variables.begin(),
+                                           defined_variables.end());
   std::vector<IntVar*> output_variables;
   CollectOutputVariables(&output_variables);
   std::vector<IntVar*> secondary_vars;
   for (IntVar* const var : active_variables) {
-    if (!ContainsKey(defined_set, var) && !var->Bound()) {
+    if (!gtl::ContainsKey(defined_set, var) && !var->Bound()) {
       secondary_vars.push_back(var);
     }
   }
   for (IntVar* const var : output_variables) {
-    if (!ContainsKey(defined_set, var) && !var->Bound()) {
+    if (!gtl::ContainsKey(defined_set, var) && !var->Bound()) {
       secondary_vars.push_back(var);
     }
   }
@@ -635,12 +632,10 @@ DecisionBuilder* Solver::CreateDecisionBuilders(const FlatzincParameters& p,
                 (!p.all_solutions && p.num_solutions == 1)
             ? p.heuristic_period
             : -1;
-    parameters.restart_log_size = p.restart_log_size;
     parameters.display_level =
         p.logging ? (p.verbose_impact ? DefaultPhaseParameters::VERBOSE
                                       : DefaultPhaseParameters::NORMAL)
                   : DefaultPhaseParameters::NONE;
-    parameters.use_no_goods = (p.restart_log_size > 0);
     parameters.var_selection_schema =
         DefaultPhaseParameters::CHOOSE_MAX_SUM_IMPACT;
     parameters.value_selection_schema =
@@ -689,7 +684,7 @@ void Solver::SyncWithModel() {
 
   for (IntegerVariable* const fz_var : model_.variables()) {
     if (!fz_var->active || fz_var->defining_constraint != nullptr ||
-        ContainsKey(implied_variables_, fz_var)) {
+        gtl::ContainsKey(implied_variables_, fz_var)) {
       continue;
     }
     IntExpr* const expr = data_.Extract(fz_var);
@@ -714,10 +709,10 @@ void Solver::ReportInconsistentModel(const Model& model, FlatzincParameters p,
     std::string solver_status =
         "%%  name, status, obj, solns, s_time, b_time, br, "
         "fails, cts, demon, delayed, mem, search\n";
-    StringAppendF(
+    absl::StrAppendFormat(
         &solver_status,
         "%%%%  csv: %s, **unsat**, , 0, 0 ms, 0 ms, 0, 0, 0, 0, 0, %s, free",
-        model.name().c_str(), MemoryUsage().c_str());
+        model.name(), MemoryUsage());
     report->Print(p.thread_id, solver_status);
   }
 }
@@ -738,10 +733,9 @@ void Solver::Solve(FlatzincParameters p, SearchReportingInterface* report) {
     objective_monitor_ = report->CreateObjective(
         solver_, model_.maximize(), objective_var_, 1, p.thread_id);
     SearchMonitor* const log =
-        p.logging
-            ? solver_->RevAlloc(
-                  new Log(solver_, objective_monitor_, p.log_period))
-            : nullptr;
+        p.logging ? solver_->RevAlloc(
+                        new Log(solver_, objective_monitor_, p.log_period))
+                  : nullptr;
     SearchLimit* const ctrl_c = solver_->RevAlloc(new Interrupt(solver_));
     monitors.push_back(log);
     monitors.push_back(objective_monitor_);
@@ -858,41 +852,38 @@ void Solver::Solve(FlatzincParameters p, SearchReportingInterface* report) {
       search_status = "==========";
       proven = true;
     }
+    solver_status.append(absl::StrFormat("%%%%  total runtime:        %d ms\n",
+                                         solve_time + build_time));
     solver_status.append(
-        StringPrintf("%%%%  total runtime:        %" GG_LL_FORMAT "d ms\n",
-                     solve_time + build_time));
-    solver_status.append(StringPrintf(
-        "%%%%  build time:           %" GG_LL_FORMAT "d ms\n", build_time));
-    solver_status.append(StringPrintf(
-        "%%%%  solve time:           %" GG_LL_FORMAT "d ms\n", solve_time));
+        absl::StrFormat("%%%%  build time:           %d ms\n", build_time));
     solver_status.append(
-        StringPrintf("%%%%  solutions:            %d\n", num_solutions));
-    solver_status.append(StringPrintf("%%%%  constraints:          %d\n",
-                                      solver_->constraints()));
-    solver_status.append(StringPrintf(
-        "%%%%  normal propagations:  %" GG_LL_FORMAT "d\n",
+        absl::StrFormat("%%%%  solve time:           %d ms\n", solve_time));
+    solver_status.append(
+        absl::StrFormat("%%%%  solutions:            %d\n", num_solutions));
+    solver_status.append(absl::StrFormat("%%%%  constraints:          %d\n",
+                                         solver_->constraints()));
+    solver_status.append(absl::StrFormat(
+        "%%%%  normal propagations:  %d\n",
         solver_->demon_runs(operations_research::Solver::NORMAL_PRIORITY)));
-    solver_status.append(StringPrintf(
-        "%%%%  delayed propagations: %" GG_LL_FORMAT "d\n",
+    solver_status.append(absl::StrFormat(
+        "%%%%  delayed propagations: %d\n",
         solver_->demon_runs(operations_research::Solver::DELAYED_PRIORITY)));
+    solver_status.append(absl::StrFormat("%%%%  branches:             %d\n",
+                                         solver_->branches()));
+    solver_status.append(absl::StrFormat("%%%%  failures:             %d\n",
+                                         solver_->failures()));
     solver_status.append(
-        StringPrintf("%%%%  branches:             %" GG_LL_FORMAT "d\n",
-                     solver_->branches()));
-    solver_status.append(
-        StringPrintf("%%%%  failures:             %" GG_LL_FORMAT "d\n",
-                     solver_->failures()));
-    solver_status.append(StringPrintf("%%%%  memory:               %s\n",
-                                      MemoryUsage().c_str()));
+        absl::StrFormat("%%%%  memory:               %s\n", MemoryUsage()));
     const int64 best = report->BestSolution();
     if (model_.objective() != nullptr) {
       if (!model_.maximize() && num_solutions > 0) {
         solver_status.append(
-            StringPrintf("%%%%  min objective:        %" GG_LL_FORMAT "d%s\n",
-                         best, (proven ? " (proven)" : "")));
+            absl::StrFormat("%%%%  min objective:        %d%s\n", best,
+                            (proven ? " (proven)" : "")));
       } else if (num_solutions > 0) {
         solver_status.append(
-            StringPrintf("%%%%  max objective:        %" GG_LL_FORMAT "d%s\n",
-                         best, (proven ? " (proven)" : "")));
+            absl::StrFormat("%%%%  max objective:        %d%s\n", best,
+                            (proven ? " (proven)" : "")));
       }
     }
 
@@ -900,8 +891,8 @@ void Solver::Solve(FlatzincParameters p, SearchReportingInterface* report) {
       const std::string default_search_stats =
           DefaultPhaseStatString(default_phase_);
       if (!default_search_stats.empty()) {
-        solver_status.append(StringPrintf("%%%%  free search stats:    %s\n",
-                                          default_search_stats.c_str()));
+        solver_status.append(absl::StrFormat("%%%%  free search stats:    %s\n",
+                                             default_search_stats));
       }
     }
 
@@ -912,20 +903,19 @@ void Solver::Solve(FlatzincParameters p, SearchReportingInterface* report) {
                              ? "**sat**"
                              : (timeout ? "**feasible**" : "**proven**")));
     const std::string obj_string =
-        (model_.objective() != nullptr && !no_solutions ? StrCat(best) : "");
+        (model_.objective() != nullptr && !no_solutions ? absl::StrCat(best)
+                                                        : "");
     solver_status.append(
         "%%  name, status, obj, solns, s_time, b_time, br, "
         "fails, cts, demon, delayed, mem, search\n");
-    solver_status.append(StringPrintf(
-        "%%%%  csv: %s, %s, %s, %d, %" GG_LL_FORMAT "d ms, %" GG_LL_FORMAT
-        "d ms, %" GG_LL_FORMAT "d, %" GG_LL_FORMAT "d, %d, %" GG_LL_FORMAT
-        "d, %" GG_LL_FORMAT "d, %s, %s",
-        model_.name().c_str(), status_string.c_str(), obj_string.c_str(),
-        num_solutions, solve_time, build_time, solver_->branches(),
-        solver_->failures(), solver_->constraints(),
+    solver_status.append(absl::StrFormat(
+        "%%%%  csv: %s, %s, %s, %d, %d ms, %d ms, %d, %d, %d, %d, %d, %s, %s",
+        model_.name(), status_string, obj_string, num_solutions, solve_time,
+        build_time, solver_->branches(), solver_->failures(),
+        solver_->constraints(),
         solver_->demon_runs(operations_research::Solver::NORMAL_PRIORITY),
         solver_->demon_runs(operations_research::Solver::DELAYED_PRIORITY),
-        MemoryUsage().c_str(), search_name_.c_str()));
+        MemoryUsage(), search_name_));
     report->Print(p.thread_id, search_status);
     if (p.statistics) {
       report->Print(p.thread_id, solver_status);

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,7 +17,7 @@
 #include <algorithm>
 #include <string>
 
-namespace operations_research {
+namespace gtl {
 
 // STLDeleteContainerPointers()
 //  For a range within a container of pointers, calls delete
@@ -116,5 +116,5 @@ inline void STLSortAndRemoveDuplicates(T* v) {
   v->erase(std::unique(v->begin(), v->end()), v->end());
 }
 
-}  // namespace operations_research
+}  // namespace gtl
 #endif  // OR_TOOLS_BASE_STL_UTIL_H_

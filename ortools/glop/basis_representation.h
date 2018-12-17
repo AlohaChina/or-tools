@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 
 #ifndef OR_TOOLS_GLOP_BASIS_REPRESENTATION_H_
 #define OR_TOOLS_GLOP_BASIS_REPRESENTATION_H_
@@ -50,8 +49,7 @@ namespace glop {
 //             0  ...  0  -e_{n-1}/e_j  0  ...  1 ]
 class EtaMatrix {
  public:
-  EtaMatrix(ColIndex eta_col, const std::vector<RowIndex>& eta_non_zeros,
-            DenseColumn* dense_eta);
+  EtaMatrix(ColIndex eta_col, const ScatteredColumn& direction);
   virtual ~EtaMatrix();
 
   // Solves the system y.E = c, 'c' beeing the initial value of 'y'.
@@ -117,8 +115,7 @@ class EtaFactorization {
   // Updates the eta factorization, i.e. adds the new eta matrix defined by
   // the leaving variable and the corresponding eta column.
   void Update(ColIndex entering_col, RowIndex leaving_variable_row,
-              const std::vector<RowIndex>& eta_non_zeros,
-              DenseColumn* dense_eta);
+              const ScatteredColumn& direction);
 
   // Left solves all systems from right to left, i.e. y_i = y_{i+1}.(E_i)^{-1}
   void LeftSolve(DenseRow* y) const;
@@ -183,7 +180,7 @@ class BasisFactorization {
   // matrix_ and basis_. This is fast if IsIdentityBasis() is true, otherwise
   // it will trigger a refactorization and will return an error if the matrix
   // could not be factorized.
-  Status Initialize() MUST_USE_RESULT;
+  ABSL_MUST_USE_RESULT Status Initialize();
 
   // Return the number of rows in the basis.
   RowIndex GetNumberOfRows() const { return matrix_.num_rows(); }
@@ -191,11 +188,11 @@ class BasisFactorization {
   // Clears eta factorization and refactorizes LU.
   // Nothing happens if this is called on an already refactorized basis.
   // Returns an error if the matrix could not be factorized: i.e. not a basis.
-  Status Refactorize() MUST_USE_RESULT;
+  ABSL_MUST_USE_RESULT Status Refactorize();
 
   // Like Refactorize(), but do it even if IsRefactorized() is true.
   // Call this if the underlying basis_ changed and Update() wasn't called.
-  Status ForceRefactorization() MUST_USE_RESULT;
+  ABSL_MUST_USE_RESULT Status ForceRefactorization();
 
   // Returns true if the factorization was just recomputed.
   bool IsRefactorized() const;
@@ -203,36 +200,30 @@ class BasisFactorization {
   // Updates the factorization. The 'eta' column will be modified with a swap to
   // avoid a copy (only if the standard eta update is used). Returns an error if
   // the matrix could not be factorized: i.e. not a basis.
-  Status Update(ColIndex entering_col, RowIndex leaving_variable_row,
-                const std::vector<RowIndex>& eta_non_zeros,
-                DenseColumn* dense_eta) MUST_USE_RESULT;
+  ABSL_MUST_USE_RESULT Status Update(ColIndex entering_col,
+                                     RowIndex leaving_variable_row,
+                                     const ScatteredColumn& direction);
 
   // Left solves the system y.B = rhs, where y initialy contains rhs.
-  // The second version also computes the non-zero positions of the result.
-  void LeftSolve(DenseRow* y) const;
-  void LeftSolveWithNonZeros(DenseRow* y, ColIndexVector* non_zeros) const;
+  void LeftSolve(ScatteredRow* y) const;
 
   // Left solves the system y.B = e_j, where e_j has only 1 non-zero
   // coefficient of value 1.0 at position 'j'.
-  void LeftSolveForUnitRow(ColIndex j, DenseRow* y,
-                           ColIndexVector* non_zeros) const;
-
-  // Same as RightSolve() for matrix.column(col).
-  // This also exploits its sparsity.
-  void RightSolveForProblemColumn(ColIndex col, DenseColumn* d,
-                                  std::vector<RowIndex>* non_zeros) const;
+  void LeftSolveForUnitRow(ColIndex j, ScatteredRow* y) const;
 
   // Right solves the system B.d = a where the input is the initial value of d.
-  void RightSolve(DenseColumn* d) const;
-  void RightSolveWithNonZeros(DenseColumn* d,
-                              std::vector<RowIndex>* non_zeros) const;
+  void RightSolve(ScatteredColumn* d) const;
+
+  // Same as RightSolve() for matrix.column(col). This also exploits its
+  // sparsity.
+  void RightSolveForProblemColumn(ColIndex col, ScatteredColumn* d) const;
 
   // Specialized version for ComputeTau() in DualEdgeNorms. This reuses an
   // intermediate result of the last LeftSolveForUnitRow() in order to save a
   // permutation if it is available. Note that the input 'a' should always be
   // equal to the last result of LeftSolveForUnitRow() and will be used for a
   // DCHECK() or if the intermediate result wasn't kept.
-  DenseColumn* RightSolveForTau(ScatteredColumnReference a) const;
+  const DenseColumn& RightSolveForTau(const ScatteredColumn& a) const;
 
   // Returns the norm of B^{-1}.a, this is a specific function because
   // it is a bit faster and it avoids polluting the stats of RightSolve().
@@ -249,6 +240,7 @@ class BasisFactorization {
   // A condition number greater than 1E7 will lead to precision problems.
   Fractional ComputeOneNormConditionNumber() const;
   Fractional ComputeInfinityNormConditionNumber() const;
+  Fractional ComputeInfinityNormConditionNumberUpperBound() const;
 
   // Computes the 1-norm of B.
   // The 1-norm |A| is defined as max_j sum_i |a_ij|
@@ -288,8 +280,8 @@ class BasisFactorization {
   // Updates the factorization using the middle product form update.
   // Qi Huangfu, J. A. Julian Hall, "Novel update techniques for the revised
   // simplex method", 28 january 2013, Technical Report ERGO-13-0001
-  Status MiddleProductFormUpdate(ColIndex entering_col,
-                                 RowIndex leaving_variable_row) MUST_USE_RESULT;
+  ABSL_MUST_USE_RESULT Status
+  MiddleProductFormUpdate(ColIndex entering_col, RowIndex leaving_variable_row);
 
   // Increases the deterministic time for a solve operation with a vector having
   // this number of non-zero entries (it can be an approximation).
@@ -321,8 +313,7 @@ class BasisFactorization {
   // This is used by RightSolveForTau(). It holds an intermediate result from
   // the last LeftSolveForUnitRow() and also the final result of
   // RightSolveForTau().
-  mutable DenseColumn tau_;
-  mutable std::vector<RowIndex> tau_non_zeros_;
+  mutable ScatteredColumn tau_;
 
   // Booleans controlling the interaction between LeftSolveForUnitRow() that may
   // or may not keep its intermediate results for the optimized

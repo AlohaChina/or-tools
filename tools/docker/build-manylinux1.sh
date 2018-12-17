@@ -15,6 +15,7 @@
 #                  destination path for the wheels export.
 #   BUILD_ROOT     if not specified at command line, this value is used as the
 #                  root path for the build process.
+set -x
 set -e
 
 DEFAULT_BUILD_ROOT="$HOME"
@@ -55,13 +56,14 @@ function export_manylinux_wheel {
     # We need to force this target, otherwise the protobuf stub will be missing
     # (for the makefile, it exists even if previously generated for another
     # platform)
-    git pull
-    make -B install_python_modules  # regenerates Makefile.local
+    rm -f Makefile.local  # regenerates Makefile.local
+    # We need to clean first to avoid to use previous python swig object file
+    make clean_python
     make python
     make test_python
-    make pypi_archive_dir
+    make pypi_archive
     # Build and repair wheels
-    cd temp-python*/ortools
+    cd temp_python*/ortools
     python setup.py bdist_wheel
     cd dist
     auditwheel repair ./*.whl -w "$export_root"
@@ -73,6 +75,7 @@ function test_installed {
     #   $@ the test files to be tested
     local testfiles=("${@}")
     cd "$(mktemp -d)" # ensure we are not importing something from $PWD
+    python --version
     for testfile in "${testfiles[@]}"
     do
         python "$testfile"
@@ -112,14 +115,14 @@ read -r -a SKIP <<< "$SKIP_PLATFORMS"
 # Python scripts to be used as tests for the installed wheel. This list of files
 # has been taken from the 'test_python' make target.
 TESTS=(
-    "${SRC_ROOT}/examples/python/hidato_table.py"
+    "${SRC_ROOT}/ortools/algorithms/samples/simple_knapsack_program.py"
+    "${SRC_ROOT}/ortools/graph/samples/simple_max_flow_program.py"
+    "${SRC_ROOT}/ortools/graph/samples/simple_min_cost_flow_program.py"
+    "${SRC_ROOT}/ortools/linear_solver/samples/simple_lp_program.py"
+    "${SRC_ROOT}/ortools/linear_solver/samples/simple_mip_program.py"
+    "${SRC_ROOT}/ortools/sat/samples/simple_sat_program.py"
     "${SRC_ROOT}/examples/python/tsp.py"
-    "${SRC_ROOT}/examples/python/pyflow_example.py"
-    "${SRC_ROOT}/examples/python/knapsack.py"
-    "${SRC_ROOT}/examples/python/linear_programming.py"
-    "${SRC_ROOT}/examples/python/integer_programming.py"
-    "${SRC_ROOT}/examples/tests/test_cp_api.py"
-    "${SRC_ROOT}/examples/tests/test_lp_api.py"
+    "${SRC_ROOT}/examples/python/vrp.py"
 )
 
 (
@@ -132,6 +135,9 @@ TESTS=(
 
 ###############################################################################
 # Main
+# Force the use of wheel 0.31.1 since 0.32 is broken
+# cf pypa/auditwheel#102
+#/opt/_internal/cpython-3.6.6/bin/python -m pip install wheel==0.31.1
 
 mkdir -p "${BUILD_ROOT}"
 mkdir -p "${EXPORT_ROOT}"
@@ -145,6 +151,7 @@ fi
 
 # For each python platform provided by manylinux, build, export and test
 # artifacts.
+BASE_PKG_CONFIG="${PKG_CONFIG_PATH}"
 for PYROOT in /opt/python/*
 do
     PYTAG=$(basename "$PYROOT")
@@ -165,6 +172,8 @@ do
     source "${BUILD_ROOT}/${PYTAG}/bin/activate"
     pip install -U pip setuptools wheel six  # six is needed by make test_python
     # Build artifact
+    export PKG_CONFIG_PATH="${PYROOT}/lib/pkgconfig:${BASE_PKG_CONFIG}"
+    echo "PKG_CONFIG_PATH: ${PKG_CONFIG_PATH}"
     export_manylinux_wheel "$SRC_ROOT" "$EXPORT_ROOT"
     # Ensure everything is clean (don't clean third_party anyway,
     # it has been built once)
@@ -183,6 +192,7 @@ do
     pip install -U pip setuptools wheel six
     # Install wheel and run tests
     pip install --no-cache-dir "$WHEEL_FILE"
+    pip show ortools
     test_installed "${TESTS[@]}"
     # Restore environment
     deactivate

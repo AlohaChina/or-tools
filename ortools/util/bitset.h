@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 
 // Various utility functions on bitsets.
 
@@ -74,12 +73,7 @@ inline uint32 LeastSignificantBitWord32(uint32 n) { return n & ~(n - 1); }
 
 #if defined(USE_FAST_LEAST_SIGNIFICANT_BIT)
 inline int LeastSignificantBitPosition64Fast(uint64 n) {
-  // Note(user): Do not change the order of instructions. Other patterns were
-  // tried, and the second best was:
-  // return n == 0 ? 0 : __builtin_ctzll(n) which results in an 2x increase of
-  // computation time.
-  const int lsb = __builtin_ctzll(n);
-  return n == 0 ? 0 : lsb;
+  return n == 0 ? 0 : __builtin_ctzll(n);
 }
 #endif
 
@@ -90,7 +84,8 @@ inline int LeastSignificantBitPosition64DeBruijn(uint64 n) {
       0,  1,  2,  7,  3,  13, 8,  19, 4,  25, 14, 28, 9,  52, 20, 58,
       5,  17, 26, 56, 15, 38, 29, 40, 10, 49, 53, 31, 21, 34, 59, 42,
       63, 6,  12, 18, 24, 27, 51, 57, 16, 55, 37, 39, 48, 30, 33, 41,
-      62, 11, 23, 50, 54, 36, 47, 32, 61, 22, 35, 46, 60, 45, 44, 43, };
+      62, 11, 23, 50, 54, 36, 47, 32, 61, 22, 35, 46, 60, 45, 44, 43,
+  };
   return kTab[((n & (~n + 1)) * kSeq) >> 58];
 }
 
@@ -141,17 +136,16 @@ inline int LeastSignificantBitPosition64(uint64 n) {
 
 #if defined(USE_FAST_LEAST_SIGNIFICANT_BIT)
 inline int LeastSignificantBitPosition32Fast(uint32 n) {
-  const int lsb = __builtin_ctzl(n);
-  return n == 0 ? 0 : lsb;
+  return n == 0 ? 0 : __builtin_ctzl(n);
 }
 #endif
 
 inline int LeastSignificantBitPosition32DeBruijn(uint32 n) {
   static const uint32 kSeq = 0x077CB531U;  // de Bruijn sequence
-  static const int kTab[32] = {
-    // initialized by 'kTab[(kSeq << i) >> 27] = i
-    0, 1, 28, 2, 29, 14, 24, 3, 30, 22, 20, 15, 25, 17, 4, 8,
-    31, 27, 13, 23, 21, 19, 16, 7, 26, 12, 18, 6, 11, 5, 10, 9};
+  static const int kTab[32] = {// initialized by 'kTab[(kSeq << i) >> 27] = i
+                               0,  1,  28, 2,  29, 14, 24, 3,  30, 22, 20,
+                               15, 25, 17, 4,  8,  31, 27, 13, 23, 21, 19,
+                               16, 7,  26, 12, 18, 6,  11, 5,  10, 9};
   return kTab[((n & (~n + 1)) * kSeq) >> 27];
 }
 
@@ -201,8 +195,7 @@ inline int MostSignificantBitPosition64Fast(uint64 n) {
   // __builtin_clzll(1) should always return 63. There is no penalty in
   // using offset, and the code looks more like its uint32 counterpart.
   const int offset = __builtin_clzll(1);
-  const int msb = offset - __builtin_clzll(n);
-  return n == 0 ? 0 : msb;
+  return n == 0 ? 0 : (offset - __builtin_clzll(n));
 }
 #endif
 
@@ -248,8 +241,7 @@ inline int MostSignificantBitPosition32Fast(uint32 n) {
   // __builtin_clzl(1) returns 63 on a 64-bit machine and 31 on a 32-bit
   // machine.
   const int offset = __builtin_clzl(1);
-  const int msb = offset - __builtin_clzl(n);
-  return n == 0 ? 0 : msb;
+  return n == 0 ? 0 : (offset - __builtin_clzl(n));
 }
 #endif
 
@@ -334,7 +326,7 @@ inline uint32 IntervalDown32(uint32 s) {
 // corresponding to the bit at position pos in the bitset.
 // Note: '& 63' is faster than '% 64'
 // TODO(user): rename BitPos and BitOffset to something more understandable.
-inline uint64 BitPos64(uint64 pos) { return (pos & 63); }
+inline uint32 BitPos64(uint64 pos) { return (pos & 63); }
 inline uint32 BitPos32(uint32 pos) { return (pos & 31); }
 
 // Returns the word number corresponding to bit number pos.
@@ -456,9 +448,7 @@ class Bitset64 {
   }
 
   // Sets all bits to 0.
-  void ClearAll() {
-    memset(data_.data(), 0, data_.size() * sizeof(int64));
-  }
+  void ClearAll() { memset(data_.data(), 0, data_.size() * sizeof(int64)); }
 
   // Sets the bit at position i to 0.
   void Clear(IndexType i) {
@@ -716,13 +706,25 @@ class BitQueue64 {
     data_[BitOffset64(i)] |= OneBit64(BitPos64(i));
   }
 
+  // Sets all the bits from 0 up to i-1 to 1.
+  void SetAllBefore(int i) {
+    DCHECK_GE(i, 0);
+    DCHECK_LT(i, size_);
+    top_ = std::max(top_, i - 1);
+    int bucket_index = static_cast<int>(BitOffset64(i));
+    data_[bucket_index] |= OneBit64(BitPos64(i)) - 1;
+    for (--bucket_index; bucket_index >= 0; --bucket_index) {
+      data_[bucket_index] = kAllBits64;
+    }
+  }
+
   // Returns the position of the highest bit set in O(1) or -1 if no bit is set.
   int Top() const { return top_; }
 
   // Clears the Top() bit and recomputes the position of the next Top().
   void ClearTop() {
     DCHECK_NE(top_, -1);
-    int bucket_index = BitOffset64(top_);
+    int bucket_index = static_cast<int>(BitOffset64(top_));
     uint64 bucket = data_[bucket_index] &= ~OneBit64(BitPos64(top_));
     while (!bucket) {
       if (bucket_index == 0) {
@@ -735,7 +737,8 @@ class BitQueue64 {
     // Note(user): I experimented with reversing the bit order in a bucket to
     // use LeastSignificantBitPosition64() and it is only slightly faster at the
     // cost of a lower Set() speed. So I prefered this version.
-    top_ = BitShift64(bucket_index) + MostSignificantBitPosition64(bucket);
+    top_ = static_cast<int>(BitShift64(bucket_index) +
+                            MostSignificantBitPosition64(bucket));
   }
 
  private:

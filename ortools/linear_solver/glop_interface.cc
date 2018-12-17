@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,26 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
-#include <unordered_map>
+#include <atomic>
 #include <string>
 #include <vector>
-#include <fstream>
-
-#include "ortools/base/commandlineflags.h"
-
-#ifndef ANDROID_JNI
-#include "ortools/base/commandlineflags.h"
-#endif
 
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
-
-#ifndef ANDROID_JNI
-#include "ortools/base/file.h"
-#include "google/protobuf/text_format.h"
-#endif
 
 #include "ortools/base/hash.h"
 #include "ortools/glop/lp_solver.h"
@@ -39,13 +25,12 @@
 #include "ortools/linear_solver/linear_solver.h"
 #include "ortools/lp_data/lp_data.h"
 #include "ortools/lp_data/lp_types.h"
+#include "ortools/port/proto_utils.h"
 #include "ortools/util/time_limit.h"
 
 namespace operations_research {
 
-namespace {
-
-}  // Anonymous namespace
+namespace {}  // Anonymous namespace
 
 class GLOPInterface : public MPSolverInterface {
  public:
@@ -103,7 +88,8 @@ class GLOPInterface : public MPSolverInterface {
   void SetPresolveMode(int value) override;
   void SetScalingMode(int value) override;
   void SetLpAlgorithm(int value) override;
-  bool SetSolverSpecificParametersAsString(const std::string& parameters) override;
+  bool SetSolverSpecificParametersAsString(
+      const std::string& parameters) override;
 
  private:
   void NonIncrementalChange();
@@ -113,7 +99,7 @@ class GLOPInterface : public MPSolverInterface {
   std::vector<MPSolver::BasisStatus> column_status_;
   std::vector<MPSolver::BasisStatus> row_status_;
   glop::GlopParameters parameters_;
-  bool interrupt_solver_;
+  std::atomic<bool> interrupt_solver_;
 };
 
 GLOPInterface::GLOPInterface(MPSolver* const solver)
@@ -261,7 +247,7 @@ int64 GLOPInterface::nodes() const {
 }
 
 double GLOPInterface::best_objective_bound() const {
-  LOG(DFATAL) << "Best objective bound only available for discrete problems";
+  // TODO(user): report a better bound when we can.
   return trivial_worst_objective_bound();
 }
 
@@ -293,8 +279,7 @@ void GLOPInterface::ExtractNewVariables() {
   const glop::ColIndex num_cols(solver_->variables_.size());
   for (glop::ColIndex col(last_variable_index_); col < num_cols; ++col) {
     MPVariable* const var = solver_->variables_[col.value()];
-    const glop::ColIndex new_col =
-        linear_program_.FindOrCreateVariable(var->name());
+    const glop::ColIndex new_col = linear_program_.CreateNewVariable();
     DCHECK_EQ(new_col, col);
     set_variable_as_extracted(col.value(), true);
     linear_program_.SetVariableBounds(col, var->lb(), var->ub());
@@ -311,12 +296,11 @@ void GLOPInterface::ExtractNewConstraints() {
 
     const double lb = ct->lb();
     const double ub = ct->ub();
-    const glop::RowIndex new_row =
-        linear_program_.FindOrCreateConstraint(ct->name());
+    const glop::RowIndex new_row = linear_program_.CreateNewConstraint();
     DCHECK_EQ(new_row, row);
     linear_program_.SetConstraintBounds(row, lb, ub);
 
-    for (CoeffEntry entry : ct->coefficients_) {
+    for (const auto& entry : ct->coefficients_) {
       const int var_index = entry.first->index();
       DCHECK(variable_is_extracted(var_index));
       const glop::ColIndex col(var_index);
@@ -328,7 +312,7 @@ void GLOPInterface::ExtractNewConstraints() {
 
 void GLOPInterface::ExtractObjective() {
   linear_program_.SetObjectiveOffset(solver_->Objective().offset());
-  for (CoeffEntry entry : solver_->objective_->coefficients_) {
+  for (const auto& entry : solver_->objective_->coefficients_) {
     const int var_index = entry.first->index();
     const glop::ColIndex col(var_index);
     const double coeff = entry.second;
@@ -354,7 +338,6 @@ void GLOPInterface::SetParameters(const MPSolverParameters& param) {
   parameters_.Clear();
   SetCommonParameters(param);
   SetScalingMode(param.GetIntegerParam(MPSolverParameters::SCALING));
-
 }
 
 void GLOPInterface::SetRelativeMipGap(double value) {
@@ -431,17 +414,15 @@ void GLOPInterface::SetLpAlgorithm(int value) {
 
 bool GLOPInterface::SetSolverSpecificParametersAsString(
     const std::string& parameters) {
-#ifdef ANDROID_JNI
   // NOTE(user): Android build uses protocol buffers in lite mode, and
   // parsing data from text format is not supported there. To allow solver
   // specific parameters from std::string on Android, we first need to switch to
   // non-lite version of protocol buffers.
+  if (ProtobufTextFormatMergeFromString(parameters, &parameters_)) {
+    lp_solver_.SetParameters(parameters_);
+    return true;
+  }
   return false;
-#else
-  const bool ok = google::protobuf::TextFormat::MergeFromString(parameters, &parameters_);
-  lp_solver_.SetParameters(parameters_);
-  return ok;
-#endif
 }
 
 void GLOPInterface::NonIncrementalChange() {
@@ -453,6 +434,5 @@ void GLOPInterface::NonIncrementalChange() {
 MPSolverInterface* BuildGLOPInterface(MPSolver* const solver) {
   return new GLOPInterface(solver);
 }
-
 
 }  // namespace operations_research

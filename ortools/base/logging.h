@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -23,5 +23,8 @@
 #include "glog/logging.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/macros.h"
+
+#define QCHECK CHECK
+#define ABSL_DIE_IF_NULL CHECK_NOTNULL
 
 #endif  // OR_TOOLS_BASE_LOGGING_H_

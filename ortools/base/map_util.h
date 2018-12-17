@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,8 +17,7 @@
 #include <utility>
 #include "ortools/base/logging.h"
 
-namespace operations_research {
-
+namespace gtl {
 // Perform a lookup in a map or std::unordered_map.
 // If the key is present in the map then the value associated with that
 // key is returned, otherwise the value passed as a default is returned.
@@ -192,6 +191,5 @@ typename Collection::value_type::second_type& LookupOrInsert(
       collection->insert(typename Collection::value_type(key, value));
   return ret.first->second;
 }
-}  // namespace operations_research
-
+}  // namespace gtl
 #endif  // OR_TOOLS_BASE_MAP_UTIL_H_

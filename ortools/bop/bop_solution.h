@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -20,12 +20,14 @@
 
 namespace operations_research {
 namespace bop {
-// A Bop solution is a boolean assignment for each variable of the
-// problem. The cost value associated to the solution is the instantiation
-// of the objective cost of the problem.
+
+// A Bop solution is a Boolean assignment for each variable of the problem. The
+// cost value associated to the solution is the instantiation of the objective
+// cost of the problem.
+//
 // Note that a solution might not be a feasible solution, i.e. might violate
-// some constraints of the problem. The Check() method can be used to
-// test the feasibility.
+// some constraints of the problem. The IsFeasible() method can be used to test
+// the feasibility.
 class BopSolution {
  public:
   BopSolution(const LinearBooleanProblem& problem, const std::string& name);
@@ -71,10 +73,10 @@ class BopSolution {
   }
 
   // For range based iteration, i.e. for (const bool value : solution) {...}.
-  ITIVector<VariableIndex, bool>::const_iterator begin() const {
+  gtl::ITIVector<VariableIndex, bool>::const_iterator begin() const {
     return values_.begin();
   }
-  ITIVector<VariableIndex, bool>::const_iterator end() const {
+  gtl::ITIVector<VariableIndex, bool>::const_iterator end() const {
     return values_.end();
   }
 
@@ -93,7 +95,7 @@ class BopSolution {
 
   const LinearBooleanProblem* problem_;
   std::string name_;
-  ITIVector<VariableIndex, bool> values_;
+  gtl::ITIVector<VariableIndex, bool> values_;
 
   // Those are mutable because they behave as const values for a given solution
   // but for performance reasons we want to be lazy on their computation,

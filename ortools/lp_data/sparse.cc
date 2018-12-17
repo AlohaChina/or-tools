@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,17 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include "ortools/lp_data/sparse.h"
 #include <algorithm>
 
-#include "ortools/base/stringprintf.h"
-#include "ortools/base/join.h"
+#include "absl/strings/str_format.h"
 
 namespace operations_research {
 namespace glop {
 
 namespace {
+
+using ::util::Reverse;
 
 template <typename Matrix>
 EntryIndex ComputeNumEntries(const Matrix& matrix) {
@@ -82,7 +82,7 @@ Fractional ComputeInfinityNormTemplate(const Matrix& matrix) {
 // --------------------------------------------------------
 SparseMatrix::SparseMatrix() : columns_(), num_rows_(0) {}
 
-#if !defined(__ANDROID__) && (!defined(_MSC_VER) || (_MSC_VER >= 1800))
+#if (!defined(_MSC_VER) || (_MSC_VER >= 1800))
 SparseMatrix::SparseMatrix(
     std::initializer_list<std::initializer_list<Fractional>> init_list) {
   ColIndex num_cols(0);
@@ -363,7 +363,7 @@ bool SparseMatrix::Equals(const SparseMatrix& a, Fractional tolerance) const {
 }
 
 void SparseMatrix::ComputeMinAndMaxMagnitudes(Fractional* min_magnitude,
-                                              Fractional* max_magnitude) {
+                                              Fractional* max_magnitude) const {
   RETURN_IF_NULL(min_magnitude);
   RETURN_IF_NULL(max_magnitude);
   *min_magnitude = kInfinity;
@@ -399,7 +399,7 @@ std::string SparseMatrix::Dump() const {
   for (RowIndex row(0); row < num_rows_; ++row) {
     result.append("{ ");
     for (ColIndex col(0); col < num_cols; ++col) {
-      StringAppendF(&result, "%g ", ToDouble(LookUpValue(row, col)));
+      absl::StrAppendFormat(&result, "%g ", ToDouble(LookUpValue(row, col)));
     }
     result.append("}\n");
   }
@@ -455,38 +455,33 @@ void CompactSparseMatrix::PopulateFromTranspose(
   num_rows_ = ColToRowIndex(input.num_cols());
 
   // Fill the starts_ vector by computing the number of entries of each rows and
-  // then doing a cummulative sum.
-  starts_.assign(num_cols_ + 1, EntryIndex(0));
-  for (ColIndex col(0); col < input.num_cols(); ++col) {
-    for (const EntryIndex i : input.Column(col)) {
-      const ColIndex transposed_col = RowToColIndex(input.EntryRow(i));
-      ++starts_[transposed_col + 1];
-    }
+  // then doing a cummulative sum. After this step starts_[col + 1] will be the
+  // actual start of the column col when we are done.
+  starts_.assign(num_cols_ + 2, EntryIndex(0));
+  for (const RowIndex row : input.rows_) {
+    ++starts_[RowToColIndex(row) + 2];
   }
-  for (ColIndex col(1); col < starts_.size(); ++col) {
+  for (ColIndex col(2); col < starts_.size(); ++col) {
     starts_[col] += starts_[col - 1];
   }
   coefficients_.resize(starts_.back(), 0.0);
   rows_.resize(starts_.back(), kInvalidRow);
+  starts_.pop_back();
 
-  // Use starts_ to fill the matrix. Note that starts_ is modified.
+  // Use starts_ to fill the matrix. Note that starts_ is modified so that at
+  // the end it has its final values.
   for (ColIndex col(0); col < input.num_cols(); ++col) {
     const RowIndex transposed_row = ColToRowIndex(col);
     for (const EntryIndex i : input.Column(col)) {
       const ColIndex transposed_col = RowToColIndex(input.EntryRow(i));
-      const EntryIndex index = starts_[transposed_col];
-      ++starts_[transposed_col];
+      const EntryIndex index = starts_[transposed_col + 1]++;
       coefficients_[index] = input.EntryCoefficient(i);
       rows_[index] = transposed_row;
     }
   }
 
-  // Restore starts_ to its correct value.
-  for (ColIndex col(starts_.size() - 1); col > 0; col--) {
-    starts_[col] = starts_[col - 1];
-  }
+  DCHECK_EQ(starts_.front(), 0);
   DCHECK_EQ(starts_.back(), rows_.size());
-  starts_[ColIndex(0)] = 0;
 }
 
 void TriangularMatrix::PopulateFromTranspose(const TriangularMatrix& input) {
@@ -754,36 +749,19 @@ void TriangularMatrix::LowerSolveStartingAtInternal(ColIndex start,
 
 void TriangularMatrix::UpperSolve(DenseColumn* rhs) const {
   if (all_diagonal_coefficients_are_one_) {
-    UpperSolveWithNonZerosInternal<true, false>(rhs, nullptr);
+    UpperSolveInternal<true>(rhs);
   } else {
-    UpperSolveWithNonZerosInternal<false, false>(rhs, nullptr);
+    UpperSolveInternal<false>(rhs);
   }
 }
 
-void TriangularMatrix::UpperSolveWithNonZeros(
-    DenseColumn* rhs, RowIndexVector* non_zero_rows) const {
-  if (all_diagonal_coefficients_are_one_) {
-    UpperSolveWithNonZerosInternal<true, true>(rhs, non_zero_rows);
-  } else {
-    UpperSolveWithNonZerosInternal<false, true>(rhs, non_zero_rows);
-  }
-}
-
-template <bool diagonal_of_ones, bool with_non_zeros>
-void TriangularMatrix::UpperSolveWithNonZerosInternal(
-    DenseColumn* rhs, RowIndexVector* non_zero_rows) const {
+template <bool diagonal_of_ones>
+void TriangularMatrix::UpperSolveInternal(DenseColumn* rhs) const {
   RETURN_IF_NULL(rhs);
-  if (with_non_zeros) {
-    RETURN_IF_NULL(non_zero_rows);
-    non_zero_rows->clear();
-  }
   const ColIndex end = first_non_identity_column_;
   for (ColIndex col(diagonal_coefficients_.size() - 1); col >= end; --col) {
     const Fractional value = (*rhs)[ColToRowIndex(col)];
     if (value == 0.0) continue;
-    if (with_non_zeros) {
-      non_zero_rows->push_back(ColToRowIndex(col));
-    }
     const Fractional coeff =
         diagonal_of_ones ? value : value / diagonal_coefficients_[col];
     if (!diagonal_of_ones) {
@@ -797,18 +775,6 @@ void TriangularMatrix::UpperSolveWithNonZerosInternal(
     for (EntryIndex i(starts_[col + 1] - 1); i >= last; --i) {
       (*rhs)[EntryRow(i)] -= coeff * EntryCoefficient(i);
     }
-  }
-
-  // Finish filling the non_zero_rows vector if needed.
-  if (with_non_zeros) {
-    for (RowIndex row(end.value() - 1); row >= 0; --row) {
-      if ((*rhs)[row] != 0.0) {
-        non_zero_rows->push_back(row);
-      }
-    }
-
-    // Sorting the non-zero positions gives better performance later.
-    std::reverse(non_zero_rows->begin(), non_zero_rows->end());
   }
 }
 
@@ -1309,5 +1275,63 @@ void TriangularMatrix::ComputeRowsToConsiderInSortedOrder(
   }
 }
 
+// A known upper bound for the infinity norm of T^{-1} is the
+// infinity norm of y where T'*y = x with:
+// - x the all 1s vector.
+// - Each entry in T' is the absolute value of the same entry in T.
+Fractional TriangularMatrix::ComputeInverseInfinityNormUpperBound() const {
+  if (first_non_identity_column_ == num_cols_) {
+    // Identity matrix
+    return 1.0;
+  }
+
+  const bool is_upper = IsUpperTriangular();
+  DenseColumn row_norm_estimate(num_rows_, 1.0);
+  const int num_cols = num_cols_.value();
+
+  for (int i = 0; i < num_cols; ++i) {
+    const ColIndex col(is_upper ? num_cols - 1 - i : i);
+    DCHECK_NE(diagonal_coefficients_[col], 0.0);
+    const Fractional coeff = row_norm_estimate[ColToRowIndex(col)] /
+                             std::abs(diagonal_coefficients_[col]);
+
+    row_norm_estimate[ColToRowIndex(col)] = coeff;
+    for (const EntryIndex i : Column(col)) {
+      row_norm_estimate[EntryRow(i)] += coeff * std::abs(EntryCoefficient(i));
+    }
+  }
+
+  return *std::max_element(row_norm_estimate.begin(), row_norm_estimate.end());
+}
+
+Fractional TriangularMatrix::ComputeInverseInfinityNorm() const {
+  const bool is_upper = IsUpperTriangular();
+
+  DenseColumn row_sum(num_rows_, 0.0);
+  DenseColumn right_hand_side;
+  for (ColIndex col(0); col < num_cols_; ++col) {
+    right_hand_side.assign(num_rows_, 0);
+    right_hand_side[ColToRowIndex(col)] = 1.0;
+
+    // Get the col-th column of the matrix inverse.
+    if (is_upper) {
+      UpperSolve(&right_hand_side);
+    } else {
+      LowerSolve(&right_hand_side);
+    }
+
+    // Compute sum_j |inverse_ij|.
+    for (RowIndex row(0); row < num_rows_; ++row) {
+      row_sum[row] += std::abs(right_hand_side[row]);
+    }
+  }
+  // Compute max_i sum_j |inverse_ij|.
+  Fractional norm = 0.0;
+  for (RowIndex row(0); row < num_rows_; ++row) {
+    norm = std::max(norm, row_sum[row]);
+  }
+
+  return norm;
+}
 }  // namespace glop
 }  // namespace operations_research

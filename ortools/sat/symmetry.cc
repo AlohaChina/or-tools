@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,8 +13,8 @@
 
 #include "ortools/sat/symmetry.h"
 
-#include "ortools/base/logging.h"
 #include "ortools/base/int_type.h"
+#include "ortools/base/logging.h"
 
 namespace operations_research {
 namespace sat {
@@ -95,7 +95,7 @@ bool SymmetryPropagator::PropagateNext(Trail* trail) {
         // Set the conflict on the trail.
         // Note that we need to fetch a reason for this.
         std::vector<Literal>* conflict = trail->MutableConflict();
-        const gtl::Span<Literal> initial_reason =
+        const absl::Span<const Literal> initial_reason =
             trail->Reason(non_symmetric.literal.Variable());
         Permute(p_index, initial_reason, conflict);
         conflict->push_back(non_symmetric.image);
@@ -144,11 +144,11 @@ void SymmetryPropagator::Untrail(const Trail& trail, int trail_index) {
   }
 }
 
-gtl::Span<Literal> SymmetryPropagator::Reason(const Trail& trail,
+absl::Span<const Literal> SymmetryPropagator::Reason(const Trail& trail,
                                                      int trail_index) const {
   SCOPED_TIME_STAT(&stats_);
   const ReasonInfo& reason_info = reasons_[trail_index];
-  std::vector<Literal>* reason = trail.GetVectorToStoreReason(trail_index);
+  std::vector<Literal>* reason = trail.GetEmptyVectorToStoreReason(trail_index);
   Permute(reason_info.symmetry_index,
           trail.Reason(trail[reason_info.source_trail_index].Variable()),
           reason);
@@ -189,7 +189,7 @@ bool SymmetryPropagator::Enqueue(const Trail& trail, Literal literal,
   return *index == p_trail->size();
 }
 
-void SymmetryPropagator::Permute(int index, gtl::Span<Literal> input,
+void SymmetryPropagator::Permute(int index, absl::Span<const Literal> input,
                                  std::vector<Literal>* output) const {
   SCOPED_TIME_STAT(&stats_);
 

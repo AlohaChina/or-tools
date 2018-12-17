@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -31,6 +31,9 @@
 syntax = "proto2";
 option java_package = "com.google.ortools.linearsolver";
 option java_multiple_files = true;
+
+// import "google/protobuf/wrappers.proto";
+import "ortools/util/optional_boolean.proto";
 
 package operations_research;
 
@@ -135,15 +138,11 @@ message MPModelProto {
   optional PartialVariableAssignment solution_hint = 6;
 }
 
-// A "three-way" boolean: unspecified, false or true.
-enum OptionalBoolean {
-  BOOL_UNSPECIFIED = 0;
-  BOOL_FALSE = 1;
-  BOOL_TRUE = 2;
-}
-
 // To support 'unspecified' double value in proto3, the simplest is to wrap
 // any double value in a nested message (has_XXX works for message fields).
+// We don't use google/protobuf/wrappers.proto because depending on it makes
+// the following android integration test fail:
+// http://sponge/c4bce1fd-41bd-4d0b-b4ca-fc04d4d64621
 message OptionalDouble {
   optional double value = 1;
 }
@@ -277,7 +276,7 @@ message MPModelRequest {
 //
 // bool InCategory(MPSolverResponseStatus status, MPSolverResponseStatus cat) {
 //   if (cat == MPSOLVER_OPTIMAL) return status == MPSOLVER_OPTIMAL;
-//   while (status > cat) status <<= 4;
+//   while (status > cat) status >>= 4;
 //   return status == cat;
 // }
 enum MPSolverResponseStatus {
@@ -316,7 +315,7 @@ enum MPSolverResponseStatus {
   // (resp. maximization) problem.
   MPSOLVER_UNBOUNDED = 0x3;
 
-  // An error (most probably numerical) occured.
+  // An error (most probably numerical) occurred.
   // One likely cause for such errors is a large numerical range among variable
   // coefficients (eg. 1e-16, 1e20), in which case one should try to shrink it.
   MPSOLVER_ABNORMAL = 0x4;
@@ -377,4 +376,12 @@ message MPSolutionResponse {
   // it is actually a linear program).
   // These are set iff 'status' is OPTIMAL or FEASIBLE.
   repeated double dual_value = 4 [packed = true];
+
+  // [Advanced usage.]
+  // Values of the reduced cost of the variables in the same order as the
+  // MPModelProto::variable. This is a dense representation.
+  // These are not set if the problem was solved with a MIP solver (even if it
+  // is actually a linear program).
+  // These are set iff 'status' is OPTIMAL or FEASIBLE.
+  repeated double reduced_cost = 6 [packed = true];
 }

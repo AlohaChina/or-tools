@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -26,7 +26,11 @@
 //
 // TODO(user): test all the APIs that are currently marked as 'untested'.
 
+%include "stdint.i"
+
 %include "ortools/base/base.i"
+
+%import "ortools/util/python/vector.i"
 
 %import "ortools/graph/ebert_graph.h"
 
@@ -42,6 +46,9 @@
 #include "ortools/graph/shortestpaths.h"
 %}
 
+typedef int64_t int64;
+typedef uint64_t uint64;
+
 // ############ max_flow.h ############
 
 %ignoreall
@@ -51,6 +58,7 @@
 %unignore operations_research::SimpleMaxFlow::SimpleMaxFlow;
 %unignore operations_research::SimpleMaxFlow::~SimpleMaxFlow;
 %unignore operations_research::SimpleMaxFlow::AddArcWithCapacity;
+%unignore operations_research::SimpleMaxFlow::SetArcCapacity;  // untested
 %unignore operations_research::SimpleMaxFlow::NumNodes;  // untested
 %unignore operations_research::SimpleMaxFlow::NumArcs;
 %unignore operations_research::SimpleMaxFlow::Tail;
@@ -123,6 +131,7 @@
 // class, and we rename it "LinearSumAssignment".
 %rename(LinearSumAssignment) operations_research::SimpleLinearSumAssignment;
 %unignore operations_research::SimpleLinearSumAssignment::SimpleLinearSumAssignment;
+%unignore operations_research::SimpleLinearSumAssignment::~SimpleLinearSumAssignment;
 %unignore operations_research::SimpleLinearSumAssignment::AddArcWithCost;
 %unignore operations_research::SimpleLinearSumAssignment::NumNodes;
 %unignore operations_research::SimpleLinearSumAssignment::NumArcs;  // untested

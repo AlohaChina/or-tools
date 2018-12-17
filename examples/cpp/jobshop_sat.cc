@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,193 +12,376 @@
 // limitations under the License.
 
 #include <math.h>
+
+#include <algorithm>
 #include <vector>
 
-#include "ortools/base/commandlineflags.h"
+#include "absl/strings/match.h"
+#include "google/protobuf/text_format.h"
+#include "google/protobuf/wrappers.pb.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/timer.h"
-#include "google/protobuf/text_format.h"
-#include "ortools/base/join.h"
-#include "ortools/base/stringpiece_utils.h"
-#include "ortools/base/strutil.h"
-#include "examples/cpp/flexible_jobshop.h"
-#include "examples/cpp/jobshop.h"
-#include "ortools/sat/cp_model_solver.h"
-#include "ortools/sat/disjunctive.h"
-#include "ortools/sat/intervals.h"
+#include "ortools/data/jobshop_scheduling.pb.h"
+#include "ortools/data/jobshop_scheduling_parser.h"
+#include "ortools/sat/cp_model.h"
+#include "ortools/sat/cp_model.pb.h"
 #include "ortools/sat/model.h"
-#include "ortools/sat/optimization.h"
-#include "ortools/sat/precedences.h"
-#include "ortools/sat/sat_solver.h"
 
 DEFINE_string(input, "", "Jobshop data file name.");
 DEFINE_string(params, "", "Sat parameters in text proto format.");
-DEFINE_bool(use_boolean_precedences, false,
-            "Whether we create Boolean variables for all the possible "
-            "precedences between tasks on the same machine, or not.");
+DEFINE_bool(use_optional_variables, true,
+            "Whether we use optional variables for bounds of an optional "
+            "interval or not.");
+DEFINE_bool(display_model, false, "Display jobshop proto before solving.");
+DEFINE_bool(display_sat_model, false, "Display sat proto before solving.");
 
-namespace {
-struct Task {
-  int id;   // dense unique id in [1, num_tasks + 1)
-  int job;  // dense unique id in [0, num_jobs)
-
-  // The possible alternative to run this task.
-  std::vector<int> machines;
-  std::vector<int> durations;
-};
-struct MachineTask {
-  int id;  // The task id (note that it is shared between alternative tasks).
-  int job;
-  int duration;
-
-  // -1 if no alternative or the index of the Boolean variable indicating if
-  //  this alternative was taken.
-  int alternative_var;
-};
-}  // namespace
+using operations_research::data::jssp::Job;
+using operations_research::data::jssp::JobPrecedence;
+using operations_research::data::jssp::JsspInputProblem;
+using operations_research::data::jssp::Machine;
+using operations_research::data::jssp::Task;
+using operations_research::data::jssp::TransitionTimeMatrix;
 
 namespace operations_research {
 namespace sat {
 
-// Solve a flexible/normal JobShop scheduling problem using SAT.
-void Solve(const std::vector<std::vector<Task>>& tasks_per_job, int horizon) {
-  int num_machines = 0;
-  for (const std::vector<Task>& tasks : tasks_per_job) {
-    for (const Task& task : tasks) {
-      for (const int machine : task.machines) {
-        num_machines = std::max(num_machines, machine + 1);
+// Compute a valid horizon from a problem.
+int64 ComputeHorizon(const JsspInputProblem& problem) {
+  int64 sum_of_durations = 0;
+  int64 max_latest_end = 0;
+  int64 max_earliest_start = 0;
+  for (const Job& job : problem.jobs()) {
+    if (job.has_latest_end()) {
+      max_latest_end =
+          std::max<int64>(max_latest_end, job.latest_end().value());
+    } else {
+      max_latest_end = kint64max;
+    }
+    if (job.has_earliest_start()) {
+      max_earliest_start =
+          std::max<int64>(max_earliest_start, job.earliest_start().value());
+    }
+    for (const Task& task : job.tasks()) {
+      int64 max_duration = 0;
+      for (int64 d : task.duration()) {
+        max_duration = std::max(max_duration, d);
       }
+      sum_of_durations += max_duration;
     }
   }
 
-  Model model;
-  model.Add(NewSatParameters(FLAGS_params));
+  const int num_jobs = problem.jobs_size();
+  int64 sum_of_transitions = 0;
+  for (const Machine& machine : problem.machines()) {
+    if (!machine.has_transition_time_matrix()) continue;
+    const TransitionTimeMatrix& matrix = machine.transition_time_matrix();
+    for (int i = 0; i < num_jobs; ++i) {
+      int64 max_transition = 0;
+      for (int j = 0; j < num_jobs; ++j) {
+        max_transition = std::max<int64>(
+            max_transition, matrix.transition_time(i * num_jobs + j));
+      }
+      sum_of_transitions += max_transition;
+    }
+  }
+  return std::min<int64>(max_latest_end, sum_of_durations + sum_of_transitions +
+                                             max_earliest_start);
+  // TODO(user): Uses transitions.
+}
 
-  // This is only used with --nouse_boolean_precedences.
-  std::vector<IntegerVariable> decision_variables;
+// Solve a JobShop scheduling problem using SAT.
+void Solve(const JsspInputProblem& problem) {
+  if (FLAGS_display_model) {
+    LOG(INFO) << problem.DebugString();
+  }
 
-  const IntegerVariable makespan = model.Add(NewIntegerVariable(0, horizon));
-  std::vector<std::vector<IntervalVariable>> machine_to_intervals(num_machines);
-  for (const std::vector<Task>& tasks : tasks_per_job) {
-    IntervalVariable previous_interval = kNoIntervalVariable;
-    for (const Task& task : tasks) {
-      const int num_alternatives = task.machines.size();
-      CHECK_EQ(num_alternatives, task.durations.size());
+  CpModelBuilder cp_model;
+
+  const int num_jobs = problem.jobs_size();
+  const int num_machines = problem.machines_size();
+  const int64 horizon = ComputeHorizon(problem);
+
+  std::vector<int> starts;
+  std::vector<int> ends;
+
+  const Domain all_horizon(0, horizon);
+
+  const IntVar makespan = cp_model.NewIntVar(all_horizon);
+
+  std::vector<std::vector<IntervalVar>> machine_to_intervals(num_machines);
+  std::vector<std::vector<int>> machine_to_jobs(num_machines);
+  std::vector<std::vector<IntVar>> machine_to_starts(num_machines);
+  std::vector<std::vector<IntVar>> machine_to_ends(num_machines);
+  std::vector<std::vector<BoolVar>> machine_to_presences(num_machines);
+  std::vector<IntVar> job_starts(num_jobs);
+  std::vector<IntVar> job_ends(num_jobs);
+  std::vector<IntVar> task_starts;
+  int64 objective_offset = 0;
+  std::vector<IntVar> objective_vars;
+  std::vector<int64> objective_coeffs;
+
+  for (int j = 0; j < num_jobs; ++j) {
+    const Job& job = problem.jobs(j);
+    IntVar previous_end;
+    const int64 hard_start =
+        job.has_earliest_start() ? job.earliest_start().value() : 0L;
+    const int64 hard_end =
+        job.has_latest_end() ? job.latest_end().value() : horizon;
+
+    for (int t = 0; t < job.tasks_size(); ++t) {
+      const Task& task = job.tasks(t);
+      const int num_alternatives = task.machine_size();
+      CHECK_EQ(num_alternatives, task.duration_size());
 
       // Add the "main" task interval. It will englobe all the alternative ones
       // if there is many, or be a normal task otherwise.
-      int min_duration = task.durations[0];
-      int max_duration = task.durations[0];
-      for (int i = 0; i < num_alternatives; ++i) {
-        min_duration = std::min(min_duration, task.durations[i]);
-        max_duration = std::max(max_duration, task.durations[i]);
+      int64 min_duration = task.duration(0);
+      int64 max_duration = task.duration(0);
+      for (int i = 1; i < num_alternatives; ++i) {
+        min_duration = std::min<int64>(min_duration, task.duration(i));
+        max_duration = std::max<int64>(max_duration, task.duration(i));
       }
-      const IntervalVariable interval = model.Add(
-          NewIntervalWithVariableSize(0, horizon, min_duration, max_duration));
-      decision_variables.push_back(model.Get(StartVar(interval)));
+      const IntVar start = cp_model.NewIntVar(Domain(hard_start, hard_end));
+      const IntVar duration =
+          cp_model.NewIntVar(Domain(min_duration, max_duration));
+      const IntVar end = cp_model.NewIntVar(Domain(hard_start, hard_end));
+      const IntervalVar interval =
+          cp_model.NewIntervalVar(start, duration, end);
+
+      // Store starts and ends of jobs for precedences.
+      if (t == 0) {
+        job_starts[j] = start;
+      }
+      if (t == job.tasks_size() - 1) {
+        job_ends[j] = end;
+      }
+      task_starts.push_back(start);
 
       // Chain the task belonging to the same job.
-      if (previous_interval != kNoIntervalVariable) {
-        model.Add(LowerOrEqual(model.Get(EndVar(previous_interval)),
-                               model.Get(StartVar(interval))));
+      if (t > 0) {
+        cp_model.AddLessOrEqual(previous_end, start);
       }
-      previous_interval = interval;
+      previous_end = end;
 
       if (num_alternatives == 1) {
-        machine_to_intervals[task.machines[0]].push_back(interval);
-      } else {
-        std::vector<IntervalVariable> alternatives;
-        for (int i = 0; i < num_alternatives; ++i) {
-          const Literal is_present(model.Add(NewBooleanVariable()), true);
-          const IntervalVariable alternative = model.Add(
-              NewOptionalInterval(0, horizon, task.durations[i], is_present));
-          alternatives.push_back(alternative);
-          machine_to_intervals[task.machines[i]].push_back(alternative);
+        const int m = task.machine(0);
+        machine_to_intervals[m].push_back(interval);
+        machine_to_jobs[m].push_back(j);
+        machine_to_starts[m].push_back(start);
+        machine_to_ends[m].push_back(end);
+        machine_to_presences[m].push_back(cp_model.TrueVar());
+        if (task.cost_size() > 0) {
+          objective_offset += task.cost(0);
         }
-        model.Add(IntervalWithAlternatives(interval, alternatives));
+      } else {
+        std::vector<BoolVar> presences;
+        for (int a = 0; a < num_alternatives; ++a) {
+          const BoolVar presence = cp_model.NewBoolVar();
+          const IntVar local_start =
+              FLAGS_use_optional_variables
+                  ? cp_model.NewIntVar(Domain(hard_start, hard_end))
+                  : start;
+          const IntVar local_duration = cp_model.NewConstant(task.duration(a));
+          const IntVar local_end =
+              FLAGS_use_optional_variables
+                  ? cp_model.NewIntVar(Domain(hard_start, hard_end))
+                  : end;
+          const IntervalVar local_interval = cp_model.NewOptionalIntervalVar(
+              local_start, local_duration, local_end, presence);
+
+          // Link local and global variables.
+          if (FLAGS_use_optional_variables) {
+            cp_model.AddEquality(start, local_start).OnlyEnforceIf(presence);
+            cp_model.AddEquality(end, local_end).OnlyEnforceIf(presence);
+
+            // TODO(user): Experiment with the following implication.
+            cp_model.AddEquality(duration, local_duration)
+                .OnlyEnforceIf(presence);
+          }
+
+          // Record relevant variables for later use.
+          const int m = task.machine(a);
+          machine_to_intervals[m].push_back(local_interval);
+          machine_to_jobs[m].push_back(j);
+          machine_to_starts[m].push_back(local_start);
+          machine_to_ends[m].push_back(local_end);
+          machine_to_presences[m].push_back(presence);
+
+          // Add cost if present.
+          if (task.cost_size() > 0) {
+            objective_vars.push_back(presence);
+            objective_coeffs.push_back(task.cost(a));
+          }
+          // Collect presence variables.
+          presences.push_back(presence);
+        }
+        // Exactly one alternative interval is present.
+        cp_model.AddEquality(LinearExpr::BooleanSum(presences), 1);
       }
     }
 
     // The makespan will be greater than the end of each job.
-    model.Add(LowerOrEqual(model.Get(EndVar(previous_interval)), makespan));
-  }
+    if (problem.makespan_cost_per_time_unit() != 0L) {
+      cp_model.AddLessOrEqual(previous_end, makespan);
+    }
 
-  // Add all the potential precedences between tasks on the same machine.
-  for (int m = 0; m < num_machines; ++m) {
-    if (FLAGS_use_boolean_precedences) {
-      model.Add(DisjunctiveWithBooleanPrecedences(machine_to_intervals[m]));
-    } else {
-      model.Add(Disjunctive(machine_to_intervals[m]));
+    const int64 lateness_penalty = job.lateness_cost_per_time_unit();
+    // Lateness cost.
+    if (lateness_penalty != 0L) {
+      const int64 due_date = job.late_due_date();
+      if (due_date == 0) {
+        objective_vars.push_back(previous_end);
+        objective_coeffs.push_back(lateness_penalty);
+      } else {
+        const IntVar shifted_var =
+            cp_model.NewIntVar(Domain(-due_date, horizon - due_date));
+        cp_model.AddEquality(shifted_var,
+                             LinearExpr(previous_end).AddConstant(-due_date));
+        const IntVar lateness_var = cp_model.NewIntVar(all_horizon);
+        cp_model.AddMaxEquality(lateness_var,
+                                {cp_model.NewConstant(0), shifted_var});
+        objective_vars.push_back(lateness_var);
+        objective_coeffs.push_back(lateness_penalty);
+      }
+    }
+    const int64 earliness_penalty = job.earliness_cost_per_time_unit();
+    // Earliness cost.
+    if (earliness_penalty != 0L) {
+      const int64 due_date = job.early_due_date();
+      if (due_date > 0) {
+        const IntVar shifted_var =
+            cp_model.NewIntVar(Domain(due_date - horizon, due_date));
+        cp_model.AddEquality(LinearExpr::Sum({shifted_var, previous_end}),
+                             due_date);
+        const IntVar earliness_var = cp_model.NewIntVar(all_horizon);
+        cp_model.AddMaxEquality(earliness_var,
+                                {cp_model.NewConstant(0), shifted_var});
+        objective_vars.push_back(earliness_var);
+        objective_coeffs.push_back(earliness_penalty);
+      }
     }
   }
 
-  LOG(INFO) << "#machines:" << num_machines;
-  LOG(INFO) << "#jobs:" << tasks_per_job.size();
-  LOG(INFO) << "#tasks:" << model.Get<IntervalsRepository>()->NumIntervals();
+  // Add one no_overlap constraint per machine.
+  for (int m = 0; m < num_machines; ++m) {
+    cp_model.AddNoOverlap(machine_to_intervals[m]);
 
-  if (FLAGS_use_boolean_precedences) {
-    // We disable the lazy encoding in this case.
-    decision_variables.clear();
+    if (problem.machines(m).has_transition_time_matrix()) {
+      const TransitionTimeMatrix& transitions =
+          problem.machines(m).transition_time_matrix();
+      const int num_intervals = machine_to_intervals[m].size();
+
+      // Create circuit constraint on a machine.
+      // Node 0 and num_intervals + 1 are source and sink.
+      CircuitConstraint circuit = cp_model.AddCircuitConstraint();
+      for (int i = 0; i < num_intervals; ++i) {
+        const int job_i = machine_to_jobs[m][i];
+        // Source to nodes.
+        circuit.AddArc(0, i + 1, cp_model.NewBoolVar());
+        // Node to sink.
+        circuit.AddArc(i + 1, 0, cp_model.NewBoolVar());
+        // Node to node.
+        for (int j = 0; j < num_intervals; ++j) {
+          if (i == j) {
+            circuit.AddArc(i + 1, i + 1, Not(machine_to_presences[m][i]));
+          } else {
+            const int job_j = machine_to_jobs[m][j];
+            const int64 transition =
+                transitions.transition_time(job_i * num_jobs + job_j);
+            const BoolVar lit = cp_model.NewBoolVar();
+            const IntVar start = machine_to_starts[m][j];
+            const IntVar end = machine_to_ends[m][i];
+            circuit.AddArc(i + 1, j + 1, lit);
+            // Push the new start with an extra transition.
+            cp_model
+                .AddLessOrEqual(LinearExpr(end).AddConstant(transition), start)
+                .OnlyEnforceIf(lit);
+          }
+        }
+      }
+    }
   }
-  MinimizeIntegerVariableWithLinearScanAndLazyEncoding(
-      /*log_info=*/true, makespan,
-      FirstUnassignedVarAtItsMinHeuristic(decision_variables, &model),
-      /*feasible_solution_observer=*/
-      [makespan](const Model& model) {
-        LOG(INFO) << "Makespan " << model.Get(LowerBound(makespan));
-      },
-      &model);
+
+  // Add job precedences.
+  for (const JobPrecedence& precedence : problem.precedences()) {
+    const IntVar start = job_starts[precedence.second_job_index()];
+    const IntVar end = job_ends[precedence.first_job_index()];
+    cp_model.AddLessOrEqual(LinearExpr(end).AddConstant(precedence.min_delay()),
+                            start);
+  }
+
+  // Add objective.
+  if (problem.makespan_cost_per_time_unit() != 0L) {
+    objective_coeffs.push_back(problem.makespan_cost_per_time_unit());
+    objective_vars.push_back(makespan);
+  }
+  cp_model.Minimize(LinearExpr::ScalProd(objective_vars, objective_coeffs)
+                        .AddConstant(objective_offset));
+  if (problem.has_scaling_factor()) {
+    cp_model.ScaleObjectiveBy(problem.scaling_factor().value());
+  }
+
+  // Decision strategy.
+  cp_model.AddDecisionStrategy(task_starts,
+                               DecisionStrategyProto::CHOOSE_LOWEST_MIN,
+                               DecisionStrategyProto::SELECT_MIN_VALUE);
+
+  LOG(INFO) << "#machines:" << num_machines;
+  LOG(INFO) << "#jobs:" << num_jobs;
+  LOG(INFO) << "horizon:" << horizon;
+
+  if (FLAGS_display_sat_model) {
+    LOG(INFO) << cp_model.Proto().DebugString();
+  }
+
+  LOG(INFO) << CpModelStats(cp_model.Proto());
+
+  Model model;
+  model.Add(NewSatParameters(FLAGS_params));
+
+  const CpSolverResponse response = SolveWithModel(cp_model, &model);
+  LOG(INFO) << CpSolverResponseStats(response);
+
+  // Check cost, recompute it from scratch.
+  int64 final_cost = 0;
+  if (problem.makespan_cost_per_time_unit() != 0) {
+    int64 makespan = 0;
+    for (IntVar v : job_ends) {
+      makespan = std::max(makespan, SolutionIntegerValue(response, v));
+    }
+    final_cost += makespan * problem.makespan_cost_per_time_unit();
+  }
+
+  for (int i = 0; i < job_ends.size(); ++i) {
+    const int64 early_due_date = problem.jobs(i).early_due_date();
+    const int64 late_due_date = problem.jobs(i).late_due_date();
+    const int64 early_penalty = problem.jobs(i).earliness_cost_per_time_unit();
+    const int64 late_penalty = problem.jobs(i).lateness_cost_per_time_unit();
+    const int64 end = SolutionIntegerValue(response, job_ends[i]);
+    if (end < early_due_date && early_penalty != 0) {
+      final_cost += (early_due_date - end) * early_penalty;
+    }
+    if (end > late_due_date && late_penalty != 0) {
+      final_cost += (end - late_due_date) * late_penalty;
+    }
+  }
+  // TODO(user): Support alternative cost in check.
+  CHECK_EQ(response.objective_value(), final_cost);
 }
 
 }  // namespace sat
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags( &argc, &argv, true);
+  absl::SetFlag(&FLAGS_logtostderr, true);
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
   if (FLAGS_input.empty()) {
     LOG(FATAL) << "Please supply a data file with --input=";
   }
 
-  // Read a flexible/normal job shop problem based on the file extension.
-  int new_task_id = 0;
-  int horizon = 0;
-  std::vector<std::vector<Task>> data;
-  if (strings::EndsWith(FLAGS_input, ".fjs")) {
-    LOG(INFO) << "Reading flexible jobshop instance '" << FLAGS_input << "'.";
-    operations_research::FlexibleJobShopData fjs;
-    fjs.Load(FLAGS_input);
-    horizon = fjs.horizon();
-    data.resize(fjs.job_count());
-    if (fjs.job_count() == 0) {
-      LOG(FATAL) << "No jobs in '" << FLAGS_input << "'.";
-    }
-    for (int i = 0; i < fjs.job_count(); ++i) {
-      for (const operations_research::FlexibleJobShopData::Task& task :
-           fjs.TasksOfJob(i)) {
-        CHECK_EQ(task.machines.size(), task.durations.size());
-        data[i].push_back(
-            {new_task_id++, task.job_id, task.machines, task.durations});
-      }
-    }
-  } else {
-    operations_research::JobShopData jssp;
-    jssp.Load(FLAGS_input);
-    horizon = jssp.horizon();
-    data.resize(jssp.job_count());
-    if (jssp.job_count() == 0) {
-      LOG(FATAL) << "No jobs in '" << FLAGS_input << "'.";
-    }
-    for (int i = 0; i < jssp.job_count(); ++i) {
-      for (const operations_research::JobShopData::Task& task :
-           jssp.TasksOfJob(i)) {
-        data[i].push_back(
-            {new_task_id++, task.job_id, {task.machine_id}, {task.duration}});
-      }
-    }
-  }
-
-  // Solve it.
-  operations_research::sat::Solve(data, horizon);
+  operations_research::data::jssp::JsspParser parser;
+  CHECK(parser.ParseFile(FLAGS_input));
+  operations_research::sat::Solve(parser.problem());
   return EXIT_SUCCESS;
 }

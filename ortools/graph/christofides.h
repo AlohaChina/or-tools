@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -20,16 +20,19 @@
 #ifndef OR_TOOLS_GRAPH_CHRISTOFIDES_H_
 #define OR_TOOLS_GRAPH_CHRISTOFIDES_H_
 
-#include <unordered_map>
-
+#include "absl/container/flat_hash_map.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/graph/eulerian_path.h"
+#include "ortools/graph/graph.h"
 #include "ortools/graph/minimum_spanning_tree.h"
 #include "ortools/linear_solver/linear_solver.h"
 #include "ortools/linear_solver/linear_solver.pb.h"
+#include "ortools/util/saturated_arithmetic.h"
 
 namespace operations_research {
+
+using ::util::CompleteGraph;
 
 template <typename CostType, typename ArcIndex = int64,
           typename NodeIndex = int32,
@@ -37,9 +40,9 @@ template <typename CostType, typename ArcIndex = int64,
 class ChristofidesPathSolver {
  public:
   enum class MatchingAlgorithm {
-    #if defined(USE_CBC) || defined(USE_SCIP)
+#if defined(USE_CBC) || defined(USE_SCIP)
     MINIMUM_WEIGHT_MATCHING,
-    #endif  // defined(USE_CBC) || defined(USE_SCIP)
+#endif  // defined(USE_CBC) || defined(USE_SCIP)
     MINIMAL_WEIGHT_MATCHING,
   };
   ChristofidesPathSolver(NodeIndex num_nodes, CostFunction costs);
@@ -65,6 +68,16 @@ class ChristofidesPathSolver {
  private:
   // Runs the Christofides algorithm.
   void Solve();
+
+  // Safe addition operator to avoid overflows when possible.
+  // template <typename T>
+  // T SafeAdd(T a, T b) {
+  //   return a + b;
+  // }
+  //template <>
+  int64 SafeAdd(int64 a, int64 b) {
+    return CapAdd(a, b);
+  }
 
   // Matching algorithm to use.
   MatchingAlgorithm matching_;
@@ -101,7 +114,7 @@ std::vector<typename GraphType::ArcIndex> ComputeMinimumWeightMatchingWithMIP(
   // and constraints ensuring that each node appears in exactly one selected
   // arc. The objective is to minimize the sum of the weights of selected arcs.
   // It is assumed the graph is symmetrical.
-  std::unordered_map<ArcIndex, ArcIndex> variable_indices;
+  absl::flat_hash_map<ArcIndex, ArcIndex> variable_indices;
   for (NodeIndex node : graph.AllNodes()) {
     // Creating arc-selection Boolean variable.
     for (const ArcIndex arc : graph.OutgoingArcs(node)) {
@@ -134,13 +147,13 @@ std::vector<typename GraphType::ArcIndex> ComputeMinimumWeightMatchingWithMIP(
       }
     }
   }
-  #if defined(USE_SCIP)
+#if defined(USE_SCIP)
   MPSolver mp_solver("MatchingWithSCIP",
                      MPSolver::SCIP_MIXED_INTEGER_PROGRAMMING);
-  #elif defined(USE_CBC)
-    MPSolver mp_solver("MatchingWithCBC",
-                       MPSolver::CBC_MIXED_INTEGER_PROGRAMMING);
-  #endif
+#elif defined(USE_CBC)
+  MPSolver mp_solver("MatchingWithCBC",
+                     MPSolver::CBC_MIXED_INTEGER_PROGRAMMING);
+#endif
   std::string error;
   mp_solver.LoadModelFromProto(model, &error);
   MPSolver::ResultStatus status = mp_solver.Solve();
@@ -225,7 +238,7 @@ void ChristofidesPathSolver<CostType, ArcIndex, NodeIndex,
   CompleteGraph<NodeIndex, ArcIndex> reduced_graph(reduced_size);
   std::vector<ArcIndex> closure_arcs;
   switch (matching_) {
-    #if defined(USE_CBC) || defined(USE_SCIP)
+#if defined(USE_CBC) || defined(USE_SCIP)
     case MatchingAlgorithm::MINIMUM_WEIGHT_MATCHING: {
       closure_arcs = ComputeMinimumWeightMatchingWithMIP(
           reduced_graph, [this, &reduced_graph,
@@ -235,7 +248,7 @@ void ChristofidesPathSolver<CostType, ArcIndex, NodeIndex,
           });
       break;
     }
-    #endif  // defined(USE_CBC) || defined(USE_SCIP)
+#endif  // defined(USE_CBC) || defined(USE_SCIP)
     case MatchingAlgorithm::MINIMAL_WEIGHT_MATCHING: {
       // TODO(user): Cost caching was added and can gain up to 20% but
       // increases memory usage; see if we can avoid caching.
@@ -269,7 +282,7 @@ void ChristofidesPathSolver<CostType, ArcIndex, NodeIndex,
   // Build Eulerian path on minimum spanning tree + closing edges from matching
   // and extract a solution to the Traveling Salesman from the path by skipping
   // duplicate nodes.
-  ReverseArcListGraph<NodeIndex, ArcIndex> egraph(
+  ::util::ReverseArcListGraph<NodeIndex, ArcIndex> egraph(
       num_nodes, closure_arcs.size() + mst.size());
   for (ArcIndex arc : mst) {
     const NodeIndex tail = graph_.Tail(arc);
@@ -286,10 +299,12 @@ void ChristofidesPathSolver<CostType, ArcIndex, NodeIndex,
   for (const NodeIndex node : BuildEulerianTourFromNode(egraph, 0)) {
     if (touched[node]) continue;
     touched[node] = true;
-    tsp_cost_ += tsp_path_.empty() ? 0 : costs_(tsp_path_.back(), node);
+    tsp_cost_ = SafeAdd(tsp_cost_,
+                        tsp_path_.empty() ? 0 : costs_(tsp_path_.back(), node));
     tsp_path_.push_back(node);
   }
-  tsp_cost_ += tsp_path_.empty() ? 0 : costs_(tsp_path_.back(), 0);
+  tsp_cost_ =
+      SafeAdd(tsp_cost_, tsp_path_.empty() ? 0 : costs_(tsp_path_.back(), 0));
   tsp_path_.push_back(0);
   solved_ = true;
 }

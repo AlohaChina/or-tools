@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -70,13 +70,6 @@ sat::SatSolver::Status SatCoreBasedOptimizer::SolveWithAssumptions() {
       sat::ReduceNodesAndExtractAssumptions(upper_bound_,
                                             stratified_lower_bound_,
                                             &lower_bound_, &nodes_, &solver_);
-
-  // The lower bound is proved to equal the upper bound, the upper bound
-  // corresponding to the current solution value from the problem_state. As the
-  // optimizer is looking for a better solution (see
-  // LoadStateProblemToSatSolver), that means the current model is UNSAT and so
-  // the synchronized solution is optimal.
-  if (assumptions.empty()) return sat::SatSolver::MODEL_UNSAT;
   return solver_.ResetAndSolveWithGivenAssumptions(assumptions);
 }
 
@@ -123,7 +116,7 @@ BopOptimizerBase::Status SatCoreBasedOptimizer::Optimize(
     learned_info->lower_bound = lower_bound_.value() - offset_.value();
 
     // This is possible because we over-constrain the objective.
-    if (sat_status == sat::SatSolver::MODEL_UNSAT) {
+    if (sat_status == sat::SatSolver::INFEASIBLE) {
       return problem_state.solution().IsFeasible()
                  ? BopOptimizerBase::OPTIMAL_SOLUTION_FOUND
                  : BopOptimizerBase::INFEASIBLE;
@@ -133,7 +126,7 @@ BopOptimizerBase::Status SatCoreBasedOptimizer::Optimize(
     if (sat_status == sat::SatSolver::LIMIT_REACHED || conflict_limit < 0) {
       return BopOptimizerBase::CONTINUE;
     }
-    if (sat_status == sat::SatSolver::MODEL_SAT) {
+    if (sat_status == sat::SatSolver::FEASIBLE) {
       stratified_lower_bound_ =
           MaxNodeWeightSmallerThan(nodes_, stratified_lower_bound_);
 

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,19 +15,19 @@
 
 #include <algorithm>
 #include <memory>
-#include <unordered_map>
 
+#include "absl/container/flat_hash_map.h"
 #include "ortools/base/stl_util.h"
 #include "ortools/util/sorted_interval_list.h"
 
 namespace operations_research {
 namespace sat {
 
-IntegerSumLE::IntegerSumLE(LiteralIndex reified_literal,
+IntegerSumLE::IntegerSumLE(const std::vector<Literal>& enforcement_literals,
                            const std::vector<IntegerVariable>& vars,
                            const std::vector<IntegerValue>& coeffs,
                            IntegerValue upper, Model* model)
-    : reified_literal_(reified_literal),
+    : enforcement_literals_(enforcement_literals),
       upper_bound_(upper),
       trail_(model->GetOrCreate<Trail>()),
       integer_trail_(model->GetOrCreate<IntegerTrail>()),
@@ -46,10 +46,9 @@ IntegerSumLE::IntegerSumLE(LiteralIndex reified_literal,
     }
   }
 
-  // Literal reason will either alway contains the negation of reified_literal
-  // or be always empty.
-  if (reified_literal_ != kNoLiteralIndex) {
-    literal_reason_.push_back(Literal(reified_literal_).Negated());
+  // Literal reason will only be used with the negation of enforcement_literals.
+  for (const Literal literal : enforcement_literals) {
+    literal_reason_.push_back(literal.Negated());
   }
 
   index_in_integer_reason_.resize(vars_.size());
@@ -73,11 +72,21 @@ void IntegerSumLE::FillIntegerReason() {
 }
 
 bool IntegerSumLE::Propagate() {
-  // Reified case: If the reified literal is false, we ignore the constraint.
-  if (reified_literal_ != kNoLiteralIndex &&
-      trail_->Assignment().LiteralIsFalse(Literal(reified_literal_))) {
-    return true;
+  // Reified case: If any of the enforcement_literals are false, we ignore the
+  // constraint.
+  int num_unassigned_enforcement_literal = 0;
+  LiteralIndex unique_unnasigned_literal = kNoLiteralIndex;
+  for (const Literal literal : enforcement_literals_) {
+    if (trail_->Assignment().LiteralIsFalse(literal)) return true;
+    if (!trail_->Assignment().LiteralIsTrue(literal)) {
+      ++num_unassigned_enforcement_literal;
+      unique_unnasigned_literal = literal.Index();
+    }
   }
+
+  // Unfortunately, we can't propagate anything if we have more than one
+  // unassigned enforcement literal.
+  if (num_unassigned_enforcement_literal > 1) return true;
 
   // Save the current number of fixed variables.
   rev_integer_value_repository_->SaveState(&rev_lb_fixed_vars_);
@@ -102,48 +111,29 @@ bool IntegerSumLE::Propagate() {
   const IntegerValue new_lb = rev_lb_fixed_vars_ + lb_unfixed_vars;
 
   // Conflict?
-  IntegerValue slack = upper_bound_ - new_lb;
+  const IntegerValue slack = upper_bound_ - new_lb;
   if (slack < 0) {
-    // Like FillIntegerReason() but try to relax the reason a bit.
-    //
-    // TODO(user): if not all the slack is consumed, we could relax it even
-    // more. It might also be advantageous to relax first the variable with the
-    // highest "trail index".
-    integer_reason_.clear();
+    FillIntegerReason();
+    std::vector<IntegerValue> coeffs;
     for (int i = 0; i < vars_.size(); ++i) {
-      const IntegerVariable var = vars_[i];
-      const IntegerValue lb = integer_trail_->LowerBound(var);
-      const IntegerValue prev_lb = integer_trail_->PreviousLowerBound(var);
-      if (lb == prev_lb) continue;  // level zero.
-      const IntegerValue diff = (lb - prev_lb) * coeffs_[i];
-      if (slack + diff < 0) {
-        integer_reason_.push_back(IntegerLiteral::GreaterOrEqual(var, prev_lb));
-        slack += diff;
-      } else {
-        integer_reason_.push_back(IntegerLiteral::GreaterOrEqual(var, lb));
-      }
+      if (index_in_integer_reason_[i] == -1) continue;
+      coeffs.push_back(coeffs_[i]);
     }
+    integer_trail_->RelaxLinearReason(-slack - 1, coeffs, &integer_reason_);
 
-    // Reified case: If the reified literal is unassigned, we set it to false,
-    // otherwise we have a conflict.
-    if (reified_literal_ != kNoLiteralIndex &&
-        !trail_->Assignment().LiteralIsTrue(Literal(reified_literal_))) {
-      integer_trail_->EnqueueLiteral(Literal(reified_literal_).Negated(), {},
-                                     integer_reason_);
+    if (num_unassigned_enforcement_literal == 1) {
+      // Propagate the only non-true literal to false.
+      const Literal to_propagate = Literal(unique_unnasigned_literal).Negated();
+      std::vector<Literal> tmp = literal_reason_;
+      tmp.erase(std::find(tmp.begin(), tmp.end(), to_propagate));
+      integer_trail_->EnqueueLiteral(to_propagate, tmp, integer_reason_);
       return true;
     }
     return integer_trail_->ReportConflict(literal_reason_, integer_reason_);
   }
 
-  // Reified case: We can only propagate the actual constraint if the reified
-  // literal is true.
-  if (reified_literal_ != kNoLiteralIndex &&
-      !trail_->Assignment().LiteralIsTrue(Literal(reified_literal_))) {
-    return true;
-  }
-
-  // The integer_reason_ will only be filled on the first push.
-  bool first_push = true;
+  // We can only propagate more if all the enforcement literals are true.
+  if (num_unassigned_enforcement_literal > 0) return true;
 
   // The lower bound of all the variables minus one can be used to update the
   // upper bound of the last one.
@@ -153,32 +143,25 @@ bool IntegerSumLE::Propagate() {
     const IntegerValue var_slack =
         integer_trail_->UpperBound(var) - integer_trail_->LowerBound(var);
     if (var_slack * coeff > slack) {
-      if (first_push) {
-        first_push = false;
-        FillIntegerReason();
-      }
-
-      // We need to remove the entry index from the reason temporarily.
-      IntegerLiteral saved;
-      const int index = index_in_integer_reason_[i];
-      if (index >= 0) {
-        saved = integer_reason_[index];
-        integer_reason_[index] = integer_reason_.back();
-        integer_reason_.pop_back();
-      }
-
       const IntegerValue new_ub =
           integer_trail_->LowerBound(var) + slack / coeff;
-      if (!integer_trail_->Enqueue(IntegerLiteral::LowerOrEqual(var, new_ub),
-                                   literal_reason_, integer_reason_)) {
+      if (!integer_trail_->Enqueue(
+              IntegerLiteral::LowerOrEqual(var, new_ub),
+              /*lazy_reason=*/[this](IntegerLiteral i_lit, int trail_index,
+                                     std::vector<Literal>* literal_reason,
+                                     std::vector<int>* trail_indices_reason) {
+                *literal_reason = literal_reason_;
+                trail_indices_reason->clear();
+                for (const IntegerVariable var : vars_) {
+                  if (PositiveVariable(var) == PositiveVariable(i_lit.var)) {
+                    continue;
+                  }
+                  const int index = integer_trail_->FindTrailIndexOfVarBefore(
+                      var, trail_index);
+                  if (index >= 0) trail_indices_reason->push_back(index);
+                }
+              })) {
         return false;
-      }
-
-      // Restore integer_reason_. Note that this is not needed if we returned
-      // false above.
-      if (index >= 0) {
-        integer_reason_.push_back(saved);
-        std::swap(integer_reason_[index], integer_reason_.back());
       }
     }
   }
@@ -191,9 +174,12 @@ void IntegerSumLE::RegisterWith(GenericLiteralWatcher* watcher) {
   for (const IntegerVariable& var : vars_) {
     watcher->WatchLowerBound(var, id);
   }
-  if (reified_literal_ != kNoLiteralIndex) {
+  for (const Literal literal : enforcement_literals_) {
     // We only watch the true direction.
-    watcher->WatchLiteral(Literal(reified_literal_), id);
+    //
+    // TODO(user): if there is more than one, maybe we should watch more to
+    // propagate a "conflict" as soon as only one is unassigned?
+    watcher->WatchLiteral(Literal(literal), id);
   }
   watcher->RegisterReversibleInt(id, &rev_num_fixed_vars_);
 }
@@ -527,15 +513,14 @@ std::function<void(Model*)> IsOneOf(IntegerVariable var,
     CHECK(!values.empty());
     CHECK_EQ(values.size(), selectors.size());
     std::vector<int64> unique_values;
-    std::unordered_map<int64, std::vector<Literal>> value_to_selector;
+    absl::flat_hash_map<int64, std::vector<Literal>> value_to_selector;
     for (int i = 0; i < values.size(); ++i) {
       unique_values.push_back(values[i].value());
       value_to_selector[values[i].value()].push_back(selectors[i]);
     }
-    STLSortAndRemoveDuplicates(&unique_values);
+    gtl::STLSortAndRemoveDuplicates(&unique_values);
 
-    integer_trail->UpdateInitialDomain(
-        var, SortedDisjointIntervalsFromValues(unique_values));
+    integer_trail->UpdateInitialDomain(var, Domain::FromValues(unique_values));
     if (unique_values.size() == 1) {
       model->Add(ClauseConstraint(selectors));
       return;

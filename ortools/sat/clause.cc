@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -21,6 +21,7 @@
 
 #include "ortools/base/logging.h"
 #include "ortools/base/stl_util.h"
+#include "ortools/graph/strongly_connected_components.h"
 
 namespace operations_research {
 namespace sat {
@@ -43,12 +44,6 @@ void RemoveIf(Container c, Predicate p) {
   c->erase(std::remove_if(c->begin(), c->end(), p), c->end());
 }
 
-// Removes dettached clauses from a watcher list.
-template <typename Watcher>
-bool CleanUpPredicate(const Watcher& watcher) {
-  return !watcher.clause->IsAttached();
-}
-
 }  // namespace
 
 // ----- LiteralWatchers -----
@@ -62,6 +57,7 @@ LiteralWatchers::LiteralWatchers()
       stats_("LiteralWatchers") {}
 
 LiteralWatchers::~LiteralWatchers() {
+  gtl::STLDeleteElements(&clauses_);
   IF_STATS_ENABLED(LOG(INFO) << stats_.StatString());
 }
 
@@ -70,16 +66,17 @@ void LiteralWatchers::Resize(int num_variables) {
   watchers_on_false_.resize(num_variables << 1);
   reasons_.resize(num_variables);
   needs_cleaning_.Resize(LiteralIndex(num_variables << 1));
-  statistics_.resize(num_variables);
 }
 
 // Note that this is the only place where we add Watcher so the DCHECK
 // guarantees that there are no duplicates.
-void LiteralWatchers::AttachOnFalse(Literal a, Literal b, SatClause* clause) {
+void LiteralWatchers::AttachOnFalse(Literal literal, Literal blocking_literal,
+                                    SatClause* clause) {
   SCOPED_TIME_STAT(&stats_);
   DCHECK(is_clean_);
-  DCHECK(!WatcherListContains(watchers_on_false_[a.Index()], *clause));
-  watchers_on_false_[a.Index()].push_back(Watcher(clause, b));
+  DCHECK(!WatcherListContains(watchers_on_false_[literal.Index()], *clause));
+  watchers_on_false_[literal.Index()].push_back(
+      Watcher(clause, blocking_literal));
 }
 
 bool LiteralWatchers::PropagateOnFalse(Literal false_literal, Trail* trail) {
@@ -91,9 +88,12 @@ bool LiteralWatchers::PropagateOnFalse(Literal false_literal, Trail* trail) {
   // Note(user): It sounds better to inspect the list in order, this is because
   // small clauses like binary or ternary clauses will often propagate and thus
   // stay at the beginning of the list.
-  std::vector<Watcher>::iterator new_it = watchers.begin();
-  for (std::vector<Watcher>::iterator it = watchers.begin();
-       it != watchers.end(); ++it) {
+  auto new_it = watchers.begin();
+  const auto end = watchers.end();
+  while (new_it != end && assignment.LiteralIsTrue(new_it->blocking_literal)) {
+    ++new_it;
+  }
+  for (auto it = new_it; it != end; ++it) {
     // Don't even look at the clause memory if the blocking literal is true.
     if (assignment.LiteralIsTrue(it->blocking_literal)) {
       *new_it++ = *it;
@@ -102,11 +102,13 @@ bool LiteralWatchers::PropagateOnFalse(Literal false_literal, Trail* trail) {
     ++num_inspected_clauses_;
 
     // If the other watched literal is true, just change the blocking literal.
+    // Note that we use the fact that the first two literals of the clause are
+    // the ones currently watched.
     Literal* literals = it->clause->literals();
-    const Literal other_watched_literal =
-        (literals[1] == false_literal) ? literals[0] : literals[1];
-    if (other_watched_literal != it->blocking_literal &&
-        assignment.LiteralIsTrue(other_watched_literal)) {
+    const Literal other_watched_literal(
+        LiteralIndex(literals[0].Index().value() ^ literals[1].Index().value() ^
+                     false_literal.Index().value()));
+    if (assignment.LiteralIsTrue(other_watched_literal)) {
       *new_it++ = Watcher(it->clause, other_watched_literal);
       ++num_inspected_clause_literals_;
       continue;
@@ -119,7 +121,7 @@ bool LiteralWatchers::PropagateOnFalse(Literal false_literal, Trail* trail) {
       while (i < size && assignment.LiteralIsFalse(literals[i])) ++i;
       num_inspected_clause_literals_ += i;
       if (i < size) {
-        // literal[i] is undefined or true, it's now the new literal to watch.
+        // literal[i] is unassigned or true, it's now the new literal to watch.
         // Note that by convention, we always keep the two watched literals at
         // the beginning of the clause.
         literals[0] = other_watched_literal;
@@ -130,7 +132,7 @@ bool LiteralWatchers::PropagateOnFalse(Literal false_literal, Trail* trail) {
       }
     }
 
-    // At this point other_watched_literal is either false or undefined, all
+    // At this point other_watched_literal is either false or unassigned, all
     // other literals are false.
     if (assignment.LiteralIsFalse(other_watched_literal)) {
       // Conflict: All literals of it->clause are false.
@@ -143,7 +145,7 @@ bool LiteralWatchers::PropagateOnFalse(Literal false_literal, Trail* trail) {
       watchers.erase(new_it, it);
       return false;
     } else {
-      // Propagation: other_watched_literal is undefined, set it to true and
+      // Propagation: other_watched_literal is unassigned, set it to true and
       // put it at position 0. Note that the position 0 is important because
       // we will need later to recover the literal that was propagated from the
       // clause using this convention.
@@ -154,8 +156,8 @@ bool LiteralWatchers::PropagateOnFalse(Literal false_literal, Trail* trail) {
       *new_it++ = *it;
     }
   }
-  num_inspected_clause_literals_ += watchers.size();
-  watchers.erase(new_it, watchers.end());
+  num_inspected_clause_literals_ += watchers.size();  // The blocking ones.
+  watchers.erase(new_it, end);
   return true;
 }
 
@@ -168,7 +170,7 @@ bool LiteralWatchers::Propagate(Trail* trail) {
   return true;
 }
 
-gtl::Span<Literal> LiteralWatchers::Reason(const Trail& trail,
+absl::Span<const Literal> LiteralWatchers::Reason(const Trail& trail,
                                                   int trail_index) const {
   return reasons_[trail_index]->PropagationReason();
 }
@@ -177,58 +179,144 @@ SatClause* LiteralWatchers::ReasonClause(int trail_index) const {
   return reasons_[trail_index];
 }
 
+bool LiteralWatchers::AddClause(const std::vector<Literal>& literals,
+                                Trail* trail) {
+  SatClause* clause = SatClause::Create(literals);
+  clauses_.push_back(clause);
+  return AttachAndPropagate(clause, trail);
+}
+
+SatClause* LiteralWatchers::AddRemovableClause(
+    const std::vector<Literal>& literals, Trail* trail) {
+  SatClause* clause = SatClause::Create(literals);
+  clauses_.push_back(clause);
+  CHECK(AttachAndPropagate(clause, trail));
+  return clause;
+}
+
+// Sets up the 2-watchers data structure. It selects two non-false literals
+// and attaches the clause to the event: one of the watched literals become
+// false. It returns false if the clause only contains literals assigned to
+// false. If only one literals is not false, it propagates it to true if it
+// is not already assigned.
 bool LiteralWatchers::AttachAndPropagate(SatClause* clause, Trail* trail) {
   SCOPED_TIME_STAT(&stats_);
+
+  const int size = clause->Size();
+  Literal* literals = clause->literals();
+
+  // Select the first two literals that are not assigned to false and put them
+  // on position 0 and 1.
+  int num_literal_not_false = 0;
+  for (int i = 0; i < size; ++i) {
+    if (!trail->Assignment().LiteralIsFalse(literals[i])) {
+      std::swap(literals[i], literals[num_literal_not_false]);
+      ++num_literal_not_false;
+      if (num_literal_not_false == 2) {
+        break;
+      }
+    }
+  }
+
+  // Returns false if all the literals were false.
+  // This should only happen on an UNSAT problem, and there is no need to attach
+  // the clause in this case.
+  if (num_literal_not_false == 0) return false;
+
+  if (num_literal_not_false == 1) {
+    // To maintain the validity of the 2-watcher algorithm, we need to watch
+    // the false literal with the highest decision level.
+    int max_level = trail->Info(literals[1].Variable()).level;
+    for (int i = 2; i < size; ++i) {
+      const int level = trail->Info(literals[i].Variable()).level;
+      if (level > max_level) {
+        max_level = level;
+        std::swap(literals[1], literals[i]);
+      }
+    }
+
+    // Propagates literals[0] if it is unassigned.
+    if (!trail->Assignment().LiteralIsTrue(literals[0])) {
+      reasons_[trail->Index()] = clause;
+      trail->Enqueue(literals[0], propagator_id_);
+    }
+  }
+
   ++num_watched_clauses_;
-  // Updating the statistics for each learned clause take quite a lot of time
-  // (like 6% of the total running time). So for now, we just compute the
-  // statistics depending on the problem clauses. Note that this do not take
-  // into account the other type of constraint though.
-  //
-  // TODO(user): This is actually not used a lot with the default parameters.
-  // Find a better way for the "initial" polarity choice and tie breaking
-  // between literal choices. Note that it seems none of the modern SAT solver
-  // relies on this.
-  if (!clause->IsRedundant()) UpdateStatistics(*clause, /*added=*/true);
-  clause->SortLiterals(statistics_, parameters_);
-  return clause->AttachAndEnqueuePotentialUnitPropagation(trail, this);
+  AttachOnFalse(literals[0], literals[1], clause);
+  AttachOnFalse(literals[1], literals[0], clause);
+  return true;
+}
+
+void LiteralWatchers::Attach(SatClause* clause, Trail* trail) {
+  Literal* literals = clause->literals();
+  CHECK(!trail->Assignment().LiteralIsAssigned(literals[0]));
+  CHECK(!trail->Assignment().LiteralIsAssigned(literals[1]));
+
+  ++num_watched_clauses_;
+  AttachOnFalse(literals[0], literals[1], clause);
+  AttachOnFalse(literals[1], literals[0], clause);
+}
+
+void LiteralWatchers::InternalDetach(SatClause* clause) {
+  --num_watched_clauses_;
+  const size_t size = clause->Size();
+  if (drat_proof_handler_ != nullptr && size > 2) {
+    drat_proof_handler_->DeleteClause({clause->begin(), size});
+  }
+  clauses_info_.erase(clause);
+  clause->LazyDetach();
 }
 
 void LiteralWatchers::LazyDetach(SatClause* clause) {
-  SCOPED_TIME_STAT(&stats_);
-  --num_watched_clauses_;
-  if (!clause->IsRedundant()) UpdateStatistics(*clause, /*added=*/false);
-  clause->LazyDetach();
+  InternalDetach(clause);
   is_clean_ = false;
   needs_cleaning_.Set(clause->FirstLiteral().Index());
   needs_cleaning_.Set(clause->SecondLiteral().Index());
+}
+
+void LiteralWatchers::Detach(SatClause* clause) {
+  InternalDetach(clause);
+  for (const Literal l : {clause->FirstLiteral(), clause->SecondLiteral()}) {
+    needs_cleaning_.Clear(l.Index());
+    RemoveIf(&(watchers_on_false_[l.Index()]), [](const Watcher& watcher) {
+      return !watcher.clause->IsAttached();
+    });
+  }
 }
 
 void LiteralWatchers::CleanUpWatchers() {
   SCOPED_TIME_STAT(&stats_);
   for (LiteralIndex index : needs_cleaning_.PositionsSetAtLeastOnce()) {
     DCHECK(needs_cleaning_[index]);
-    RemoveIf(&(watchers_on_false_[index]), CleanUpPredicate<Watcher>);
+    RemoveIf(&(watchers_on_false_[index]), [](const Watcher& watcher) {
+      return !watcher.clause->IsAttached();
+    });
     needs_cleaning_.Clear(index);
   }
   needs_cleaning_.NotifyAllClear();
   is_clean_ = true;
 }
 
-void LiteralWatchers::UpdateStatistics(const SatClause& clause, bool added) {
-  SCOPED_TIME_STAT(&stats_);
-  for (const Literal literal : clause) {
-    const BooleanVariable var = literal.Variable();
-    const int direction = added ? 1 : -1;
-    statistics_[var].num_appearances += direction;
-    statistics_[var].weighted_num_appearances +=
-        1.0 / clause.Size() * direction;
-    if (literal.IsPositive()) {
-      statistics_[var].num_positive_clauses += direction;
-    } else {
-      statistics_[var].num_negative_clauses += direction;
-    }
+void LiteralWatchers::DeleteDetachedClauses() {
+  DCHECK(is_clean_);
+
+  // Update to_minimize_index_.
+  if (to_minimize_index_ >= clauses_.size()) {
+    to_minimize_index_ = clauses_.size();
   }
+  to_minimize_index_ =
+      std::stable_partition(clauses_.begin(),
+                            clauses_.begin() + to_minimize_index_,
+                            [](SatClause* a) { return a->IsAttached(); }) -
+      clauses_.begin();
+
+  // Do the proper deletion.
+  std::vector<SatClause*>::iterator iter =
+      std::stable_partition(clauses_.begin(), clauses_.end(),
+                            [](SatClause* a) { return a->IsAttached(); });
+  gtl::STLDeleteContainerPointers(iter, clauses_.end());
+  clauses_.erase(iter, clauses_.end());
 }
 
 // ----- BinaryImplicationGraph -----
@@ -241,9 +329,10 @@ void BinaryImplicationGraph::Resize(int num_variables) {
 
 void BinaryImplicationGraph::AddBinaryClause(Literal a, Literal b) {
   SCOPED_TIME_STAT(&stats_);
-  implications_[a.Negated().Index()].push_back(b);
-  implications_[b.Negated().Index()].push_back(a);
-  ++num_implications_;
+  implications_[a.NegatedIndex()].push_back(b);
+  implications_[b.NegatedIndex()].push_back(a);
+  is_dag_ = false;
+  num_implications_ += 2;
 }
 
 void BinaryImplicationGraph::AddBinaryClauseDuringSearch(Literal a, Literal b,
@@ -262,6 +351,19 @@ void BinaryImplicationGraph::AddBinaryClauseDuringSearch(Literal a, Literal b,
   }
 }
 
+void BinaryImplicationGraph::AddAtMostOne(
+    absl::Span<const Literal> at_most_one) {
+  if (at_most_one.empty()) return;
+  for (const Literal a : at_most_one) {
+    for (const Literal b : at_most_one) {
+      if (a == b) continue;
+      implications_[a.Index()].push_back(b.Negated());
+    }
+  }
+  is_dag_ = false;
+  num_implications_ += at_most_one.size() * (at_most_one.size() - 1);
+}
+
 bool BinaryImplicationGraph::PropagateOnTrue(Literal true_literal,
                                              Trail* trail) {
   SCOPED_TIME_STAT(&stats_);
@@ -278,7 +380,7 @@ bool BinaryImplicationGraph::PropagateOnTrue(Literal true_literal,
       // enqueued after the true_literal on the trail. This property is
       // important for ComputeFirstUIPConflict() to work since it needs the
       // trail order to be a topological order for the deduction graph.
-      // But the performance where not too good...
+      // But the performance was not too good...
       continue;
     }
 
@@ -308,7 +410,7 @@ bool BinaryImplicationGraph::Propagate(Trail* trail) {
   return true;
 }
 
-gtl::Span<Literal> BinaryImplicationGraph::Reason(
+absl::Span<const Literal> BinaryImplicationGraph::Reason(
     const Trail& trail, int trail_index) const {
   return {&reasons_[trail_index], 1};
 }
@@ -536,7 +638,7 @@ void BinaryImplicationGraph::MinimizeConflictExperimental(
 
 void BinaryImplicationGraph::RemoveFixedVariables(
     int first_unprocessed_trail_index, const Trail& trail) {
-  const VariablesAssignment& assigment = trail.Assignment();
+  const VariablesAssignment& assignment = trail.Assignment();
   SCOPED_TIME_STAT(&stats_);
   is_marked_.ClearAndResize(LiteralIndex(implications_.size()));
   for (int i = first_unprocessed_trail_index; i < trail.Index(); ++i) {
@@ -549,21 +651,339 @@ void BinaryImplicationGraph::RemoveFixedVariables(
     for (Literal lit : implications_[true_literal.NegatedIndex()]) {
       is_marked_.Set(lit.NegatedIndex());
     }
-    STLClearObject(&(implications_[true_literal.Index()]));
-    STLClearObject(&(implications_[true_literal.NegatedIndex()]));
+    gtl::STLClearObject(&(implications_[true_literal.Index()]));
+    gtl::STLClearObject(&(implications_[true_literal.NegatedIndex()]));
   }
   for (const LiteralIndex i : is_marked_.PositionsSetAtLeastOnce()) {
-    RemoveIf(&implications_[i],
-             std::bind1st(std::mem_fun(&VariablesAssignment::LiteralIsTrue),
-                          &assigment));
+    RemoveIf(&implications_[i], [&assignment](const Literal& lit) {
+      return assignment.LiteralIsTrue(lit);
+    });
   }
+}
+
+void BinaryImplicationGraph::RemoveDuplicates() {
+  int64 num_removed = 0;
+  for (auto& list : implications_) {
+    const int old_size = list.size();
+    gtl::STLSortAndRemoveDuplicates(&list);
+    num_removed += old_size - list.size();
+  }
+  num_implications_ -= num_removed;
+  if (num_removed > 0) {
+    VLOG(1) << "Removed " << num_removed << " duplicate implications. "
+            << num_implications_ << " implications left.";
+  }
+}
+
+class SccWrapper {
+ public:
+  using Graph = gtl::ITIVector<LiteralIndex, absl::InlinedVector<Literal, 6>>;
+
+  explicit SccWrapper(Graph* graph) : graph_(*graph) {}
+  std::vector<int32> operator[](int32 node) const {
+    tmp_.clear();
+    for (const Literal l : graph_[LiteralIndex(node)]) {
+      tmp_.push_back(l.Index().value());
+    }
+    return tmp_;
+  }
+
+ private:
+  mutable std::vector<int32> tmp_;
+  const Graph& graph_;
+};
+
+bool BinaryImplicationGraph::DetectEquivalences() {
+  const int32 size(implications_.size());
+  is_redundant_.resize(size, false);
+
+  std::vector<std::vector<int32>> scc;
+  FindStronglyConnectedComponents(size, SccWrapper(&implications_), &scc);
+
+  int num_equivalences = 0;
+  reverse_topological_order_.clear();
+  representative_of_.assign(size, kNoLiteralIndex);
+  for (std::vector<int32>& component : scc) {
+    // We always take the smallest literal index (which also corresponds to the
+    // smallest BooleanVariable index) as a representative. This make sure that
+    // the representative of a literal l and the one of not(l) will be the
+    // negation of each other. There is also reason to think that it is
+    // heuristically better to use a BooleanVariable that was created first.
+    std::sort(component.begin(), component.end());
+    const LiteralIndex representative(component[0]);
+
+    reverse_topological_order_.push_back(representative);
+    if (component.size() == 1) {
+      continue;
+    }
+
+    auto& representative_list = implications_[representative];
+    for (int i = 1; i < component.size(); ++i) {
+      const Literal literal = Literal(LiteralIndex(component[i]));
+      is_redundant_[literal.Index()] = true;
+      representative_of_[literal.Index()] = representative;
+
+      // Detect if x <=> not(x) which means unsat. Note that we relly on the
+      // fact that when sorted, they will both be consecutive in the list.
+      if (Literal(LiteralIndex(component[i - 1])).Negated() == literal) {
+        VLOG(1) << "Trivially UNSAT in DetectEquivalences()";
+        return false;
+      }
+
+      // Merge all the lists in implications_[representative].
+      // Note that we do not want representative in its own list.
+      auto& ref = implications_[literal.Index()];
+      for (const Literal l : ref) {
+        if (l.Index() != representative) representative_list.push_back(l);
+      }
+
+      // Add representative <=> literal.
+      representative_list.push_back(literal);
+      ref.clear();
+      ref.push_back(Literal(representative));
+    }
+    num_equivalences += component.size() - 1;
+    gtl::STLSortAndRemoveDuplicates(&representative_list);
+  }
+  is_dag_ = true;
+  if (num_equivalences == 0) return true;
+
+  // Remap all the implications to only use representative.
+  // Note that this also does the job of RemoveDuplicates().
+  num_implications_ = 0;
+  for (LiteralIndex i(0); i < size; ++i) {
+    if (is_redundant_[i]) {
+      num_implications_ += implications_[i].size();
+      continue;
+    }
+    for (Literal& ref : implications_[i]) {
+      const LiteralIndex rep = representative_of_[ref.Index()];
+      if (rep == i) continue;
+      if (rep == kNoLiteralIndex) continue;
+      ref = Literal(rep);
+    }
+    gtl::STLSortAndRemoveDuplicates(&implications_[i]);
+    num_implications_ += implications_[i].size();
+  }
+
+  VLOG(1) << num_equivalences << " redundant equivalent literals. "
+          << num_implications_ << " implications left. " << implications_.size()
+          << " literals.";
+  return true;
+}
+
+bool BinaryImplicationGraph::ComputeTransitiveReduction() {
+  if (!DetectEquivalences()) return false;
+  work_done_in_mark_descendants_ = 0;
+
+  // For each node we do a graph traversal and only keep the literals
+  // at maximum distance 1. This only works because we have a DAG when ignoring
+  // the "redundant" literal marked by DetectEquivalences().
+  const LiteralIndex size(implications_.size());
+  for (const LiteralIndex i : reverse_topological_order_) {
+    CHECK(!is_redundant_[i]);
+    auto& direct_implications = implications_[i];
+
+    is_marked_.ClearAndResize(size);
+    for (const Literal root : direct_implications) {
+      if (is_redundant_[root.Index()]) continue;
+      if (is_marked_[root.Index()]) continue;
+
+      MarkDescendants(root);
+
+      // We have a DAG, so root could only be marked first.
+      is_marked_.Clear(root.Index());
+    }
+
+    // Only keep the non-marked literal (and the redundant one which are never
+    // marked).
+    int new_size = 0;
+    for (const Literal l : direct_implications) {
+      if (!is_marked_[l.Index()]) {
+        direct_implications[new_size++] = l;
+      }
+    }
+    const int diff = direct_implications.size() - new_size;
+    direct_implications.resize(new_size);
+    direct_implications.shrink_to_fit();
+    num_redundant_implications_ += diff;
+    num_implications_ -= diff;
+
+    // Abort if the computation involved is too big.
+    if (work_done_in_mark_descendants_ > 1e8) break;
+  }
+
+  if (num_redundant_implications_ > 0) {
+    VLOG(1) << "Transitive reduction removed " << num_redundant_implications_
+            << " literals. " << num_implications_ << " implications left. "
+            << implications_.size() << " literals."
+            << (work_done_in_mark_descendants_ > 1e8 ? " Aborted." : "");
+  }
+  return true;
+}
+
+namespace {
+
+bool IntersectionIsEmpty(const std::vector<int>& a, const std::vector<int>& b) {
+  DCHECK(std::is_sorted(a.begin(), a.end()));
+  DCHECK(std::is_sorted(b.begin(), b.end()));
+  int i = 0;
+  int j = 0;
+  for (; i < a.size() && j < b.size();) {
+    if (a[i] == b[j]) return false;
+    if (a[i] < b[j]) {
+      ++i;
+    } else {
+      ++j;
+    }
+  }
+  return true;
+}
+
+// Used by TransformIntoMaxCliques().
+struct VectorHash {
+  std::size_t operator()(const std::vector<Literal>& at_most_one) const {
+    size_t hash = 0;
+    for (Literal literal : at_most_one) {
+      hash = util_hash::Hash(literal.Index().value(), hash);
+    }
+    return hash;
+  }
+};
+
+}  // namespace
+
+void BinaryImplicationGraph::TransformIntoMaxCliques(
+    std::vector<std::vector<Literal>>* at_most_ones) {
+  // The code below assumes a DAG.
+  if (!is_dag_) DetectEquivalences();
+  work_done_in_mark_descendants_ = 0;
+
+  int num_extended = 0;
+  int num_removed = 0;
+  int num_added = 0;
+
+  absl::flat_hash_set<std::vector<Literal>, VectorHash> max_cliques;
+  gtl::ITIVector<LiteralIndex, std::vector<int>> max_cliques_containing(
+      implications_.size());
+
+  // We starts by processing larger constraints first.
+  std::sort(at_most_ones->begin(), at_most_ones->end(),
+            [](const std::vector<Literal> a, const std::vector<Literal> b) {
+              return a.size() > b.size();
+            });
+  for (std::vector<Literal>& clique : *at_most_ones) {
+    const int old_size = clique.size();
+
+    // Remap the clique to only use representative.
+    //
+    // Note(user): Because we always use literal with the smallest variable
+    // indices as representative, this make sure that if possible, we express
+    // the clique in term of user provided variable (that are always created
+    // first).
+    for (Literal& ref : clique) {
+      const LiteralIndex rep = representative_of_[ref.Index()];
+      if (rep == kNoLiteralIndex) continue;
+      ref = Literal(rep);
+    }
+
+    // Special case for clique of size 2, we don't expand them if they
+    // are included in an already added clique.
+    if (old_size == 2) {
+      if (!IntersectionIsEmpty(max_cliques_containing[clique[0].Index()],
+                               max_cliques_containing[clique[1].Index()])) {
+        ++num_removed;
+        clique.clear();
+        continue;
+      }
+    }
+
+    // We only expand the clique as long as we didn't spend too much time.
+    if (work_done_in_mark_descendants_ < 1e8) {
+      clique = ExpandAtMostOne(clique);
+    }
+    std::sort(clique.begin(), clique.end());
+    if (max_cliques.count(clique)) {
+      ++num_removed;
+      clique.clear();
+      continue;
+    }
+
+    const int clique_index = max_cliques.size();
+    max_cliques.insert(clique);
+    for (const Literal l : clique) {
+      max_cliques_containing[l.Index()].push_back(clique_index);
+    }
+    if (clique.size() > old_size) ++num_extended;
+    ++num_added;
+  }
+
+  if (num_extended > 0 || num_removed > 0 || num_added > 0) {
+    VLOG(1) << "Clique Extended: " << num_extended
+            << " Removed: " << num_removed << " Added: " << num_added
+            << (work_done_in_mark_descendants_ > 1e8 ? " (Aborted)" : "");
+  }
+}
+
+// We use dfs_stack_ but we actually do a BFS.
+void BinaryImplicationGraph::MarkDescendants(Literal root) {
+  dfs_stack_ = {root};
+  is_marked_.Set(root.Index());
+  if (is_redundant_[root.Index()]) return;
+  for (int j = 0; j < dfs_stack_.size(); ++j) {
+    const Literal current = dfs_stack_[j];
+    for (const Literal l : implications_[current.Index()]) {
+      if (!is_marked_[l.Index()] && !is_redundant_[l.Index()]) {
+        dfs_stack_.push_back(l);
+        is_marked_.Set(l.Index());
+      }
+    }
+  }
+  work_done_in_mark_descendants_ += dfs_stack_.size();
+}
+
+std::vector<Literal> BinaryImplicationGraph::ExpandAtMostOne(
+    const absl::Span<const Literal> at_most_one) {
+  std::vector<Literal> clique(at_most_one.begin(), at_most_one.end());
+
+  // Optim.
+  for (int i = 0; i < clique.size(); ++i) {
+    if (implications_[clique[i].Index()].empty() ||
+        is_redundant_[clique[i].Index()]) {
+      return clique;
+    }
+  }
+
+  std::vector<LiteralIndex> intersection;
+  for (int i = 0; i < clique.size(); ++i) {
+    is_marked_.ClearAndResize(LiteralIndex(implications_.size()));
+    MarkDescendants(clique[i]);
+    if (i == 0) {
+      intersection = is_marked_.PositionsSetAtLeastOnce();
+      for (const Literal l : clique) is_marked_.Clear(l.NegatedIndex());
+    }
+
+    int new_size = 0;
+    is_marked_.Clear(clique[i].NegatedIndex());  // TODO(user): explain.
+    for (const LiteralIndex index : intersection) {
+      if (is_marked_[index]) intersection[new_size++] = index;
+    }
+    intersection.resize(new_size);
+    if (intersection.empty()) break;
+
+    // Expand?
+    if (i + 1 == clique.size()) {
+      clique.push_back(Literal(intersection.back()).Negated());
+      intersection.pop_back();
+    }
+  }
+  return clique;
 }
 
 // ----- SatClause -----
 
 // static
-SatClause* SatClause::Create(const std::vector<Literal>& literals,
-                             bool is_redundant) {
+SatClause* SatClause::Create(const std::vector<Literal>& literals) {
   CHECK_GE(literals.size(), 2);
   SatClause* clause = reinterpret_cast<SatClause*>(
       ::operator new(sizeof(SatClause) + literals.size() * sizeof(Literal)));
@@ -571,8 +991,6 @@ SatClause* SatClause::Create(const std::vector<Literal>& literals,
   for (int i = 0; i < literals.size(); ++i) {
     clause->literals_[i] = literals[i];
   }
-  clause->is_redundant_ = is_redundant;
-  clause->is_attached_ = false;
   return clause;
 }
 
@@ -580,7 +998,7 @@ SatClause* SatClause::Create(const std::vector<Literal>& literals,
 // any of the watched literal is assigned, then the clause is necessarily true.
 bool SatClause::RemoveFixedLiteralsAndTestIfTrue(
     const VariablesAssignment& assignment) {
-  DCHECK(is_attached_);
+  DCHECK(IsAttached());
   if (assignment.VariableIsAssigned(literals_[0].Variable()) ||
       assignment.VariableIsAssigned(literals_[1].Variable())) {
     DCHECK(IsSatisfied(assignment));
@@ -600,112 +1018,6 @@ bool SatClause::RemoveFixedLiteralsAndTestIfTrue(
   }
   size_ = j;
   return false;
-}
-
-namespace {
-
-// Support struct to sort literals for ordering.
-struct WeightedLiteral {
-  WeightedLiteral(Literal l, int w) : literal(l), weight(w) {}
-
-  Literal literal;
-  int weight;
-};
-
-// Lexical order, by smaller weight, then by smaller literal to break ties.
-bool LiteralWithSmallerWeightFirst(const WeightedLiteral& wv1,
-                                   const WeightedLiteral& wv2) {
-  return (wv1.weight < wv2.weight) ||
-         (wv1.weight == wv2.weight &&
-          wv1.literal.SignedValue() < wv2.literal.SignedValue());
-}
-
-// Lexical order, by larger weight, then by smaller literal to break ties.
-bool LiteralWithLargerWeightFirst(const WeightedLiteral& wv1,
-                                  const WeightedLiteral& wv2) {
-  return (wv1.weight > wv2.weight) ||
-         (wv1.weight == wv2.weight &&
-          wv1.literal.SignedValue() < wv2.literal.SignedValue());
-}
-
-}  // namespace
-
-void SatClause::SortLiterals(
-    const ITIVector<BooleanVariable, VariableInfo>& statistics,
-    const SatParameters& parameters) {
-  DCHECK(!IsAttached());
-  const SatParameters::LiteralOrdering literal_order =
-      parameters.literal_ordering();
-  if (literal_order != SatParameters::LITERAL_IN_ORDER) {
-    std::vector<WeightedLiteral> order;
-    for (Literal literal : *this) {
-      int weight = literal.IsPositive()
-                       ? statistics[literal.Variable()].num_positive_clauses
-                       : statistics[literal.Variable()].num_negative_clauses;
-      order.push_back(WeightedLiteral(literal, weight));
-    }
-    switch (literal_order) {
-      case SatParameters::VAR_MIN_USAGE: {
-        std::sort(order.begin(), order.end(), LiteralWithSmallerWeightFirst);
-        break;
-      }
-      case SatParameters::VAR_MAX_USAGE: {
-        std::sort(order.begin(), order.end(), LiteralWithLargerWeightFirst);
-        break;
-      }
-      default: { break; }
-    }
-    for (int i = 0; i < order.size(); ++i) {
-      literals_[i] = order[i].literal;
-    }
-  }
-}
-
-bool SatClause::AttachAndEnqueuePotentialUnitPropagation(
-    Trail* trail, LiteralWatchers* demons) {
-  CHECK(!IsAttached());
-  // Select the first two literals that are not assigned to false and put them
-  // on position 0 and 1.
-  int num_literal_not_false = 0;
-  for (int i = 0; i < size_; ++i) {
-    if (!trail->Assignment().LiteralIsFalse(literals_[i])) {
-      std::swap(literals_[i], literals_[num_literal_not_false]);
-      ++num_literal_not_false;
-      if (num_literal_not_false == 2) {
-        break;
-      }
-    }
-  }
-
-  // Returns false if all the literals were false.
-  // This should only happen on an UNSAT problem, and there is no need to attach
-  // the clause in this case.
-  if (num_literal_not_false == 0) return false;
-
-  if (num_literal_not_false == 1) {
-    // To maintain the validity of the 2-watcher algorithm, we need to watch
-    // the false literal with the highest decision level.
-    int max_level = trail->Info(literals_[1].Variable()).level;
-    for (int i = 2; i < size_; ++i) {
-      const int level = trail->Info(literals_[i].Variable()).level;
-      if (level > max_level) {
-        max_level = level;
-        std::swap(literals_[1], literals_[i]);
-      }
-    }
-
-    // Propagates literals_[0] if it is undefined.
-    if (!trail->Assignment().LiteralIsTrue(literals_[0])) {
-      demons->SetReasonClause(trail->Index(), this);
-      trail->Enqueue(literals_[0], demons->propagator_id_);
-    }
-  }
-
-  // Attach the watchers.
-  is_attached_ = true;
-  demons->AttachOnFalse(literals_[0], literals_[1], this);
-  demons->AttachOnFalse(literals_[1], literals_[0], this);
-  return true;
 }
 
 bool SatClause::IsSatisfied(const VariablesAssignment& assignment) const {

@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,8 +15,8 @@
 #define OR_TOOLS_BASE_STATUS_H_
 
 #include <string>
+#include "absl/strings/str_cat.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/join.h"
 
 namespace util {
 
@@ -41,10 +41,11 @@ struct Status {
 
   std::string ToString() const {
     if (ok()) return "OK";
-    return StrCat("ERROR #", error_code_, ": '", error_message_, "'");
+    return absl::StrCat("ERROR #", error_code_, ": '", error_message_, "'");
   }
 
   std::string error_message() const { return error_message_; }
+  std::string message() const { return error_message(); }
 
   void IgnoreError() const {}
 
@@ -57,6 +58,8 @@ inline std::ostream& operator<<(std::ostream& out, const Status& status) {
   out << status.ToString();
   return out;
 }
+
+inline Status OkStatus() { return Status(); }
 
 }  // namespace util
 

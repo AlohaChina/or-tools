@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -24,11 +24,12 @@ namespace sat {
 
 // The Theta-Lambda tree can be used to implement several scheduling algorithms.
 //
+// This template class is instantiated only for IntegerValue and int64.
+//
 // The tree structure itself is a binary tree coded in a vector, where node 0 is
 // unused, node 1 is the root, node 2 is the left child of the root, node 3 its
-// right child, etc. To represent num_events events, we use the smallest
-// possible amount of leaves, num_leaves = 2^k >= num_events. The unused leaves
-// are filled with dummy values, as if they were absent events.
+// right child, etc.
+//
 // The API gives access to rightmost events that realize a given envelope.
 //
 // See:
@@ -61,7 +62,7 @@ namespace sat {
 //   initial_envelope(event) + sum_energy_min(event).
 //
 // We also maintain envelope_opt with is the maximum envelope a node could take
-// if at most one of the event where at its maximum energy.
+// if at most one of the events were at its maximum energy.
 // _ energy_delta(leaf) = energy_max(leaf) - energy_min(leaf)
 // _ max_energy_delta(node) = max_{leaf \in leaves(node)} energy_delta(leaf)
 // _ envelope_opt(node) =
@@ -87,6 +88,18 @@ namespace sat {
 //
 // There is hope to unify the variants of these algorithms by abstracting the
 // tasks away to reason only on events.
+
+// The minimal value of an envelope, for instance the envelope the empty set.
+template <typename IntegerType>
+inline const IntegerType IntegerTypeMinimumValue() {
+  return std::numeric_limits<IntegerType>::min();
+}
+template <>
+inline const IntegerValue IntegerTypeMinimumValue() {
+  return kMinIntegerValue;
+}
+
+template <typename IntegerType>
 class ThetaLambdaTree {
  public:
   // Builds a reusable tree. Initialization is done with Reset().
@@ -99,30 +112,41 @@ class ThetaLambdaTree {
   void Reset(int num_events);
 
   // Makes event present and updates its initial envelope and min/max energies.
+  // The initial_envelope must be >= ThetaLambdaTreeNegativeInfinity().
   // This updates the tree in O(log n).
-  void AddOrUpdateEvent(int event, IntegerValue initial_envelope,
-                        IntegerValue energy_min, IntegerValue energy_max);
+  void AddOrUpdateEvent(int event, IntegerType initial_envelope,
+                        IntegerType energy_min, IntegerType energy_max);
+
+  // Adds event to the lambda part of the tree only.
+  // This will leave GetEnvelope() unchanged, only GetOptionalEnvelope() can
+  // be affected. This is done by setting envelope to IntegerTypeMinimumValue(),
+  // energy_min to 0, and initial_envelope_opt and energy_max to the parameters.
+  // This updates the tree in O(log n).
+  void AddOrUpdateOptionalEvent(int event, IntegerType initial_envelope_opt,
+                                IntegerType energy_max);
 
   // Makes event absent, compute the new envelope in O(log n).
   void RemoveEvent(int event);
 
   // Returns the maximum envelope using all the energy_min in O(1).
-  IntegerValue GetEnvelope() const;
+  // If theta is empty, returns ThetaLambdaTreeNegativeInfinity().
+  IntegerType GetEnvelope() const;
 
   // Returns the maximum envelope using the energy min of all task but
   // one and the energy max of the last one in O(1).
-  IntegerValue GetOptionalEnvelope() const;
+  // If theta and lambda are empty, returns ThetaLambdaTreeNegativeInfinity().
+  IntegerType GetOptionalEnvelope() const;
 
   // Computes the maximum event s.t. GetEnvelopeOf(event) > envelope_max.
   // There must be such an event, i.e. GetEnvelope() > envelope_max.
   // This finds the maximum event e such that
   // initial_envelope(e) + sum_{e' >= e} energy_min(e') > target_envelope.
   // This operation is O(log n).
-  int GetMaxEventWithEnvelopeGreaterThan(IntegerValue target_envelope) const;
+  int GetMaxEventWithEnvelopeGreaterThan(IntegerType target_envelope) const;
 
   // Returns initial_envelope(event) + sum_{event' >= event} energy_min(event'),
   // in time O(log n).
-  IntegerValue GetEnvelopeOf(int event) const;
+  IntegerType GetEnvelopeOf(int event) const;
 
   // Computes a pair of events (critical_event, optional_event) such that
   // if optional_event was at its maximum energy, the envelope of critical_event
@@ -142,31 +166,27 @@ class ThetaLambdaTree {
   //
   // This operation is O(log n).
   void GetEventsWithOptionalEnvelopeGreaterThan(
-      IntegerValue target_envelope, int* critical_event, int* optional_event,
-      IntegerValue* available_energy) const;
+      IntegerType target_envelope, int* critical_event, int* optional_event,
+      IntegerType* available_energy) const;
 
   // Getters.
-  IntegerValue EnergyMin(int event) const {
-    return tree_sum_of_energy_min_[GetLeaf(event)];
+  IntegerType EnergyMin(int event) const {
+    return tree_sum_of_energy_min_[GetLeafFromEvent(event)];
   }
 
  private:
-  // Returns the index of the leaf associated with the given event.
-  int GetLeaf(int event) const {
-    DCHECK_LE(0, event);
-    DCHECK_LT(event, num_events_);
-    return num_leaves_ + event;
-  }
+  int GetLeafFromEvent(int event) const;
+  int GetEventFromLeaf(int leaf) const;
 
   // Propagates the change of leaf energies and envelopes towards the root.
-  void RefreshNode(int leaf);
+  void RefreshNode(int node);
 
   // Finds the maximum leaf under node such that
   // initial_envelope(leaf) + sum_{leaf' >= leaf} energy_min(leaf')
   //   > target_envelope.
   // Fills extra with the difference.
-  int GetMaxLeafWithEnvelopeGreaterThan(int node, IntegerValue target_envelope,
-                                        IntegerValue* extra) const;
+  int GetMaxLeafWithEnvelopeGreaterThan(int node, IntegerType target_envelope,
+                                        IntegerType* extra) const;
 
   // Returns the leaf with maximum energy delta under node.
   int GetLeafWithMaxEnergyDelta(int node) const;
@@ -174,21 +194,19 @@ class ThetaLambdaTree {
   // Finds the leaves and energy relevant for
   // GetEventsWithOptionalEnvelopeGreaterThan().
   void GetLeavesWithOptionalEnvelopeGreaterThan(
-      IntegerValue target_envelope, int* critical_leaf, int* optional_leaf,
-      IntegerValue* available_energy) const;
+      IntegerType target_envelope, int* critical_leaf, int* optional_leaf,
+      IntegerType* available_energy) const;
 
-  // Number of events of the last Reset();
+  // Number of events of the last Reset().
   int num_events_;
-
-  // Number of leaves used by the last Reset(), the smallest power of 2 such
-  // that 2 <= num_leaves_ and num_events_ <= num_leaves_.
   int num_leaves_;
+  int power_of_two_;
 
   // Envelopes and energies of nodes.
-  std::vector<IntegerValue> tree_envelope_;
-  std::vector<IntegerValue> tree_envelope_opt_;
-  std::vector<IntegerValue> tree_sum_of_energy_min_;
-  std::vector<IntegerValue> tree_max_of_energy_delta_;
+  std::vector<IntegerType> tree_envelope_;
+  std::vector<IntegerType> tree_envelope_opt_;
+  std::vector<IntegerType> tree_sum_of_energy_min_;
+  std::vector<IntegerType> tree_max_of_energy_delta_;
 };
 
 }  // namespace sat

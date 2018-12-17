@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,20 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include <stddef.h>
-#include <unordered_map>
 #include <string>
 #include <vector>
+#include "absl/container/flat_hash_map.h"
 
+#include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
+#include "ortools/base/file.h"
+#include "ortools/base/hash.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
-#include "ortools/base/file.h"
-#include "ortools/base/recordio.h"
-#include "ortools/base/join.h"
 #include "ortools/base/map_util.h"
-#include "ortools/base/hash.h"
+#include "ortools/base/recordio.h"
 #include "ortools/constraint_solver/assignment.pb.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 
@@ -97,10 +96,9 @@ void IntVarElement::WriteToProto(
 std::string IntVarElement::DebugString() const {
   if (Activated()) {
     if (min_ == max_) {
-      return StringPrintf("(%" GG_LL_FORMAT "d)", min_);
+      return absl::StrFormat("(%d)", min_);
     } else {
-      return StringPrintf("(%" GG_LL_FORMAT "d..%" GG_LL_FORMAT "d)", min_,
-                          max_);
+      return absl::StrFormat("(%d..%d)", min_, max_);
     }
   } else {
     return "(...)";
@@ -202,17 +200,17 @@ void IntervalVarElement::WriteToProto(
 std::string IntervalVarElement::DebugString() const {
   if (Activated()) {
     std::string out;
-    SStringPrintf(&out, "(start = %" GG_LL_FORMAT "d", start_min_);
+    absl::StrAppendFormat(&out, "(start = %d", start_min_);
     if (start_max_ != start_min_) {
-      StringAppendF(&out, "..%" GG_LL_FORMAT "d", start_max_);
+      absl::StrAppendFormat(&out, "..%d", start_max_);
     }
-    StringAppendF(&out, ", duration = %" GG_LL_FORMAT "d", duration_min_);
+    absl::StrAppendFormat(&out, ", duration = %d", duration_min_);
     if (duration_max_ != duration_min_) {
-      StringAppendF(&out, "..%" GG_LL_FORMAT "d", duration_max_);
+      absl::StrAppendFormat(&out, "..%d", duration_max_);
     }
-    StringAppendF(&out, ", status = %" GG_LL_FORMAT "d", performed_min_);
+    absl::StrAppendFormat(&out, ", status = %d", performed_min_);
     if (performed_max_ != performed_min_) {
-      StringAppendF(&out, "..%" GG_LL_FORMAT "d", performed_max_);
+      absl::StrAppendFormat(&out, "..%d", performed_max_);
     }
     out.append(")");
     return out;
@@ -318,10 +316,10 @@ void SequenceVarElement::WriteToProto(
 
 std::string SequenceVarElement::DebugString() const {
   if (Activated()) {
-    return StringPrintf("[forward %s, backward %s, unperformed [%s]]",
-                        strings::Join(forward_sequence_, " -> ").c_str(),
-                        strings::Join(backward_sequence_, " -> ").c_str(),
-                        strings::Join(unperformed_, ", ").c_str());
+    return absl::StrFormat("[forward %s, backward %s, unperformed [%s]]",
+                           absl::StrJoin(forward_sequence_, " -> "),
+                           absl::StrJoin(backward_sequence_, " -> "),
+                           absl::StrJoin(unperformed_, ", "));
   } else {
     return "(...)";
   }
@@ -380,21 +378,21 @@ void SequenceVarElement::SetUnperformed(const std::vector<int>& unperformed) {
 }
 
 bool SequenceVarElement::CheckClassInvariants() {
-  std::unordered_set<int> visited;
+  absl::flat_hash_set<int> visited;
   for (const int forward_sequence : forward_sequence_) {
-    if (ContainsKey(visited, forward_sequence)) {
+    if (gtl::ContainsKey(visited, forward_sequence)) {
       return false;
     }
     visited.insert(forward_sequence);
   }
   for (const int backward_sequence : backward_sequence_) {
-    if (ContainsKey(visited, backward_sequence)) {
+    if (gtl::ContainsKey(visited, backward_sequence)) {
       return false;
     }
     visited.insert(backward_sequence);
   }
   for (const int unperformed : unperformed_) {
-    if (ContainsKey(visited, unperformed)) {
+    if (gtl::ContainsKey(visited, unperformed)) {
       return false;
     }
     visited.insert(unperformed);
@@ -444,7 +442,7 @@ namespace {
 
 template <class V, class E>
 void IdToElementMap(AssignmentContainer<V, E>* container,
-                    std::unordered_map<std::string, E*>* id_to_element_map) {
+                    absl::flat_hash_map<std::string, E*>* id_to_element_map) {
   CHECK(id_to_element_map != nullptr);
   id_to_element_map->clear();
   for (int i = 0; i < container->Size(); ++i) {
@@ -454,7 +452,7 @@ void IdToElementMap(AssignmentContainer<V, E>* container,
     if (name.empty()) {
       LOG(INFO) << "Cannot save/load variables with empty name"
                 << "; variable will be ignored";
-    } else if (ContainsKey(*id_to_element_map, name)) {
+    } else if (gtl::ContainsKey(*id_to_element_map, name)) {
       LOG(INFO) << "Cannot save/load variables with duplicate names: " << name
                 << "; variable will be ignored";
     } else {
@@ -464,12 +462,12 @@ void IdToElementMap(AssignmentContainer<V, E>* container,
 }
 
 template <class E, class P>
-void LoadElement(const std::unordered_map<std::string, E*>& id_to_element_map,
+void LoadElement(const absl::flat_hash_map<std::string, E*>& id_to_element_map,
                  const P& proto) {
   const std::string& var_id = proto.var_id();
   CHECK(!var_id.empty());
   E* element = nullptr;
-  if (FindCopy(id_to_element_map, var_id, &element)) {
+  if (gtl::FindCopy(id_to_element_map, var_id, &element)) {
     element->LoadFromProto(proto);
   } else {
     LOG(INFO) << "Variable " << var_id
@@ -504,7 +502,7 @@ template <class Var, class Element, class Proto, class Container>
 void RealLoad(const AssignmentProto& assignment_proto,
               Container* const container,
               int (AssignmentProto::*GetSize)() const,
-              const Proto& (AssignmentProto::*GetElem)(int) const) {
+              const Proto& (AssignmentProto::*GetElem)(int)const) {
   bool fast_load = (container->Size() == (assignment_proto.*GetSize)());
   for (int i = 0; fast_load && i < (assignment_proto.*GetSize)(); ++i) {
     Element* const element = container->MutableElement(i);
@@ -516,7 +514,7 @@ void RealLoad(const AssignmentProto& assignment_proto,
     }
   }
   if (!fast_load) {
-    std::unordered_map<std::string, Element*> id_to_element_map;
+    absl::flat_hash_map<std::string, Element*> id_to_element_map;
     IdToElementMap<Var, Element>(container, &id_to_element_map);
     for (int i = 0; i < (assignment_proto.*GetSize)(); ++i) {
       LoadElement<Element, Proto>(id_to_element_map,
@@ -615,8 +613,8 @@ template <class Container, class Element>
 void RealDebugString(const Container& container, std::string* const out) {
   for (const Element& element : container.elements()) {
     if (element.Var() != nullptr) {
-      StringAppendF(out, "%s %s | ", element.Var()->name().c_str(),
-                    element.DebugString().c_str());
+      absl::StrAppendFormat(out, "%s %s | ", element.Var()->name(),
+                            element.DebugString());
     }
   }
 }
@@ -847,20 +845,20 @@ void Assignment::SetSequence(const SequenceVar* const var,
                              const std::vector<int>& forward_sequence,
                              const std::vector<int>& backward_sequence,
                              const std::vector<int>& unperformed) {
-  sequence_var_container_.MutableElement(var)
-      ->SetSequence(forward_sequence, backward_sequence, unperformed);
+  sequence_var_container_.MutableElement(var)->SetSequence(
+      forward_sequence, backward_sequence, unperformed);
 }
 
 void Assignment::SetForwardSequence(const SequenceVar* const var,
                                     const std::vector<int>& forward_sequence) {
-  sequence_var_container_.MutableElement(var)
-      ->SetForwardSequence(forward_sequence);
+  sequence_var_container_.MutableElement(var)->SetForwardSequence(
+      forward_sequence);
 }
 
 void Assignment::SetBackwardSequence(
     const SequenceVar* const var, const std::vector<int>& backward_sequence) {
-  sequence_var_container_.MutableElement(var)
-      ->SetBackwardSequence(backward_sequence);
+  sequence_var_container_.MutableElement(var)->SetBackwardSequence(
+      backward_sequence);
 }
 
 void Assignment::SetUnperformed(const SequenceVar* const var,
@@ -930,40 +928,40 @@ void Assignment::SetObjectiveValue(int64 value) {
   }
 }
 
-void Assignment::Activate(const IntVar* const b) {
-  int_var_container_.MutableElement(b)->Activate();
+void Assignment::Activate(const IntVar* const var) {
+  int_var_container_.MutableElement(var)->Activate();
 }
 
-void Assignment::Deactivate(const IntVar* const b) {
-  int_var_container_.MutableElement(b)->Deactivate();
+void Assignment::Deactivate(const IntVar* const var) {
+  int_var_container_.MutableElement(var)->Deactivate();
 }
 
-bool Assignment::Activated(const IntVar* const b) const {
-  return int_var_container_.Element(b).Activated();
+bool Assignment::Activated(const IntVar* const var) const {
+  return int_var_container_.Element(var).Activated();
 }
 
-void Assignment::Activate(const IntervalVar* const b) {
-  interval_var_container_.MutableElement(b)->Activate();
+void Assignment::Activate(const IntervalVar* const var) {
+  interval_var_container_.MutableElement(var)->Activate();
 }
 
-void Assignment::Deactivate(const IntervalVar* const b) {
-  interval_var_container_.MutableElement(b)->Deactivate();
+void Assignment::Deactivate(const IntervalVar* const var) {
+  interval_var_container_.MutableElement(var)->Deactivate();
 }
 
-bool Assignment::Activated(const IntervalVar* const b) const {
-  return interval_var_container_.Element(b).Activated();
+bool Assignment::Activated(const IntervalVar* const var) const {
+  return interval_var_container_.Element(var).Activated();
 }
 
-void Assignment::Activate(const SequenceVar* const b) {
-  sequence_var_container_.MutableElement(b)->Activate();
+void Assignment::Activate(const SequenceVar* const var) {
+  sequence_var_container_.MutableElement(var)->Activate();
 }
 
-void Assignment::Deactivate(const SequenceVar* const b) {
-  sequence_var_container_.MutableElement(b)->Deactivate();
+void Assignment::Deactivate(const SequenceVar* const var) {
+  sequence_var_container_.MutableElement(var)->Deactivate();
 }
 
-bool Assignment::Activated(const SequenceVar* const b) const {
-  return sequence_var_container_.Element(b).Activated();
+bool Assignment::Activated(const SequenceVar* const var) const {
+  return sequence_var_container_.Element(var).Activated();
 }
 
 void Assignment::ActivateObjective() {
@@ -997,11 +995,42 @@ bool Assignment::Contains(const SequenceVar* const var) const {
   return sequence_var_container_.Contains(var);
 }
 
+void Assignment::CopyIntersection(const Assignment* assignment) {
+  int_var_container_.CopyIntersection(assignment->int_var_container_);
+  interval_var_container_.CopyIntersection(assignment->interval_var_container_);
+  sequence_var_container_.CopyIntersection(assignment->sequence_var_container_);
+  if (objective_element_.Var() == assignment->objective_element_.Var()) {
+    objective_element_ = assignment->objective_element_;
+  }
+}
+
 void Assignment::Copy(const Assignment* assignment) {
+  Clear();
   int_var_container_.Copy(assignment->int_var_container_);
   interval_var_container_.Copy(assignment->interval_var_container_);
   sequence_var_container_.Copy(assignment->sequence_var_container_);
   objective_element_ = assignment->objective_element_;
+}
+
+void SetAssignmentFromAssignment(Assignment* target_assignment,
+                                 const std::vector<IntVar*>& target_vars,
+                                 const Assignment* source_assignment,
+                                 const std::vector<IntVar*>& source_vars) {
+  const int vars_size = target_vars.size();
+  CHECK_EQ(source_vars.size(), vars_size);
+  CHECK(target_assignment != nullptr);
+
+  target_assignment->Clear();
+  const Solver* const target_solver = target_assignment->solver();
+  const Solver* const source_solver = source_assignment->solver();
+  for (int index = 0; index < vars_size; index++) {
+    IntVar* target_var = target_vars[index];
+    CHECK_EQ(target_var->solver(), target_solver);
+    IntVar* source_var = source_vars[index];
+    CHECK_EQ(source_var->solver(), source_solver);
+    target_assignment->Add(target_var)
+        ->SetValue(source_assignment->Value(source_var));
+  }
 }
 
 Assignment* Solver::MakeAssignment() { return RevAlloc(new Assignment(this)); }

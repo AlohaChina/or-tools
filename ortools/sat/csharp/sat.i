@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,13 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This .swig file exposes the sat cp_model API.
-
 %typemap(csimports) SWIGTYPE %{
 using System;
 using System.Runtime.InteropServices;
 using System.Collections;
 %}
+
+%include "stdint.i"
 
 %include "ortools/base/base.i"
 %include "ortools/util/csharp/proto.i"
@@ -28,23 +28,71 @@ using System.Collections;
 #include "ortools/sat/swig_helper.h"
 %}
 
+typedef int64_t int64;
+typedef uint64_t uint64;
+
+%module(directors="1") operations_research_sat
+
 PROTO_INPUT(operations_research::sat::CpModelProto,
             Google.OrTools.Sat.CpModelProto,
             model_proto);
 
-//PROTO_INPUT(operations_research::sat::SatParameters, parameters);
+PROTO_INPUT(operations_research::sat::SatParameters,
+            Google.OrTools.Sat.SatParameters,
+            parameters);
 
-PROTO2_RETURN(
-    operations_research::sat::CpSolverResponse,
-    Google.OrTools.Sat.CpSolverResponse);
+PROTO_INPUT(operations_research::sat::CpSolverResponse,
+            Google.OrTools.Sat.CpSolverResponse,
+            response);
+
+PROTO2_RETURN(operations_research::sat::CpSolverResponse,
+              Google.OrTools.Sat.CpSolverResponse);
 
 %ignoreall
+
+// SatParameters are proto2, thus not compatible with C# Protobufs.
+// We will use API with std::string parameters.
 
 %unignore operations_research;
 %unignore operations_research::sat;
 %unignore operations_research::sat::SatHelper;
 %unignore operations_research::sat::SatHelper::Solve;
-//%unignore operations_research::sat::SatHelper::SolveWithParameters;
+%unignore operations_research::sat::SatHelper::SolveWithStringParameters;
+%unignore operations_research::sat::SatHelper::SolveWithStringParametersAndSolutionCallback;
+%unignore operations_research::sat::SatHelper::ModelStats;
+%unignore operations_research::sat::SatHelper::SolverResponseStats;
+%unignore operations_research::sat::SatHelper::ValidateModel;
+
+%feature("director") operations_research::sat::SolutionCallback;
+%unignore operations_research::sat::SolutionCallback;
+%unignore operations_research::sat::SolutionCallback::~SolutionCallback;
+%unignore operations_research::sat::SolutionCallback::BestObjectiveBound;
+%feature("nodirector") operations_research::sat::SolutionCallback::BestObjectiveBound;
+%unignore operations_research::sat::SolutionCallback::NumBinaryPropagations;
+%feature("nodirector") operations_research::sat::SolutionCallback::NumBinaryPropagations;
+%unignore operations_research::sat::SolutionCallback::NumBooleans;
+%feature("nodirector") operations_research::sat::SolutionCallback::NumBooleans;
+%unignore operations_research::sat::SolutionCallback::NumBranches;
+%feature("nodirector") operations_research::sat::SolutionCallback::NumBooleans;
+%unignore operations_research::sat::SolutionCallback::NumConflicts;
+%feature("nodirector") operations_research::sat::SolutionCallback::NumConflicts;
+%unignore operations_research::sat::SolutionCallback::NumIntegerPropagations;
+%feature("nodirector") operations_research::sat::SolutionCallback::NumIntegerPropagations;
+%unignore operations_research::sat::SolutionCallback::ObjectiveValue;
+%feature("nodirector") operations_research::sat::SolutionCallback::ObjectiveValue;
+%unignore operations_research::sat::SolutionCallback::OnSolutionCallback;
+%unignore operations_research::sat::SolutionCallback::Response;
+%feature("nodirector") operations_research::sat::SolutionCallback::Response;
+%unignore operations_research::sat::SolutionCallback::SolutionBooleanValue;
+%feature("nodirector") operations_research::sat::SolutionCallback::SolutionBooleanValue;
+%unignore operations_research::sat::SolutionCallback::SolutionIntegerValue;
+%feature("nodirector") operations_research::sat::SolutionCallback::SolutionIntegerValue;
+%unignore operations_research::sat::SolutionCallback::StopSearch;
+%feature("nodirector") operations_research::sat::SolutionCallback::StopSearch;
+%unignore operations_research::sat::SolutionCallback::UserTime;
+%feature("nodirector") operations_research::sat::SolutionCallback::UserTime;
+%unignore operations_research::sat::SolutionCallback::WallTime;
+%feature("nodirector") operations_research::sat::SolutionCallback::WallTime;
 
 %include "ortools/sat/swig_helper.h"
 

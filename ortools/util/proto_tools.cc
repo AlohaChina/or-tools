@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,10 +13,10 @@
 
 #include "ortools/util/proto_tools.h"
 
+#include "absl/strings/str_cat.h"
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/message.h"
 #include "google/protobuf/text_format.h"
-#include "ortools/base/join.h"
 
 namespace operations_research {
 
@@ -26,8 +26,8 @@ using ::google::protobuf::Reflection;
 using ::google::protobuf::TextFormat;
 
 namespace {
-void WriteFullProtocolMessage(const google::protobuf::Message& message, int indent_level,
-                              std::string* out) {
+void WriteFullProtocolMessage(const google::protobuf::Message& message,
+                              int indent_level, std::string* out) {
   std::string temp_string;
   const std::string indent(indent_level * 2, ' ');
   const Descriptor* desc = message.GetDescriptor();
@@ -38,25 +38,25 @@ void WriteFullProtocolMessage(const google::protobuf::Message& message, int inde
     const int start = repeated ? 0 : -1;
     const int limit = repeated ? refl->FieldSize(message, fd) : 0;
     for (int j = start; j < limit; ++j) {
-      StrAppend(out, indent, fd->name());
+      absl::StrAppend(out, indent, fd->name());
       if (fd->cpp_type() == FieldDescriptor::CPPTYPE_MESSAGE) {
-        StrAppend(out, " {\n");
+        absl::StrAppend(out, " {\n");
         const google::protobuf::Message& nested_message =
             repeated ? refl->GetRepeatedMessage(message, fd, j)
                      : refl->GetMessage(message, fd);
         WriteFullProtocolMessage(nested_message, indent_level + 1, out);
-        StrAppend(out, indent, "}\n");
+        absl::StrAppend(out, indent, "}\n");
       } else {
         TextFormat::PrintFieldValueToString(message, fd, j, &temp_string);
-        StrAppend(out, ": ", temp_string, "\n");
+        absl::StrAppend(out, ": ", temp_string, "\n");
       }
     }
   }
 }
 }  // namespace
 
-std::string FullProtocolMessageAsString(const google::protobuf::Message& message,
-                                   int indent_level) {
+std::string FullProtocolMessageAsString(
+    const google::protobuf::Message& message, int indent_level) {
   std::string message_str;
   WriteFullProtocolMessage(message, indent_level, &message_str);
   return message_str;

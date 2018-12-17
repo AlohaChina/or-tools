@@ -1,57 +1,93 @@
-ADD_LIBRARY(${PROJECT_NAME}examples SHARED
-        cvrptw_lib.cc
-        parse_dimacs_assignment.cc
-        fap_model_printer.cc
-        fap_parser.cc
-        fap_utilities.cc)
-TARGET_LINK_LIBRARIES(${PROJECT_NAME}examples ${PROJECT_NAME})
+if (NOT BUILD_CXX)
+	return()
+endif()
 
-INSTALL(TARGETS ${PROJECT_NAME}examples
-            EXPORT ${PROJECT_NAME}_Exports
-            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+project(ortools_examples)
 
-ADD_DEPENDENCIES(${PROJECT_NAME}examples ${PROJECT_NAME}Proto)
+if (APPLE)
+	set(CMAKE_INSTALL_RPATH
+		"@loader_path/../..;@loader_path/../lib;@loader_path")
+else()
+	set(CMAKE_INSTALL_RPATH "$ORIGIN/../../:$ORIGIN/../lib:$ORIGIN/")
+endif()
 
-FOREACH(EXECUTABLE
-        costas_array
-        cryptarithm
-        cvrp_disjoint_tw
-        cvrptw
-        cvrptw_with_breaks
-        cvrptw_with_refueling
-        cvrptw_with_resources
-        cvrptw_with_stop_times_and_resources
-        dimacs_assignment
-        dobble_ls
-        flow_api
-        frequency_assignment_problem
-        golomb
-        integer_programming
-        jobshop
-        jobshop_earlytardy
-        jobshop_ls
-        jobshop_sat
-        linear_assignment_api
-        linear_programming
-        linear_solver_protocol_buffers
-        ls_api
-        magic_square
-        model_util
-        mps_driver
-        multidim_knapsack
-        network_routing
-        nqueens
-        pdptw
-        rcpsp_sat
-        shift_minimization_sat
-        solve
-        sports_scheduling
-        strawberry_fields_with_column_generation
-        tsp
-        weighted_tardiness_sat)
-    ADD_EXECUTABLE(${EXECUTABLE} ${EXECUTABLE}.cc)
-    TARGET_LINK_LIBRARIES(${EXECUTABLE} ${PROJECT_NAME}examples ${PROJECT_NAME})
-    INSTALL(TARGETS ${EXECUTABLE} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-ENDFOREACH()
+get_filename_component(PARENT_SOURCE_DIR ${PROJECT_SOURCE_DIR} DIRECTORY)
+
+foreach(EXECUTABLE
+  costas_array_sat
+  cvrp_disjoint_tw
+  cvrptw
+  cvrptw_with_breaks
+  cvrptw_with_refueling
+  cvrptw_with_resources
+  cvrptw_with_stop_times_and_resources
+  dimacs_assignment
+  dobble_ls
+  flow_api
+  frequency_assignment_problem
+  golomb_sat
+  integer_programming
+  jobshop_sat
+  knapsack
+  linear_assignment_api
+  linear_programming
+  linear_solver_protocol_buffers
+  magic_square_sat
+  max_flow
+  min_cost_flow
+  mps_driver
+  network_routing_sat
+  nqueens
+  random_tsp
+  pdptw
+  shift_minimization_sat
+  solve
+  sports_scheduling_sat
+  strawberry_fields_with_column_generation
+  tsp
+  vrp
+  weighted_tardiness_sat)
+  add_executable(${EXECUTABLE} ${EXECUTABLE}.cc)
+  target_include_directories(${EXECUTABLE} PUBLIC ${PARENT_SOURCE_DIR})
+  target_compile_features(${EXECUTABLE} PRIVATE cxx_std_11)
+  target_link_libraries(${EXECUTABLE} PRIVATE ortools::ortools)
+  install(TARGETS ${EXECUTABLE}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endforeach()
+
+
+foreach(TEST
+    costas_array_sat
+    cvrp_disjoint_tw
+    cvrptw
+    #cvrptw_with_breaks # Too long
+    #cvrptw_with_refueling # Too long
+    cvrptw_with_resources
+    cvrptw_with_stop_times_and_resources
+    #dimacs_assignment
+    #dobble_ls # Too long
+    flow_api
+    #frequency_assignment_problem
+    golomb_sat
+    integer_programming
+    #jobshop_sat
+    knapsack
+    linear_assignment_api
+    linear_programming
+    linear_solver_protocol_buffers
+    magic_square_sat
+    #mps_driver
+    #network_routing_sat
+    nqueens
+    #pdptw
+    #rcpsp_sat
+    #shift_minimization_sat
+    #solve
+    #sports_scheduling_sat # Too long
+    #strawberry_fields_with_column_generation # Too long
+    tsp
+    vrp
+    #weighted_tardiness_sat
+    )
+  add_test(NAME cc_${TEST} COMMAND ${TEST})
+endforeach()

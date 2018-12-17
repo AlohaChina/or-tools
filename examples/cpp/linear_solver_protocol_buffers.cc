@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,7 +10,6 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
 
 #include <string>
 
@@ -63,16 +62,16 @@ void BuildLinearProgrammingMaxExample(MPSolver::OptimizationProblemType type) {
 
   MPModelRequest model_request;
   *model_request.mutable_model() = model_proto;
-  #if defined(USE_GLOP)
+#if defined(USE_GLOP)
   if (type == MPSolver::GLOP_LINEAR_PROGRAMMING) {
     model_request.set_solver_type(MPModelRequest::GLOP_LINEAR_PROGRAMMING);
   }
-  #endif  // USE_GLOP
-  #if defined(USE_CLP)
+#endif  // USE_GLOP
+#if defined(USE_CLP)
   if (type == MPSolver::CLP_LINEAR_PROGRAMMING) {
     model_request.set_solver_type(MPModelRequest::CLP_LINEAR_PROGRAMMING);
   }
-  #endif  // USE_CLP
+#endif  // USE_CLP
 
   MPSolutionResponse solution_response;
   MPSolver::SolveWithProto(model_request, &solution_response);
@@ -88,19 +87,19 @@ void BuildLinearProgrammingMaxExample(MPSolver::OptimizationProblemType type) {
 }
 
 void RunAllExamples() {
-  #if defined(USE_GLOP)
+#if defined(USE_GLOP)
   LOG(INFO) << "----- Running Max Example with GLOP -----";
   BuildLinearProgrammingMaxExample(MPSolver::GLOP_LINEAR_PROGRAMMING);
-  #endif  // USE_GLOP
-  #if defined(USE_CLP)
+#endif  // USE_GLOP
+#if defined(USE_CLP)
   LOG(INFO) << "----- Running Max Example with Coin LP -----";
   BuildLinearProgrammingMaxExample(MPSolver::CLP_LINEAR_PROGRAMMING);
-  #endif  // USE_CLP
+#endif  // USE_CLP
 }
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags( &argc, &argv, true);
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
   operations_research::RunAllExamples();
-  return 0;
+  return EXIT_SUCCESS;
 }

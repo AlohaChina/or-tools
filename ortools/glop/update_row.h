@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -56,7 +56,7 @@ class UpdateRow {
   // Returns the left inverse of the unit row as computed by the last call to
   // ComputeUpdateRow(). In debug mode, we check that ComputeUpdateRow() was
   // called since the last Invalidate().
-  ScatteredColumnReference GetUnitRowLeftInverse() const;
+  const ScatteredRow& GetUnitRowLeftInverse() const;
 
   // Returns the update coefficients and non-zero positions corresponding to the
   // last call to ComputeUpdateRow().
@@ -94,7 +94,7 @@ class UpdateRow {
 
  private:
   // Computes the left inverse of the given unit row, and stores it in
-  // unit_row_left_inverse_ and unit_row_left_inverse_non_zeros_.
+  // unit_row_left_inverse_.
   void ComputeUnitRowLeftInverse(RowIndex leaving_row);
 
   // ComputeUpdateRow() does the common work and call one of these functions
@@ -112,8 +112,10 @@ class UpdateRow {
 
   // Left inverse by B of a unit row. Its scalar product with a column 'a' of A
   // gives the value of the right inverse of 'a' on the 'leaving_row'.
-  DenseRow unit_row_left_inverse_;
-  ColIndexVector unit_row_left_inverse_non_zeros_;
+  ScatteredRow unit_row_left_inverse_;
+
+  // The non-zeros of unit_row_left_inverse_ above the drop tolerance.
+  std::vector<ColIndex> unit_row_left_inverse_filtered_non_zeros_;
 
   // Holds the current update row data.
   // TODO(user): Introduce a ScatteredSparseRow class?
@@ -122,8 +124,8 @@ class UpdateRow {
   DenseRow coefficient_;
 
   // Boolean used to avoid recomputing many times the same thing.
-  bool compute_unit_row_left_inverse_;
   bool compute_update_row_;
+  RowIndex update_row_computed_for_;
 
   // Statistics about this class.
   struct Stats : public StatsGroup {

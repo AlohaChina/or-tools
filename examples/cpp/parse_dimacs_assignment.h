@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -27,13 +27,15 @@
 
 #include "ortools/base/callback.h"
 #include "ortools/base/commandlineflags.h"
+#include "ortools/base/filelineiter.h"
 #include "ortools/base/logging.h"
 #include "ortools/graph/ebert_graph.h"
 #include "ortools/graph/linear_assignment.h"
-#include "ortools/util/filelineiter.h"
 
-DECLARE_bool(assignment_maximize_cost);
-DECLARE_bool(assignment_optimize_layout);
+DEFINE_bool(assignment_maximize_cost, false,
+            "Negate costs so a max-cost assignment is found.");
+DEFINE_bool(assignment_optimize_layout, true,
+            "Optimize graph layout for speed.");
 
 namespace operations_research {
 
@@ -98,7 +100,8 @@ class DimacsAssignmentParser {
 
 // Implementation is below here.
 template <typename GraphType>
-void DimacsAssignmentParser<GraphType>::ParseProblemLine(const std::string& line) {
+void DimacsAssignmentParser<GraphType>::ParseProblemLine(
+    const std::string& line) {
   static const char* kIncorrectProblemLine =
       "Incorrect assignment problem line.";
   static const char* kAssignmentProblemType = "asn";
@@ -220,8 +223,8 @@ void DimacsAssignmentParser<GraphType>::ParseOneLine(const std::string& line) {
 template <typename GraphType>
 LinearSumAssignment<GraphType>* DimacsAssignmentParser<GraphType>::Parse(
     std::string* error_message, GraphType** graph_handle) {
-  CHECK_NOTNULL(error_message);
-  CHECK_NOTNULL(graph_handle);
+  CHECK(error_message != nullptr);
+  CHECK(graph_handle != nullptr);
 
   for (const std::string& line : FileLines(filename_)) {
     if (line.empty()) {

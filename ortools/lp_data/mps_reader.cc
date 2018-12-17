@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,30 +11,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include "ortools/lp_data/mps_reader.h"
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <memory>
 #include <utility>
-#include <fstream>
 
-#include "ortools/base/callback.h"
+#include "absl/strings/match.h"
+#include "absl/strings/numbers.h"
+#include "absl/strings/str_split.h"
 #include "ortools/base/commandlineflags.h"
-#include "ortools/base/logging.h"
-#include "ortools/base/stringprintf.h"
 #include "ortools/base/file.h"
-#include "ortools/base/filelinereader.h"
-#include "ortools/base/numbers.h"  // for safe_strtod
-#include "ortools/base/split.h"
-#include "ortools/base/strutil.h"
+#include "ortools/base/filelineiter.h"
+#include "ortools/base/logging.h"
 #include "ortools/base/map_util.h"  // for FindOrNull, FindWithDefault
-#include "ortools/lp_data/lp_print_utils.h"
 #include "ortools/base/status.h"
+#include "ortools/lp_data/lp_print_utils.h"
 
-DEFINE_bool(mps_free_form, false, "Read MPS files in free form.");
-DEFINE_bool(mps_stop_after_first_error, true, "Stop after the first error.");
+ABSL_FLAG(bool, mps_free_form, false, "Read MPS files in free form.");
+ABSL_FLAG(bool, mps_stop_after_first_error, true,
+          "Stop after the first error.");
 
 namespace operations_research {
 namespace glop {
@@ -44,7 +42,7 @@ const int MPSReader::kFieldStartPos[kNumFields] = {1, 4, 14, 24, 39, 49};
 const int MPSReader::kFieldLength[kNumFields] = {2, 8, 8, 12, 8, 12};
 
 MPSReader::MPSReader()
-    : free_form_(FLAGS_mps_free_form),
+    : free_form_(absl::GetFlag(FLAGS_mps_free_form)),
       data_(nullptr),
       problem_name_(""),
       parse_success_(true),
@@ -108,8 +106,8 @@ void MPSReader::DisplaySummary() {
 
 void MPSReader::SplitLineIntoFields() {
   if (free_form_) {
-    fields_ = strings::Split(line_, ' ', strings::SkipEmpty());
-    CHECK_GE(kNumFields, fields_.size());
+    fields_ = absl::StrSplit(line_, absl::ByAnyChar(" \t"), absl::SkipEmpty());
+    DCHECK_GE(kNumFields, fields_.size());
   } else {
     int length = line_.length();
     for (int i = 0; i < kNumFields; ++i) {
@@ -141,21 +139,13 @@ bool MPSReader::LoadFile(const std::string& file_name, LinearProgram* data) {
   Reset();
   data_ = data;
   data_->Clear();
-  std::ifstream tmp_file(file_name.c_str());
-        const bool file_exists = tmp_file.good();
-        tmp_file.close();
-        if (file_exists) {
-          FileLineReader reader(file_name.c_str());
-          reader.set_line_callback(
-              NewPermanentCallback(this, &MPSReader::ProcessLine));
-          reader.Reload();
-    data->CleanUp();
-    DisplaySummary();
-    return reader.loaded_successfully() && parse_success_;
-  } else {
-    LOG(DFATAL) << "File not found: " << file_name;
-    return false;
+  for (const std::string& line :
+       FileLines(file_name, FileLineIterator::REMOVE_INLINE_CR)) {
+    ProcessLine(line);
   }
+  data->CleanUp();
+  DisplaySummary();
+  return parse_success_;
 }
 
 // TODO(user): Ideally have a method to compare instances of LinearProgram
@@ -167,10 +157,10 @@ bool MPSReader::LoadFileWithMode(const std::string& file_name, bool free_form,
                                  LinearProgram* data) {
   free_form_ = free_form;
   if (LoadFile(file_name, data)) {
-    free_form_ = FLAGS_mps_free_form;
+    free_form_ = absl::GetFlag(FLAGS_mps_free_form);
     return true;
   }
-  free_form_ = FLAGS_mps_free_form;
+  free_form_ = absl::GetFlag(FLAGS_mps_free_form);
   return false;
 }
 
@@ -182,7 +172,6 @@ bool MPSReader::LoadFileAndTryFreeFormOnFail(const std::string& file_name,
   }
   return true;
 }
-
 
 std::string MPSReader::GetProblemName() const { return problem_name_; }
 
@@ -199,18 +188,26 @@ bool MPSReader::IsCommentOrBlank() const {
   return true;
 }
 
-void MPSReader::ProcessLine(char* line) {
+void MPSReader::ProcessLine(const std::string& line) {
   ++line_num_;
-  if (!parse_success_ && FLAGS_mps_stop_after_first_error) return;
+  if (!parse_success_ && absl::GetFlag(FLAGS_mps_stop_after_first_error))
+    return;
   line_ = line;
   if (IsCommentOrBlank()) {
     return;  // Skip blank lines and comments.
   }
+  if (!free_form_ && line_.find('\t') != std::string::npos) {
+    if (log_errors_) {
+      LOG(ERROR) << "Line " << line_num_ << ": contains tab "
+                 << "(Line contents: " << line_ << ").";
+    }
+    parse_success_ = false;
+  }
   std::string section;
-  if (*line != '\0' && *line != ' ') {
+  if (line[0] != '\0' && line[0] != ' ') {
     section = GetFirstWord();
     section_ =
-        FindWithDefault(section_name_to_id_map_, section, UNKNOWN_SECTION);
+        gtl::FindWithDefault(section_name_to_id_map_, section, UNKNOWN_SECTION);
     if (section_ == UNKNOWN_SECTION) {
       if (log_errors_) {
         LOG(ERROR) << "At line " << line_num_
@@ -237,7 +234,7 @@ void MPSReader::ProcessLine(char* line) {
       // NOTE(user): The name may differ between fixed and free forms. In
       // fixed form, the name has at most 8 characters, and starts at a specific
       // position in the NAME line. For MIPLIB2010 problems (eg, air04, glass4),
-      // the name in fixed form ends up being preceeded with a whitespace.
+      // the name in fixed form ends up being preceded with a whitespace.
       // TODO(user, bdb): Return an error for fixed form if the problem name
       // does not fit.
       data_->SetName(problem_name_);
@@ -294,11 +291,11 @@ void MPSReader::ProcessLine(char* line) {
 
 double MPSReader::GetDoubleFromString(const std::string& param) {
   double result;
-  if (!safe_strtod(param, &result)) {
+  if (!absl::SimpleAtod(param, &result)) {
     if (log_errors_) {
       LOG(ERROR) << "At line " << line_num_
-                 << ": Failed to convert std::string to double. String = " << param
-                 << ". (Line contents = '" << line_ << "')."
+                 << ": Failed to convert std::string to double. String = "
+                 << param << ". (Line contents = '" << line_ << "')."
                  << " free_form_ = " << free_form_;
     }
     parse_success_ = false;
@@ -309,8 +306,8 @@ double MPSReader::GetDoubleFromString(const std::string& param) {
 void MPSReader::ProcessRowsSection() {
   std::string row_type_name = fields_[0];
   std::string row_name = fields_[1];
-  MPSRowType row_type =
-      FindWithDefault(row_name_to_id_map_, row_type_name, UNKNOWN_ROW_TYPE);
+  MPSRowType row_type = gtl::FindWithDefault(row_name_to_id_map_, row_type_name,
+                                             UNKNOWN_ROW_TYPE);
   if (row_type == UNKNOWN_ROW_TYPE) {
     if (log_errors_) {
       LOG(ERROR) << "At line " << line_num_ << ": Unknown row type "
@@ -355,8 +352,12 @@ void MPSReader::ProcessColumnsSection() {
   // Take into account the INTORG and INTEND markers.
   if (line_.find("'MARKER'") != std::string::npos) {
     if (line_.find("'INTORG'") != std::string::npos) {
+      VLOG(2) << "Entering integer marker.\n" << line_;
+      CHECK(!in_integer_section_);
       in_integer_section_ = true;
     } else if (line_.find("'INTEND'") != std::string::npos) {
+      VLOG(2) << "Leaving integer marker.\n" << line_;
+      CHECK(in_integer_section_);
       in_integer_section_ = false;
     }
     return;
@@ -466,7 +467,8 @@ void MPSReader::StoreRightHandSide(const std::string& row_name,
   }
 }
 
-void MPSReader::StoreRange(const std::string& row_name, const std::string& range_value) {
+void MPSReader::StoreRange(const std::string& row_name,
+                           const std::string& range_value) {
   if (row_name.empty()) {
     return;
   }
@@ -494,7 +496,7 @@ void MPSReader::StoreRange(const std::string& row_name, const std::string& range
 void MPSReader::StoreBound(const std::string& bound_type_mnemonic,
                            const std::string& column_name,
                            const std::string& bound_value) {
-  const BoundTypeId bound_type_id = FindWithDefault(
+  const BoundTypeId bound_type_id = gtl::FindWithDefault(
       bound_name_to_id_map_, bound_type_mnemonic, UNKNOWN_BOUND_TYPE);
   if (bound_type_id == UNKNOWN_BOUND_TYPE) {
     parse_success_ = false;
@@ -526,6 +528,10 @@ void MPSReader::StoreBound(const std::string& bound_type_mnemonic,
   switch (bound_type_id) {
     case LOWER_BOUND:
       lower_bound = Fractional(GetDoubleFromString(bound_value));
+      // LI with the value 0.0 specifies general integers with no upper bound.
+      if (bound_type_mnemonic == "LI" && lower_bound == 0.0) {
+        upper_bound = kInfinity;
+      }
       break;
     case UPPER_BOUND:
       upper_bound = Fractional(GetDoubleFromString(bound_value));

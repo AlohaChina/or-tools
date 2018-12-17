@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2018 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -28,15 +28,16 @@
 #define OR_TOOLS_BOP_BOP_LS_H_
 
 #include <array>
-#include <unordered_set>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "ortools/base/hash.h"
+#include "ortools/base/random.h"
 #include "ortools/bop/bop_base.h"
 #include "ortools/bop/bop_solution.h"
 #include "ortools/bop/bop_types.h"
 #include "ortools/sat/boolean_problem.pb.h"
 #include "ortools/sat/sat_solver.h"
-#include "ortools/base/random.h"
 
 namespace operations_research {
 namespace bop {
@@ -227,7 +228,7 @@ class NonOrderedSetHasher {
 
  private:
   MTRandom random_;
-  ITIVector<IntType, uint64> hashes_;
+  gtl::ITIVector<IntType, uint64> hashes_;
 };
 
 // This class is used to incrementally maintain an assignment and the
@@ -384,15 +385,15 @@ class AssignmentAndConstraintFeasibilityMaintainer {
     int64 weight;
   };
 
-  ITIVector<VariableIndex, ITIVector<EntryIndex, ConstraintEntry>>
+  gtl::ITIVector<VariableIndex, gtl::ITIVector<EntryIndex, ConstraintEntry>>
       by_variable_matrix_;
-  ITIVector<ConstraintIndex, int64> constraint_lower_bounds_;
-  ITIVector<ConstraintIndex, int64> constraint_upper_bounds_;
+  gtl::ITIVector<ConstraintIndex, int64> constraint_lower_bounds_;
+  gtl::ITIVector<ConstraintIndex, int64> constraint_upper_bounds_;
 
   BopSolution assignment_;
   BopSolution reference_;
 
-  ITIVector<ConstraintIndex, int64> constraint_values_;
+  gtl::ITIVector<ConstraintIndex, int64> constraint_values_;
   BacktrackableIntegerSet<ConstraintIndex> infeasible_constraint_set_;
 
   // This contains the list of variable flipped in assignment_.
@@ -404,7 +405,8 @@ class AssignmentAndConstraintFeasibilityMaintainer {
   // Members used by PotentialOneFlipRepairs().
   std::vector<sat::Literal> tmp_potential_repairs_;
   NonOrderedSetHasher<ConstraintIndexWithDirection> constraint_set_hasher_;
-  std::unordered_map<uint64, std::vector<sat::Literal>> hash_to_potential_repairs_;
+  absl::flat_hash_map<uint64, std::vector<sat::Literal>>
+      hash_to_potential_repairs_;
 
   DISALLOW_COPY_AND_ASSIGN(AssignmentAndConstraintFeasibilityMaintainer);
 };
@@ -455,17 +457,17 @@ class OneFlipConstraintRepairer {
   // Note that if init_term_index == start_term_index, then all the terms will
   // be explored. Both TermIndex arguments can take values in [-1, constraint
   // size).
-  TermIndex NextRepairingTerm(ConstraintIndex constraint,
+  TermIndex NextRepairingTerm(ConstraintIndex ct_index,
                               TermIndex init_term_index,
                               TermIndex start_term_index) const;
 
   // Returns true if the constraint is infeasible and if flipping the variable
   // at the given index will repair it.
-  bool RepairIsValid(ConstraintIndex constraint, TermIndex term_index) const;
+  bool RepairIsValid(ConstraintIndex ct_index, TermIndex term_index) const;
 
   // Returns the literal formed by the variable at the given constraint term and
   // assigned to the opposite value of this variable in the current assignment.
-  sat::Literal GetFlip(ConstraintIndex constraint, TermIndex term_index) const;
+  sat::Literal GetFlip(ConstraintIndex ct_index, TermIndex term_index) const;
 
   // Local structure to represent the sparse matrix by constraint used for fast
   // lookups.
@@ -480,7 +482,7 @@ class OneFlipConstraintRepairer {
   // on most promising variables first.
   void SortTermsOfEachConstraints(int num_variables);
 
-  ITIVector<ConstraintIndex, ITIVector<TermIndex, ConstraintTerm> >
+  gtl::ITIVector<ConstraintIndex, gtl::ITIVector<TermIndex, ConstraintTerm>>
       by_constraint_matrix_;
   const AssignmentAndConstraintFeasibilityMaintainer& maintainer_;
   const sat::VariablesAssignment& sat_assignment_;
@@ -592,7 +594,7 @@ class LocalSearchAssignmentIterator {
   SatWrapper* const sat_wrapper_;
   OneFlipConstraintRepairer repairer_;
   std::vector<SearchNode> search_nodes_;
-  ITIVector<ConstraintIndex, TermIndex> initial_term_index_;
+  gtl::ITIVector<ConstraintIndex, TermIndex> initial_term_index_;
 
   // Temporary vector used by ApplyDecision().
   std::vector<sat::Literal> tmp_propagated_literals_;
@@ -611,7 +613,8 @@ class LocalSearchAssignmentIterator {
   // Ideally, this should be related to the maximum number of decision in the
   // LS, but that requires templating the whole LS optimizer.
   bool use_transposition_table_;
-  std::unordered_set<std::array<int32, kStoredMaxDecisions>> transposition_table_;
+  absl::flat_hash_set<std::array<int32, kStoredMaxDecisions>>
+      transposition_table_;
 
   bool use_potential_one_flip_repairs_;
 

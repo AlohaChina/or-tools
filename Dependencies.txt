@@ -1,8 +1,8 @@
-Protobuf = 3.5.1
-gflags = 2.2.1
-glog = 0.3.5
-Cbc = 2.9.9
-CoinUtils = 2.10.14
-Osi = 0.107.9
-Clp = 1.16.11
-Cgl = 0.59.10
+Protobuf=3.10.0
+gflags=2.2.2
+glog=0.4.0
+Cbc=2.10.3
+CoinUtils=2.11.2
+Osi=0.108.4
+Clp=1.17.3
+Cgl=0.60.2

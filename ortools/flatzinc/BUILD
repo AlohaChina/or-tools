@@ -1,4 +1,12 @@
+# Description:
+# Source code for the flatzinc interpreter. See www.minizinc.org.
+# This is a google owned implementation.
+
 package(default_visibility = ["//visibility:public"])
+
+# ---------------------------------------------------------------------------
+# Baseline flatzinc model.
+# ---------------------------------------------------------------------------
 
 cc_library(
     name = "logging",
@@ -14,26 +22,19 @@ cc_library(
     srcs = ["model.cc"],
     hdrs = ["model.h"],
     deps = [
-        ":logging",
         "//ortools/base",
         "//ortools/base:hash",
         "//ortools/base:map_util",
         "//ortools/base:stl_util",
-        "//ortools/base:strings",
-        "//ortools/util:iterators",
+        "//ortools/graph:iterators",
         "//ortools/util:string_array",
+        ":logging",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
-
-#cc_test(
-#    name = "model_test",
-#    size = "small",
-#    srcs = ["model_test.cc"],
-#    deps = [
-#        ":model",
-#        "//@gtest//:main",
-#    ],
-#)
 
 cc_library(
     name = "parser_yacc_lib",
@@ -44,16 +45,16 @@ cc_library(
         "parser_util.h",
     ],
     copts = [
-        #        "-Xclang-only=-Wno-implicit-fallthrough",
         "$(STACK_FRAME_UNLIMITED)",  # parser.tab.cc
     ],
     deps = [
-        ":model",
         "//ortools/base",
         "//ortools/base:map_util",
+        "//ortools/base:mathutil",
         "//ortools/base:stl_util",
-        "//ortools/base:strings",
         "//ortools/util:string_array",
+        ":model",
+        "@com_google_absl//absl/strings",
     ],
 )
 
@@ -61,12 +62,13 @@ cc_library(
     name = "parser_lex_lib",
     srcs = ["parser.yy.cc"],
     copts = [
-        #        "-Xclang-only=-Wno-implicit-fallthrough",
         "-Wno-unused-function",  # parser.yy.cc
     ],
     deps = [
-        ":parser_yacc_lib",
         "//ortools/base",
+        ":parser_yacc_lib",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -81,181 +83,35 @@ cc_library(
     ],
 )
 
-#cc_test(
-#    name = "parser_test",
-#    size = "small",
-#    srcs = ["parser_test.cc"],
-#    data = [
-#        "testdata/M12.fzn",
-#        "testdata/alpha.fzn",
-#        "testdata/golomb.fzn",
-#    ],
-#    deps = [
-#        ":model",
-#        ":parser_lib",
-#        "//@gtest//:main",
-#        "//ortools/base:file",
-#        "//ortools/base:file:path",
-#    ],
-#)
-
 cc_library(
     name = "presolve",
     srcs = ["presolve.cc"],
     hdrs = ["presolve.h"],
     deps = [
-        ":logging",
-        ":model",
         "//ortools/base",
         "//ortools/base:hash",
         "//ortools/base:map_util",
-        "//ortools/base:strings",
         "//ortools/graph:cliques",
         "//ortools/util:saturated_arithmetic",
         "//ortools/util:vector_map",
+        ":logging",
+        ":model",
+        "@com_google_absl//absl/strings",
     ],
 )
-
-#cc_test(
-#    name = "presolve_test",
-#    size = "small",
-#    srcs = ["presolve_test.cc"],
-#    deps = [
-#        ":model",
-#        ":presolve",
-#        "//@gtest//:main",
-#        "//ortools/base:file",
-#        "//ortools/base:file:path",
-#    ],
-#)
 
 cc_library(
     name = "checker",
     srcs = ["checker.cc"],
     hdrs = ["checker.h"],
     deps = [
-        ":logging",
-        ":model",
         "//ortools/base",
         "//ortools/base:hash",
         "//ortools/base:map_util",
-        "//ortools/base:strings",
-    ],
-)
-
-cc_library(
-    name = "sat_constraint",
-    srcs = ["sat_constraint.cc"],
-    hdrs = ["sat_constraint.h"],
-    deps = [
-        ":logging",
-        "//ortools/base",
-        "//ortools/base:hash",
-        "//ortools/base:int_type",
-        "//ortools/base:int_type_indexed_vector",
-        "//ortools/base:map_util",
-        "//ortools/constraint_solver:cp",
-        "//ortools/sat:pb_constraint",
-        "//ortools/sat:sat_base",
-        "//ortools/sat:sat_solver",
-        "//ortools/util:string_array",
-    ],
-)
-
-cc_library(
-    name = "flatzinc_constraints",
-    srcs = ["flatzinc_constraints.cc"],
-    hdrs = ["flatzinc_constraints.h"],
-    deps = [
-        ":logging",
-        "//ortools/base",
-        "//ortools/base:hash",
-        "//ortools/constraint_solver:cp",
-        "//ortools/util:string_array",
-    ],
-)
-
-cc_library(
-    name = "reporting",
-    srcs = ["reporting.cc"],
-    hdrs = ["reporting.h"],
-    deps = [
-        ":logging",
-        "//ortools/base",
-        "//ortools/base:mutex",
-        "//ortools/constraint_solver:cp",
-    ],
-)
-
-cc_library(
-    name = "solver_util",
-    srcs = ["solver_util.cc"],
-    hdrs = ["solver_util.h"],
-    deps = [
         ":logging",
         ":model",
-        "//ortools/base",
-        "//ortools/constraint_solver:cp",
-    ],
-)
-
-cc_library(
-    name = "solver_data",
-    srcs = ["solver_data.cc"],
-    hdrs = ["solver_data.h"],
-    deps = [
-        ":logging",
-        ":model",
-        ":sat_constraint",
-        "//ortools/base",
-        "//ortools/constraint_solver:cp",
-    ],
-)
-
-cc_library(
-    name = "constraints",
-    srcs = ["constraints.cc"],
-    hdrs = ["constraints.h"],
-    deps = [
-        ":flatzinc_constraints",
-        ":logging",
-        ":model",
-        ":sat_constraint",
-        ":solver_data",
-        "//ortools/base",
-        "//ortools/base:hash",
-        "//ortools/constraint_solver:cp",
-        "//ortools/util:string_array",
-    ],
-)
-
-cc_library(
-    name = "solver",
-    srcs = [
-        "solver.cc",
-    ],
-    hdrs = [
-        "solver.h",
-    ],
-    deps = [
-        ":checker",
-        ":constraints",
-        ":logging",
-        ":model",
-        ":reporting",
-        ":sat_constraint",
-        ":solver_data",
-        ":solver_util",
-        "//ortools/base",
-        "//ortools/base:hash",
-        "//ortools/base:int_type",
-        "//ortools/base:int_type_indexed_vector",
-        "//ortools/base:map_util",
-        "//ortools/constraint_solver:cp",
-        "//ortools/sat:pb_constraint",
-        "//ortools/sat:sat_base",
-        "//ortools/sat:sat_solver",
-        "//ortools/util:string_array",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/strings",
     ],
 )
 
@@ -264,13 +120,9 @@ cc_library(
     srcs = ["cp_model_fz_solver.cc"],
     hdrs = ["cp_model_fz_solver.h"],
     deps = [
-        ":checker",
-        ":logging",
-        ":model",
-        ":solver",
         "//ortools/base",
-        "//ortools/base:strings",
         "//ortools/base:map_util",
+        "//ortools/base:threadpool",
         "//ortools/sat:cp_constraints",
         "//ortools/sat:cp_model_cc_proto",
         "//ortools/sat:cp_model_solver",
@@ -284,21 +136,23 @@ cc_library(
         "//ortools/sat:optimization",
         "//ortools/sat:sat_solver",
         "//ortools/sat:table",
+        ":checker",
+        ":logging",
+        ":model",
+        "@com_google_absl//absl/strings",
     ],
 )
+
 cc_binary(
     name = "fz",
     srcs = ["fz.cc"],
     deps = [
+        "//ortools/base",
+        "//ortools/base:threadpool",
         ":cp_model_fz_solver",
         ":logging",
         ":model",
         ":parser_lib",
         ":presolve",
-        ":reporting",
-        ":solver",
-        ":solver_util",
-        "//ortools/base",
-        "//ortools/base:threadpool",
     ],
 )

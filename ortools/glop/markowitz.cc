@@ -14,15 +14,18 @@
 #include "ortools/glop/markowitz.h"
 
 #include <limits>
+
 #include "absl/strings/str_format.h"
+#include "ortools/lp_data/lp_types.h"
 #include "ortools/lp_data/lp_utils.h"
+#include "ortools/lp_data/sparse.h"
 
 namespace operations_research {
 namespace glop {
 
-Status Markowitz::ComputeRowAndColumnPermutation(const MatrixView& basis_matrix,
-                                                 RowPermutation* row_perm,
-                                                 ColumnPermutation* col_perm) {
+Status Markowitz::ComputeRowAndColumnPermutation(
+    const CompactSparseMatrixView& basis_matrix, RowPermutation* row_perm,
+    ColumnPermutation* col_perm) {
   SCOPED_TIME_STAT(&stats_);
   Clear();
   const RowIndex num_rows = basis_matrix.num_rows();
@@ -35,8 +38,8 @@ Status Markowitz::ComputeRowAndColumnPermutation(const MatrixView& basis_matrix,
   basis_matrix_ = &basis_matrix;
 
   // Initialize all the matrices.
-  lower_.Reset(num_rows);
-  upper_.Reset(num_rows);
+  lower_.Reset(num_rows, num_cols);
+  upper_.Reset(num_rows, num_cols);
   permuted_lower_.Reset(num_cols);
   permuted_upper_.Reset(num_cols);
   permuted_lower_column_needs_solve_.assign(num_cols, false);
@@ -137,7 +140,7 @@ Status Markowitz::ComputeRowAndColumnPermutation(const MatrixView& basis_matrix,
   return Status::OK();
 }
 
-Status Markowitz::ComputeLU(const MatrixView& basis_matrix,
+Status Markowitz::ComputeLU(const CompactSparseMatrixView& basis_matrix,
                             RowPermutation* row_perm,
                             ColumnPermutation* col_perm,
                             TriangularMatrix* lower, TriangularMatrix* upper) {
@@ -181,15 +184,14 @@ struct MatrixEntry {
 
 }  // namespace
 
-void Markowitz::ExtractSingletonColumns(const MatrixView& basis_matrix,
-                                        RowPermutation* row_perm,
-                                        ColumnPermutation* col_perm,
-                                        int* index) {
+void Markowitz::ExtractSingletonColumns(
+    const CompactSparseMatrixView& basis_matrix, RowPermutation* row_perm,
+    ColumnPermutation* col_perm, int* index) {
   SCOPED_TIME_STAT(&stats_);
   std::vector<MatrixEntry> singleton_entries;
   const ColIndex num_cols = basis_matrix.num_cols();
   for (ColIndex col(0); col < num_cols; ++col) {
-    const SparseColumn& column = basis_matrix.column(col);
+    const ColumnView& column = basis_matrix.column(col);
     if (column.num_entries().value() == 1) {
       singleton_entries.push_back(
           MatrixEntry(column.GetFirstRow(), col, column.GetFirstCoefficient()));
@@ -212,31 +214,34 @@ void Markowitz::ExtractSingletonColumns(const MatrixView& basis_matrix,
                                           num_cols.value());
 }
 
-void Markowitz::ExtractResidualSingletonColumns(const MatrixView& basis_matrix,
-                                                RowPermutation* row_perm,
-                                                ColumnPermutation* col_perm,
-                                                int* index) {
+bool Markowitz::IsResidualSingletonColumn(const ColumnView& column,
+                                          const RowPermutation& row_perm,
+                                          RowIndex* row) {
+  int residual_degree = 0;
+  for (const auto e : column) {
+    if (row_perm[e.row()] != kInvalidRow) continue;
+    ++residual_degree;
+    if (residual_degree > 1) return false;
+    *row = e.row();
+  }
+  return residual_degree == 1;
+}
+
+void Markowitz::ExtractResidualSingletonColumns(
+    const CompactSparseMatrixView& basis_matrix, RowPermutation* row_perm,
+    ColumnPermutation* col_perm, int* index) {
   SCOPED_TIME_STAT(&stats_);
   const ColIndex num_cols = basis_matrix.num_cols();
+  RowIndex row = kInvalidRow;
   for (ColIndex col(0); col < num_cols; ++col) {
     if ((*col_perm)[col] != kInvalidCol) continue;
-    const SparseColumn& column = basis_matrix.column(col);
-    int residual_degree = 0;
-    RowIndex row;
-    for (const SparseColumn::Entry e : column) {
-      if ((*row_perm)[e.row()] == kInvalidRow) {
-        ++residual_degree;
-        if (residual_degree > 1) break;
-        row = e.row();
-      }
-    }
-    if (residual_degree == 1) {
-      (*col_perm)[col] = ColIndex(*index);
-      (*row_perm)[row] = RowIndex(*index);
-      lower_.AddDiagonalOnlyColumn(1.0);
-      upper_.AddTriangularColumn(column, row);
-      ++(*index);
-    }
+    const ColumnView& column = basis_matrix.column(col);
+    if (!IsResidualSingletonColumn(column, *row_perm, &row)) continue;
+    (*col_perm)[col] = ColIndex(*index);
+    (*row_perm)[row] = RowIndex(*index);
+    lower_.AddDiagonalOnlyColumn(1.0);
+    upper_.AddTriangularColumn(column, row);
+    ++(*index);
   }
   stats_.basis_residual_singleton_column_ratio.Add(static_cast<double>(*index) /
                                                    num_cols.value());
@@ -261,8 +266,8 @@ const SparseColumn& Markowitz::ComputeColumn(const RowPermutation& row_perm,
     // Solve a sparse triangular system. If the column 'col' of permuted_lower_
     // was never computed before by ComputeColumn(), we use the column 'col' of
     // the matrix to factorize.
-    const SparseColumn& input =
-        first_time ? basis_matrix_->column(col) : *lower_column;
+    const ColumnView& input =
+        first_time ? basis_matrix_->column(col) : ColumnView(*lower_column);
     lower_.PermutedLowerSparseSolve(input, row_perm, lower_column,
                                     permuted_upper_.mutable_column(col));
     permuted_lower_column_needs_solve_[col] = false;
@@ -276,9 +281,14 @@ const SparseColumn& Markowitz::ComputeColumn(const RowPermutation& row_perm,
     return *lower_column;
   }
 
-  // In this case, we just need to "split" the lower column.
+  // In this case, we just need to "split" the lower column.  We copy from the
+  // appropriate ColumnView in basis_matrix_.
+  // TODO(user): add PopulateFromColumnView if it is useful elsewhere.
   if (first_time) {
-    lower_column->PopulateFromSparseVector(basis_matrix_->column(col));
+    lower_column->Reserve(basis_matrix_->column(col).num_entries());
+    for (const auto e : basis_matrix_->column(col)) {
+      lower_column->SetCoefficient(e.row(), e.coefficient());
+    }
   }
   lower_column->MoveTaggedEntriesTo(row_perm,
                                     permuted_upper_.mutable_column(col));
@@ -538,17 +548,17 @@ void MatrixNonZeroPattern::Clear() {
 }
 
 void MatrixNonZeroPattern::Reset(RowIndex num_rows, ColIndex num_cols) {
-  Clear();
-  row_degree_.resize(num_rows, 0);
-  col_degree_.resize(num_cols, 0);
+  row_degree_.AssignToZero(num_rows);
+  col_degree_.AssignToZero(num_cols);
+  row_non_zero_.clear();
   row_non_zero_.resize(num_rows.value());
-  deleted_columns_.resize(num_cols, false);
-  bool_scratchpad_.resize(num_cols, false);
+  deleted_columns_.assign(num_cols, false);
+  bool_scratchpad_.assign(num_cols, false);
   num_non_deleted_columns_ = num_cols;
 }
 
 void MatrixNonZeroPattern::InitializeFromMatrixSubset(
-    const MatrixView& basis_matrix, const RowPermutation& row_perm,
+    const CompactSparseMatrixView& basis_matrix, const RowPermutation& row_perm,
     const ColumnPermutation& col_perm, std::vector<ColIndex>* singleton_columns,
     std::vector<RowIndex>* singleton_rows) {
   const ColIndex num_cols = basis_matrix.num_cols();
@@ -673,7 +683,7 @@ void MatrixNonZeroPattern::Update(RowIndex pivot_row, ColIndex pivot_col,
 
     // If the row is fully dense, there is nothing to do (the merge below will
     // not change anything). This is a small price to pay for a huge gain when
-    // the matrix become dense.
+    // the matrix becomes dense.
     if (e.coefficient() == 0.0 || row_degree_[row] == max_row_degree) continue;
     DCHECK_LT(row_degree_[row], max_row_degree);
 

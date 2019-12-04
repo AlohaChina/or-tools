@@ -22,17 +22,18 @@
 #include <utility>
 #include <vector>
 
+#include "absl/strings/match.h"
 #include "absl/strings/str_format.h"
+#include "ortools/base/canonical_errors.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/map_util.h"
+#include "ortools/base/status.h"
 #include "ortools/base/timer.h"
+#include "ortools/linear_solver/gurobi_environment.h"
+#include "ortools/linear_solver/gurobi_proto_solver.h"
 #include "ortools/linear_solver/linear_solver.h"
-
-extern "C" {
-#include "gurobi_c.h"
-}
 
 DEFINE_int32(num_gurobi_threads, 4, "Number of threads available for Gurobi.");
 
@@ -50,6 +51,8 @@ class GurobiInterface : public MPSolverInterface {
   // ----- Solve -----
   // Solves the problem using the parameter values specified.
   MPSolver::ResultStatus Solve(const MPSolverParameters& param) override;
+  absl::optional<MPSolutionResponse> DirectlySolveProto(
+      const MPModelRequest& request) override;
 
   // Writes the model.
   void Write(const std::string& filename) override;
@@ -65,6 +68,7 @@ class GurobiInterface : public MPSolverInterface {
 
   // Adds Constraint incrementally.
   void AddRowConstraint(MPConstraint* const ct) override;
+  bool AddIndicatorConstraint(MPConstraint* const ct) override;
   // Adds variable incrementally.
   void AddVariable(MPVariable* const var) override;
   // Changes a coefficient in a constraint.
@@ -80,6 +84,8 @@ class GurobiInterface : public MPSolverInterface {
   void SetObjectiveOffset(double value) override;
   // Clears the objective from all its terms.
   void ClearObjective() override;
+  bool CheckBestObjectiveBoundExists() const override;
+  void BranchingPriorityChangedForVariable(int var_index) override;
 
   // ------ Query statistics on the solution and the solve ------
   // Number of simplex or interior-point iterations
@@ -163,10 +169,7 @@ class GurobiInterface : public MPSolverInterface {
   MPSolver::BasisStatus TransformGRBConstraintBasisStatus(
       int gurobi_basis_status, int constraint_index) const;
 
-  void CheckedGurobiCall(int err) const {
-    CHECK_EQ(0, err) << "Fatal error with code " << err << ", due to "
-                     << GRBgeterrormsg(env_);
-  };
+  void CheckedGurobiCall(int err) const;
 
   int SolutionCount() const;
 
@@ -174,7 +177,21 @@ class GurobiInterface : public MPSolverInterface {
   GRBenv* env_;
   bool mip_;
   int current_solution_index_;
+  bool update_branching_priorities_ = false;
 };
+
+namespace {
+
+void CheckedGurobiCall(int err, GRBenv* const env) {
+  CHECK_EQ(0, err) << "Fatal error with code " << err << ", due to "
+                   << GRBgeterrormsg(env);
+}
+
+}  // namespace
+
+void GurobiInterface::CheckedGurobiCall(int err) const {
+  ::operations_research::CheckedGurobiCall(err, env_);
+}
 
 // Creates a LP/MIP instance with the specified name and minimization objective.
 GurobiInterface::GurobiInterface(MPSolver* const solver, bool mip)
@@ -183,12 +200,7 @@ GurobiInterface::GurobiInterface(MPSolver* const solver, bool mip)
       env_(nullptr),
       mip_(mip),
       current_solution_index_(0) {
-  const int ret = GRBloadenv(&env_, nullptr);
-  if (ret != 0 || env_ == nullptr) {
-    std::string err_msg = GRBgeterrormsg(env_);
-    LOG(DFATAL) << "Error: could not create environment: " << err_msg;
-    throw std::runtime_error(std::to_string(ret) + ", " + err_msg);
-  }
+  CHECK_OK(LoadGurobiEnvironment(&env_));
   CheckedGurobiCall(GRBnewmodel(env_, &model_, solver_->name_.c_str(),
                                 0,          // numvars
                                 nullptr,    // obj
@@ -270,6 +282,11 @@ void GurobiInterface::AddRowConstraint(MPConstraint* const ct) {
   sync_status_ = MUST_RELOAD;
 }
 
+bool GurobiInterface::AddIndicatorConstraint(MPConstraint* const ct) {
+  sync_status_ = MUST_RELOAD;
+  return !IsContinuous();
+}
+
 void GurobiInterface::AddVariable(MPVariable* const ct) {
   sync_status_ = MUST_RELOAD;
 }
@@ -301,6 +318,10 @@ void GurobiInterface::SetObjectiveOffset(double value) {
 
 void GurobiInterface::ClearObjective() { sync_status_ = MUST_RELOAD; }
 
+void GurobiInterface::BranchingPriorityChangedForVariable(int var_index) {
+  update_branching_priorities_ = true;
+}
+
 // ------ Query statistics on the solution and the solve ------
 
 int64 GurobiInterface::iterations() const {
@@ -320,6 +341,12 @@ int64 GurobiInterface::nodes() const {
     LOG(DFATAL) << "Number of nodes only available for discrete problems.";
     return kUnknownNumberOfNodes;
   }
+}
+
+bool GurobiInterface::CheckBestObjectiveBoundExists() const {
+  double value;
+  const int error = GRBgetdblattr(model_, GRB_DBL_ATTR_OBJBOUND, &value);
+  return error == 0;
 }
 
 // Returns the best objective bound. Only available for discrete problems.
@@ -448,7 +475,7 @@ void GurobiInterface::ExtractNewVariables() {
   const int total_num_vars = solver_->variables_.size();
   if (total_num_vars > last_variable_index_) {
     int num_new_variables = total_num_vars - last_variable_index_;
-    std::unique_ptr<double[]> obj_coefs(new double[num_new_variables]);
+    std::unique_ptr<double[]> obj_coeffs(new double[num_new_variables]);
     std::unique_ptr<double[]> lb(new double[num_new_variables]);
     std::unique_ptr<double[]> ub(new double[num_new_variables]);
     std::unique_ptr<char[]> ctype(new char[num_new_variables]);
@@ -463,11 +490,11 @@ void GurobiInterface::ExtractNewVariables() {
       if (!var->name().empty()) {
         colname[j] = var->name().c_str();
       }
-      obj_coefs[j] = solver_->objective_->GetCoefficient(var);
+      obj_coeffs[j] = solver_->objective_->GetCoefficient(var);
     }
 
     CheckedGurobiCall(GRBaddvars(model_, num_new_variables, 0, nullptr, nullptr,
-                                 nullptr, obj_coefs.get(), lb.get(), ub.get(),
+                                 nullptr, obj_coeffs.get(), lb.get(), ub.get(),
                                  ctype.get(),
                                  const_cast<char**>(colname.get())));
   }
@@ -494,7 +521,7 @@ void GurobiInterface::ExtractNewConstraints() {
 
     max_row_length = std::max(1, max_row_length);
     std::unique_ptr<int[]> col_indices(new int[max_row_length]);
-    std::unique_ptr<double[]> coefs(new double[max_row_length]);
+    std::unique_ptr<double[]> coeffs(new double[max_row_length]);
 
     // Add each new constraint.
     for (int row = last_constraint_index_; row < total_num_rows; ++row) {
@@ -506,14 +533,30 @@ void GurobiInterface::ExtractNewConstraints() {
         const int var_index = entry.first->index();
         CHECK(variable_is_extracted(var_index));
         col_indices[col] = var_index;
-        coefs[col] = entry.second;
+        coeffs[col] = entry.second;
         col++;
       }
       char* const name =
           ct->name().empty() ? nullptr : const_cast<char*>(ct->name().c_str());
-      CheckedGurobiCall(GRBaddrangeconstr(model_, size, col_indices.get(),
-                                          coefs.get(), ct->lb(), ct->ub(),
-                                          name));
+      if (ct->indicator_variable() != nullptr) {
+        if (ct->lb() > -std::numeric_limits<double>::infinity()) {
+          CheckedGurobiCall(GRBaddgenconstrIndicator(
+              model_, name, ct->indicator_variable()->index(),
+              ct->indicator_value(), size, col_indices.get(), coeffs.get(),
+              ct->ub() == ct->lb() ? GRB_EQUAL : GRB_GREATER_EQUAL, ct->lb()));
+        }
+        if (ct->ub() < std::numeric_limits<double>::infinity() &&
+            ct->lb() != ct->ub()) {
+          CheckedGurobiCall(GRBaddgenconstrIndicator(
+              model_, name, ct->indicator_variable()->index(),
+              ct->indicator_value(), size, col_indices.get(), coeffs.get(),
+              GRB_LESS_EQUAL, ct->ub()));
+        }
+      } else {
+        CheckedGurobiCall(GRBaddrangeconstr(model_, size, col_indices.get(),
+                                            coeffs.get(), ct->lb(), ct->ub(),
+                                            name));
+      }
     }
   }
   CheckedGurobiCall(GRBupdatemodel(model_));
@@ -658,9 +701,20 @@ MPSolver::ResultStatus GurobiInterface::Solve(const MPSolverParameters& param) {
                              absl::FormatDuration(timer.GetDuration()));
 
   // Set solution hints if any.
-  for (const std::pair<MPVariable*, double>& p : solver_->solution_hint_) {
+  for (const std::pair<const MPVariable*, double>& p :
+       solver_->solution_hint_) {
     CheckedGurobiCall(
         GRBsetdblattrelement(model_, "Start", p.first->index(), p.second));
+  }
+
+  // Pass branching priority annotations if at least one has been updated.
+  if (update_branching_priorities_) {
+    for (const MPVariable* var : solver_->variables_) {
+      CheckedGurobiCall(
+          GRBsetintattrelement(model_, GRB_INT_ATTR_BRANCHPRIORITY,
+                               var->index(), var->branching_priority()));
+    }
+    update_branching_priorities_ = false;
   }
 
   // Time limit.
@@ -774,6 +828,23 @@ MPSolver::ResultStatus GurobiInterface::Solve(const MPSolverParameters& param) {
   sync_status_ = SOLUTION_SYNCHRONIZED;
   GRBresetparams(GRBgetenv(model_));
   return result_status_;
+}
+
+absl::optional<MPSolutionResponse> GurobiInterface::DirectlySolveProto(
+    const MPModelRequest& request) {
+  const auto status_or = GurobiSolveProto(request);
+  if (status_or.ok()) return status_or.ValueOrDie();
+  // Special case: if something is not implemented yet, fall back to solving
+  // through MPSolver.
+  if (util::IsUnimplemented(status_or.status())) return absl::nullopt;
+
+  if (request.enable_internal_solver_output()) {
+    LOG(INFO) << "Invalid Gurobi status: " << status_or.status();
+  }
+  MPSolutionResponse response;
+  response.set_status(MPSOLVER_NOT_SOLVED);
+  response.set_status_str(status_or.status().ToString());
+  return std::move(response);
 }
 
 bool GurobiInterface::NextSolution() {

@@ -190,9 +190,6 @@ $(OR_TOOLS_LIBS): \
  $(CP_LIB_OBJS) \
  $(DEPENDENCIES_LNK) \
  $(LDFLAGS)
-ifdef WINDOWS_SCIP_DIR
-	$(COPY) $(WINDOWS_SCIP_DIR)$Sbin$Sscip.dll $(BIN_DIR)
-endif
 
 #####################
 ##  Flatzinc code  ##
@@ -201,19 +198,12 @@ FLATZINC_LIBS = $(LIB_DIR)/$(LIB_PREFIX)fz.$L
 FLATZINC_PATH = $(subst /,$S,$(FLATZINC_LIBS))
 FLATZINC_DEPS = \
 	$(SRC_DIR)/ortools/flatzinc/checker.h \
-	$(SRC_DIR)/ortools/flatzinc/constraints.h \
 	$(SRC_DIR)/ortools/flatzinc/cp_model_fz_solver.h \
-	$(SRC_DIR)/ortools/flatzinc/flatzinc_constraints.h \
 	$(SRC_DIR)/ortools/flatzinc/logging.h \
 	$(SRC_DIR)/ortools/flatzinc/model.h \
 	$(SRC_DIR)/ortools/flatzinc/parser.h \
 	$(SRC_DIR)/ortools/flatzinc/parser.tab.hh \
 	$(SRC_DIR)/ortools/flatzinc/presolve.h \
-	$(SRC_DIR)/ortools/flatzinc/reporting.h \
-	$(SRC_DIR)/ortools/flatzinc/sat_constraint.h \
-	$(SRC_DIR)/ortools/flatzinc/solver_data.h \
-	$(SRC_DIR)/ortools/flatzinc/solver.h \
-	$(SRC_DIR)/ortools/flatzinc/solver_util.h \
 	$(CP_DEPS) \
 	$(SAT_DEPS)
 FLATZINC_LNK = $(PRE_LIB)fz$(POST_LIB) $(OR_TOOLS_LNK)
@@ -223,23 +213,13 @@ endif
 
 FLATZINC_OBJS=\
 	$(OBJ_DIR)/flatzinc/checker.$O \
-	$(OBJ_DIR)/flatzinc/constraints.$O \
 	$(OBJ_DIR)/flatzinc/cp_model_fz_solver.$O \
-	$(OBJ_DIR)/flatzinc/flatzinc_constraints.$O \
 	$(OBJ_DIR)/flatzinc/logging.$O \
 	$(OBJ_DIR)/flatzinc/model.$O \
 	$(OBJ_DIR)/flatzinc/parser.$O \
 	$(OBJ_DIR)/flatzinc/parser.tab.$O \
 	$(OBJ_DIR)/flatzinc/parser.yy.$O \
-	$(OBJ_DIR)/flatzinc/presolve.$O \
-	$(OBJ_DIR)/flatzinc/reporting.$O \
-	$(OBJ_DIR)/flatzinc/sat_constraint.$O \
-	$(OBJ_DIR)/flatzinc/solver.$O \
-	$(OBJ_DIR)/flatzinc/solver_data.$O \
-	$(OBJ_DIR)/flatzinc/solver_util.$O
-
-FLATZINC_CC_TESTS = \
-boolean_test
+	$(OBJ_DIR)/flatzinc/presolve.$O
 
 fz_parser: #$(SRC_DIR)/ortools/flatzinc/parser.lex $(SRC_DIR)/ortools/flatzinc/parser.yy
 	flex -o $(SRC_DIR)/ortools/flatzinc/parser.yy.cc $(SRC_DIR)/ortools/flatzinc/parser.lex
@@ -256,17 +236,10 @@ $(FLATZINC_LIBS): $(OR_TOOLS_LIBS) $(FLATZINC_OBJS) | $(LIB_DIR)
  $(OR_TOOLS_LNK) \
  $(OR_TOOLS_LDFLAGS)
 
-$(OBJ_DIR)/boolean_test.$O: $(TEST_DIR)/boolean_test.cc $(FLATZINC_DEPS) | $(OBJ_DIR)
-	$(CCC) $(CFLAGS) -c $(TEST_PATH)$Sboolean_test.cc $(OBJ_OUT)$(OBJ_DIR)$Sboolean_test.$O
-
-$(BIN_DIR)/boolean_test$E: $(OBJ_DIR)/boolean_test.$O $(FLATZINC_LIBS) | $(BIN_DIR)
-	$(CCC) $(CFLAGS) $(OBJ_DIR)$Sboolean_test.$O $(FLATZINC_LNK) $(OR_TOOLS_LDFLAGS) $(EXE_OUT)$(BIN_DIR)$Sboolean_test$E
-
 .PHONY: fz # Build Flatzinc binaries.
 fz: \
  $(BIN_DIR)/fz$E \
- $(BIN_DIR)/parser_main$E \
- $(addsuffix $E, $(addprefix $(BIN_DIR)/, $(FLATZINC_CC_TESTS)))
+ $(BIN_DIR)/parser_main$E
 
 $(BIN_DIR)/fz$E: $(OBJ_DIR)/flatzinc/fz.$O $(FLATZINC_LIBS) $(OR_TOOLS_LIBS) | $(BIN_DIR)
 	$(CCC) $(CFLAGS) $(OBJ_DIR)$Sflatzinc$Sfz.$O $(FLATZINC_LNK) $(OR_TOOLS_LDFLAGS) $(EXE_OUT)$(BIN_DIR)$Sfz$E
@@ -348,6 +321,7 @@ rcc_%: $(BIN_DIR)/%$E FORCE
 
 .PHONY: test_cc_algorithms_samples # Build and Run all C++ Algorithms Samples (located in ortools/algorithms/samples)
 test_cc_algorithms_samples: \
+ rcc_knapsack \
  rcc_simple_knapsack_program
 
 .PHONY: test_cc_graph_samples # Build and Run all C++ Graph Samples (located in ortools/graph/samples)
@@ -364,10 +338,28 @@ test_cc_linear_solver_samples: \
 
 .PHONY: test_cc_constraint_solver_samples # Build and Run all C++ CP Samples (located in ortools/constraint_solver/samples)
 test_cc_constraint_solver_samples: \
- rcc_simple_ls_program \
- rcc_rabbits_and_pheasants_cp \
  rcc_minimal_jobshop_cp \
- rcc_nurses_cp
+ rcc_nurses_cp \
+ rcc_rabbits_and_pheasants_cp \
+ rcc_simple_ls_program \
+ rcc_simple_cp_program \
+ rcc_simple_routing_program \
+ rcc_tsp \
+ rcc_tsp_cities \
+ rcc_tsp_circuit_board \
+ rcc_tsp_distance_matrix \
+ rcc_vrp \
+ rcc_vrp_capacity \
+ rcc_vrp_drop_nodes \
+ rcc_vrp_global_span \
+ rcc_vrp_initial_routes \
+ rcc_vrp_pickup_delivery \
+ rcc_vrp_pickup_delivery_fifo \
+ rcc_vrp_pickup_delivery_lifo \
+ rcc_vrp_resources \
+ rcc_vrp_starts_ends \
+ rcc_vrp_time_windows \
+ rcc_vrp_with_time_limit
 
 .PHONY: test_cc_sat_samples # Build and Run all C++ Sat Samples (located in ortools/sat/samples)
 test_cc_sat_samples: \
@@ -375,6 +367,7 @@ test_cc_sat_samples: \
  rcc_bool_or_sample_sat \
  rcc_channeling_sample_sat \
  rcc_cp_is_fun_sat \
+ rcc_earliness_tardiness_cost_sample_sat \
  rcc_interval_sample_sat \
  rcc_literal_sample_sat \
  rcc_no_overlap_sample_sat \
@@ -384,15 +377,17 @@ test_cc_sat_samples: \
  rcc_reified_sample_sat \
  rcc_search_for_all_solutions_sample_sat \
  rcc_simple_sat_program \
+ rcc_solution_hinting_sample_sat \
  rcc_solve_and_print_intermediate_solutions_sample_sat \
  rcc_solve_with_time_limit_sample_sat \
+ rcc_step_function_sample_sat \
  rcc_stop_after_n_solutions_sample_sat
 
 .PHONY: check_cc_pimpl
 check_cc_pimpl: \
  test_cc_algorithms_samples \
- test_cc_graph_samples \
  test_cc_constraint_solver_samples \
+ test_cc_graph_samples \
  test_cc_linear_solver_samples \
  test_cc_sat_samples \
  \
@@ -400,15 +395,13 @@ check_cc_pimpl: \
  rcc_stigler_diet \
  rcc_constraint_programming_cp \
  rcc_integer_programming \
- rcc_tsp \
- rcc_vrp \
  rcc_knapsack \
  rcc_max_flow \
  rcc_min_cost_flow ;
 
 .PHONY: test_cc_tests # Build and Run all C++ Tests (located in ortools/examples/tests)
 test_cc_tests: \
- rcc_boolean_test \
+ rcc_lp_test \
  rcc_bug_fz1 \
  rcc_cpp11_test \
  rcc_forbidden_intervals_test \
@@ -538,9 +531,6 @@ clean_cc:
 	-$(DEL) $(BIN_DIR)$S*.lib
 	-$(DELREC) $(GEN_PATH)$Sflatzinc$S*
 	-$(DELREC) $(OBJ_DIR)$Sflatzinc$S*
-ifdef WINDOWS_SCIP_DIR
-	-$(DEL) $(BIN_DIR)$Sscip.dll
-endif
 
 .PHONY: clean_compat
 clean_compat:
@@ -609,29 +599,30 @@ install_libortools: $(OR_TOOLS_LIBS) install_ortools_dirs
 install_third_party: install_dirs
 ifeq ($(UNIX_GFLAGS_DIR),$(OR_TOOLS_TOP)/dependencies/install)
 	$(COPYREC) dependencies$Sinstall$Sinclude$Sgflags "$(DESTDIR)$(prefix)$Sinclude"
-	$(COPYREC) dependencies$Sinstall$Slib$Slibgflags* "$(DESTDIR)$(prefix)$Slib"
+	$(COPYREC) dependencies$Sinstall$Slib*$Slibgflags* "$(DESTDIR)$(prefix)$Slib"
 	$(COPYREC) dependencies$Sinstall$Sbin$Sgflags_completions.sh "$(DESTDIR)$(prefix)$Sbin"
 endif
 ifeq ($(UNIX_GLOG_DIR),$(OR_TOOLS_TOP)/dependencies/install)
 	$(COPYREC) dependencies$Sinstall$Sinclude$Sglog "$(DESTDIR)$(prefix)$Sinclude"
-	$(COPYREC) dependencies$Sinstall$Slib$Slibglog* "$(DESTDIR)$(prefix)$Slib"
+	$(COPYREC) dependencies$Sinstall$Slib*$Slibglog* "$(DESTDIR)$(prefix)$Slib"
 endif
 ifeq ($(UNIX_PROTOBUF_DIR),$(OR_TOOLS_TOP)/dependencies/install)
 	$(COPYREC) dependencies$Sinstall$Sinclude$Sgoogle "$(DESTDIR)$(prefix)$Sinclude"
 	$(COPYREC) $(subst /,$S,$(_PROTOBUF_LIB_DIR))$Slibproto* "$(DESTDIR)$(prefix)$Slib"
-	$(COPYREC) dependencies$Sinstall$Sbin$Sprotoc "$(DESTDIR)$(prefix)$Sbin"
+	$(COPY) dependencies$Sinstall$Sbin$Sprotoc* "$(DESTDIR)$(prefix)$Sbin"
 endif
 ifeq ($(UNIX_ABSL_DIR),$(OR_TOOLS_TOP)/dependencies/install)
 	$(COPYREC) dependencies$Sinstall$Sinclude$Sabsl "$(DESTDIR)$(prefix)$Sinclude"
-	$(COPYREC) $(subst /,$S,$(_ABSL_LIB_DIR))$Slibabsl* "$(DESTDIR)$(prefix)$Slib"
+	-$(COPYREC) $(subst /,$S,$(_ABSL_STATIC_LIB_DIR))$Slibabsl* "$(DESTDIR)$(prefix)$Slib"
+	-$(COPYREC) $(subst /,$S,$(_ABSL_LIB_DIR))$Slibabsl* "$(DESTDIR)$(prefix)$Slib"
 endif
 ifeq ($(UNIX_CBC_DIR),$(OR_TOOLS_TOP)/dependencies/install)
 	$(COPYREC) dependencies$Sinstall$Sinclude$Scoin "$(DESTDIR)$(prefix)$Sinclude"
-	$(COPYREC) dependencies$Sinstall$Slib$SlibCbc* "$(DESTDIR)$(prefix)$Slib"
-	$(COPYREC) dependencies$Sinstall$Slib$SlibCgl* "$(DESTDIR)$(prefix)$Slib"
-	$(COPYREC) dependencies$Sinstall$Slib$SlibClp* "$(DESTDIR)$(prefix)$Slib"
-	$(COPYREC) dependencies$Sinstall$Slib$SlibOsi* "$(DESTDIR)$(prefix)$Slib"
-	$(COPYREC) dependencies$Sinstall$Slib$SlibCoinUtils* "$(DESTDIR)$(prefix)$Slib"
+	$(COPYREC) dependencies$Sinstall$Slib*$SlibCbc* "$(DESTDIR)$(prefix)$Slib"
+	$(COPYREC) dependencies$Sinstall$Slib*$SlibCgl* "$(DESTDIR)$(prefix)$Slib"
+	$(COPYREC) dependencies$Sinstall$Slib*$SlibClp* "$(DESTDIR)$(prefix)$Slib"
+	$(COPYREC) dependencies$Sinstall$Slib*$SlibOsi* "$(DESTDIR)$(prefix)$Slib"
+	$(COPYREC) dependencies$Sinstall$Slib*$SlibCoinUtils* "$(DESTDIR)$(prefix)$Slib"
 	$(COPYREC) dependencies$Sinstall$Sbin$Scbc "$(DESTDIR)$(prefix)$Sbin"
 	$(COPYREC) dependencies$Sinstall$Sbin$Sclp "$(DESTDIR)$(prefix)$Sbin"
 endif

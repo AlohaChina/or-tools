@@ -222,7 +222,7 @@ struct Constraint {
   void SetAsFalse();
 
   // The flatzinc type of the constraint (i.e. "int_eq" for integer equality)
-  // stored as a std::string.
+  // stored as a string.
   std::string type;
   std::vector<Argument> arguments;
   // Indicates if the constraint actually propagates towards a target variable
@@ -416,6 +416,10 @@ class ModelStatistics {
   absl::flat_hash_map<const IntegerVariable*, std::vector<Constraint*>>
       constraints_per_variables_;
 };
+
+// Helper method to flatten Search annotations.
+void FlattenAnnotations(const Annotation& ann, std::vector<Annotation>* out);
+
 }  // namespace fz
 }  // namespace operations_research
 

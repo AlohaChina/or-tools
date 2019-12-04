@@ -19,17 +19,13 @@
 #include "ortools/base/cleanup.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/stl_util.h"
+#include "ortools/sat/clause.h"
 #include "ortools/sat/cp_constraints.h"
 
 namespace operations_research {
 namespace sat {
 
 namespace {
-
-bool IsInvalidOrTrue(LiteralIndex index, const Trail& trail) {
-  return index == kNoLiteralIndex ||
-         trail.Assignment().LiteralIsTrue(Literal(index));
-}
 
 void AppendLowerBoundReasonIfValid(IntegerVariable var,
                                    const IntegerTrail& i_trail,
@@ -130,14 +126,13 @@ void PrecedencesPropagator::Untrail(const Trail& trail, int trail_index) {
 // permutation.
 void PrecedencesPropagator::ComputePrecedences(
     const std::vector<IntegerVariable>& vars,
-    const std::vector<bool>& to_consider,
     std::vector<IntegerPrecedences>* output) {
   tmp_sorted_vars_.clear();
   tmp_precedences_.clear();
   for (int index = 0; index < vars.size(); ++index) {
     const IntegerVariable var = vars[index];
     CHECK_NE(kNoIntegerVariable, var);
-    if (!to_consider[index] || var >= impacted_arcs_.size()) continue;
+    if (var >= impacted_arcs_.size()) continue;
     for (const ArcIndex arc_index : impacted_arcs_[var]) {
       const ArcInfo& arc = arcs_[arc_index];
       if (integer_trail_->IsCurrentlyIgnored(arc.head_var)) continue;
@@ -561,10 +556,10 @@ bool PrecedencesPropagator::DisassembleSubtree(
 }
 
 void PrecedencesPropagator::AnalyzePositiveCycle(
-    ArcIndex first_arc, Trail* trail, std::vector<Literal>* literal_to_push,
+    ArcIndex first_arc, Trail* trail, std::vector<Literal>* must_be_all_true,
     std::vector<Literal>* literal_reason,
     std::vector<IntegerLiteral>* integer_reason) {
-  literal_to_push->clear();
+  must_be_all_true->clear();
   literal_reason->clear();
   integer_reason->clear();
 
@@ -600,12 +595,12 @@ void PrecedencesPropagator::AnalyzePositiveCycle(
 
     // If the cycle happens to contain optional variable not yet ignored, then
     // it is not a conflict anymore, but we can infer that these variable must
-    // all be ignored.
+    // all be ignored. This is because since we propagated them even if they
+    // where not present for sure, their presence literal must form a cycle
+    // together (i.e. they are all absent or present at the same time).
     if (integer_trail_->IsOptional(arc.head_var)) {
-      const Literal l = integer_trail_->IsIgnoredLiteral(arc.head_var);
-      if (!trail->Assignment().LiteralIsFalse(l)) {
-        literal_to_push->push_back(l);
-      }
+      must_be_all_true->push_back(
+          integer_trail_->IsIgnoredLiteral(arc.head_var));
     }
   }
 
@@ -625,8 +620,8 @@ bool PrecedencesPropagator::BellmanFordTarjan(Trail* trail) {
   // These vector are reset by CleanUpMarkedArcsAndParents() so resize is ok.
   bf_can_be_skipped_.resize(num_nodes, false);
   bf_parent_arc_of_.resize(num_nodes, ArcIndex(-1));
-  const auto cleanup = ::operations_research::util::MakeCleanup(
-      [this]() { CleanUpMarkedArcsAndParents(); });
+  const auto cleanup =
+      ::gtl::MakeCleanup([this]() { CleanUpMarkedArcsAndParents(); });
 
   // The queue initialization is done by InitializeBFQueueWithModifiedNodes().
   while (!bf_queue_.empty()) {
@@ -636,7 +631,7 @@ bool PrecedencesPropagator::BellmanFordTarjan(Trail* trail) {
 
     // TODO(user): we don't need bf_can_be_skipped_ since we can detect this
     // if this node has a parent arc which is not marked. Investigate if it is
-    // faster without the std::vector<bool>.
+    // faster without the vector<bool>.
     //
     // TODO(user): An alternative algorithm is to remove all these nodes from
     // the queue instead of simply marking them. This should also lead to a
@@ -666,22 +661,23 @@ bool PrecedencesPropagator::BellmanFordTarjan(Trail* trail) {
         // need to be propagated again later).
         if (DisassembleSubtree(arc.head_var.value(), arc.tail_var.value(),
                                &bf_can_be_skipped_)) {
-          std::vector<Literal> literal_to_push;
-          AnalyzePositiveCycle(arc_index, trail, &literal_to_push,
+          std::vector<Literal> must_be_all_true;
+          AnalyzePositiveCycle(arc_index, trail, &must_be_all_true,
                                &literal_reason_, &integer_reason_);
-          if (literal_to_push.empty()) {
-            std::vector<Literal>* conflict = trail->MutableConflict();
-            *conflict = literal_reason_;
-            integer_trail_->MergeReasonInto(integer_reason_, conflict);
-
-            // We don't want any duplicates.
-            // TODO(user): I think we could handle them, so maybe this is not
-            // needed.
-            gtl::STLSortAndRemoveDuplicates(conflict);
-            return false;
+          if (must_be_all_true.empty()) {
+            return integer_trail_->ReportConflict(literal_reason_,
+                                                  integer_reason_);
           } else {
-            gtl::STLSortAndRemoveDuplicates(&literal_to_push);
-            for (const Literal l : literal_to_push) {
+            gtl::STLSortAndRemoveDuplicates(&must_be_all_true);
+            for (const Literal l : must_be_all_true) {
+              if (trail_->Assignment().LiteralIsFalse(l)) {
+                literal_reason_.push_back(l);
+                return integer_trail_->ReportConflict(literal_reason_,
+                                                      integer_reason_);
+              }
+            }
+            for (const Literal l : must_be_all_true) {
+              if (trail_->Assignment().LiteralIsTrue(l)) continue;
               integer_trail_->EnqueueLiteral(l, literal_reason_,
                                              integer_reason_);
             }
@@ -725,11 +721,92 @@ bool PrecedencesPropagator::BellmanFordTarjan(Trail* trail) {
   return true;
 }
 
-void PrecedencesPropagator::AddGreaterThanAtLeastOneOfConstraints(
-    Model* model) {
-  VLOG(1) << "Detecting GreaterThanAtLeastOneOf() constraints...";
+int PrecedencesPropagator::AddGreaterThanAtLeastOneOfConstraintsFromClause(
+    const absl::Span<const Literal> clause, Model* model) {
+  CHECK_EQ(model->GetOrCreate<Trail>()->CurrentDecisionLevel(), 0);
+  if (clause.size() < 2) return 0;
+
+  // Collect all arcs impacted by this clause.
+  std::vector<ArcInfo> infos;
+  for (const Literal l : clause) {
+    if (l.Index() >= literal_to_new_impacted_arcs_.size()) continue;
+    for (const ArcIndex arc_index : literal_to_new_impacted_arcs_[l.Index()]) {
+      const ArcInfo& arc = arcs_[arc_index];
+      if (arc.presence_literals.size() != 1) continue;
+
+      // TODO(user): Support variable offset.
+      if (arc.offset_var != kNoIntegerVariable) continue;
+      infos.push_back(arc);
+    }
+  }
+  if (infos.size() <= 1) return 0;
+
+  // Stable sort by head_var so that for a same head_var, the entry are sorted
+  // by Literal as they appear in clause.
+  std::stable_sort(infos.begin(), infos.end(),
+                   [](const ArcInfo& a, const ArcInfo& b) {
+                     return a.head_var < b.head_var;
+                   });
+
+  // We process ArcInfo with the same head_var toghether.
+  int num_added_constraints = 0;
   auto* solver = model->GetOrCreate<SatSolver>();
+  for (int i = 0; i < infos.size();) {
+    const int start = i;
+    const IntegerVariable head_var = infos[start].head_var;
+    for (i++; i < infos.size() && infos[i].head_var == head_var; ++i) {
+    }
+    const absl::Span<ArcInfo> arcs(&infos[start], i - start);
+
+    // Skip single arcs since it will already be fully propagated.
+    if (arcs.size() < 2) continue;
+
+    // Heuristic. Look for full or almost full clauses. We could add
+    // GreaterThanAtLeastOneOf() with more enforcement literals. TODO(user):
+    // experiments.
+    if (arcs.size() + 1 < clause.size()) continue;
+
+    std::vector<IntegerVariable> vars;
+    std::vector<IntegerValue> offsets;
+    std::vector<Literal> selectors;
+    std::vector<Literal> enforcements;
+
+    int j = 0;
+    for (const Literal l : clause) {
+      bool added = false;
+      for (; j < arcs.size() && l == arcs[j].presence_literals.front(); ++j) {
+        added = true;
+        vars.push_back(arcs[j].tail_var);
+        offsets.push_back(arcs[j].offset);
+
+        // Note that duplicate selector are supported.
+        //
+        // TODO(user): If we support variable offset, we should regroup the arcs
+        // into one (tail + offset <= head) though, instead of having too
+        // identical entries.
+        selectors.push_back(l);
+      }
+      if (!added) {
+        enforcements.push_back(l.Negated());
+      }
+    }
+
+    // No point adding a constraint if there is not at least two different
+    // literals in selectors.
+    if (enforcements.size() + 1 == clause.size()) continue;
+
+    ++num_added_constraints;
+    model->Add(GreaterThanAtLeastOneOf(head_var, vars, offsets, selectors,
+                                       enforcements));
+    if (!solver->FinishPropagation()) return num_added_constraints;
+  }
+  return num_added_constraints;
+}
+
+int PrecedencesPropagator::
+    AddGreaterThanAtLeastOneOfConstraintsWithClauseAutoDetection(Model* model) {
   auto* time_limit = model->GetOrCreate<TimeLimit>();
+  auto* solver = model->GetOrCreate<SatSolver>();
 
   // Fill the set of incoming conditional arcs for each variables.
   gtl::ITIVector<IntegerVariable, std::vector<ArcIndex>> incoming_arcs_;
@@ -750,13 +827,13 @@ void PrecedencesPropagator::AddGreaterThanAtLeastOneOfConstraints(
   int num_added_constraints = 0;
   for (IntegerVariable target(0); target < incoming_arcs_.size(); ++target) {
     if (incoming_arcs_[target].size() <= 1) continue;
-    if (time_limit->LimitReached()) return;
+    if (time_limit->LimitReached()) return num_added_constraints;
 
     // Detect set of incoming arcs for which at least one must be present.
     // TODO(user): Find more than one disjoint set of incoming arcs.
     // TODO(user): call MinimizeCoreWithPropagation() on the clause.
     solver->Backtrack(0);
-    if (solver->IsModelUnsat()) return;
+    if (solver->IsModelUnsat()) return num_added_constraints;
     std::vector<Literal> clause;
     for (const ArcIndex arc_index : incoming_arcs_[target]) {
       const Literal literal = arcs_[arc_index].presence_literals.front();
@@ -764,7 +841,7 @@ void PrecedencesPropagator::AddGreaterThanAtLeastOneOfConstraints(
 
       const int old_level = solver->CurrentDecisionLevel();
       solver->EnqueueDecisionAndBacktrackOnConflict(literal.Negated());
-      if (solver->IsModelUnsat()) return;
+      if (solver->IsModelUnsat()) return num_added_constraints;
       const int new_level = solver->CurrentDecisionLevel();
       if (new_level <= old_level) {
         clause = solver->GetLastIncompatibleDecisions();
@@ -796,12 +873,48 @@ void PrecedencesPropagator::AddGreaterThanAtLeastOneOfConstraints(
         selectors.push_back(Literal(arcs_[a].presence_literals.front()));
       }
       model->Add(GreaterThanAtLeastOneOf(target, vars, offsets, selectors));
-      if (!solver->FinishPropagation()) return;
+      if (!solver->FinishPropagation()) return num_added_constraints;
     }
+  }
+
+  return num_added_constraints;
+}
+
+int PrecedencesPropagator::AddGreaterThanAtLeastOneOfConstraints(Model* model) {
+  VLOG(1) << "Detecting GreaterThanAtLeastOneOf() constraints...";
+  auto* time_limit = model->GetOrCreate<TimeLimit>();
+  auto* solver = model->GetOrCreate<SatSolver>();
+  auto* clauses = model->GetOrCreate<LiteralWatchers>();
+  int num_added_constraints = 0;
+
+  // We have two possible approaches. For now, we prefer the first one except if
+  // there is too many clauses in the problem.
+  //
+  // TODO(user): Do more extensive experiment. Remove the second approach as
+  // it is more time consuming? or identify when it make sense. Note that the
+  // first approach also allows to use "incomplete" at least one between arcs.
+  if (clauses->AllClausesInCreationOrder().size() < 1e6) {
+    // TODO(user): This does not take into account clause of size 2 since they
+    // are stored in the BinaryImplicationGraph instead. Some ideas specific
+    // to size 2:
+    // - There can be a lot of such clauses, but it might be nice to consider
+    //   them. we need to experiments.
+    // - The automatic clause detection might be a better approach and it
+    //   could be combined with probing.
+    for (const SatClause* clause : clauses->AllClausesInCreationOrder()) {
+      if (time_limit->LimitReached()) return num_added_constraints;
+      if (solver->IsModelUnsat()) return num_added_constraints;
+      num_added_constraints += AddGreaterThanAtLeastOneOfConstraintsFromClause(
+          clause->AsSpan(), model);
+    }
+  } else {
+    num_added_constraints +=
+        AddGreaterThanAtLeastOneOfConstraintsWithClauseAutoDetection(model);
   }
 
   VLOG(1) << "Added " << num_added_constraints
           << " GreaterThanAtLeastOneOf() constraints.";
+  return num_added_constraints;
 }
 
 }  // namespace sat

@@ -58,7 +58,7 @@ void Solve() {
     }
   }));
 
-  SolveWithModel(cp_model, &model);
+  SolveCpModel(cp_model.Build(), &model);
   LOG(INFO) << "Number of solutions found: " << num_solutions;
 }
 

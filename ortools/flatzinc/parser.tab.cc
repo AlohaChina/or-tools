@@ -11,11 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-/* A Bison parser, made by GNU Bison 3.0.4.  */
+/* A Bison parser, made by GNU Bison 3.4.1.  */
 
 /* Bison implementation for Yacc-like parsers in C
 
-   Copyright (C) 1984, 1989-1990, 2000-2015 Free Software Foundation, Inc.
+   Copyright (C) 1984, 1989-1990, 2000-2015, 2018-2019 Free Software Foundation,
+   Inc.
 
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -53,11 +54,14 @@
    define necessary library symbols; they are noted "INFRINGES ON
    USER NAME SPACE" below.  */
 
+/* Undocumented macros, especially those whose name start with YY_,
+   are private implementation details.  Do not rely on them.  */
+
 /* Identify Bison output.  */
 #define YYBISON 1
 
 /* Bison version.  */
-#define YYBISON_VERSION "3.0.4"
+#define YYBISON_VERSION "3.4.1"
 
 /* Skeleton name.  */
 #define YYSKELETON_NAME "yacc.c"
@@ -71,6 +75,8 @@
 /* Pull parsers.  */
 #define YYPULL 1
 
+/* Substitute the type names.  */
+#define YYSTYPE ORFZ_STYPE
 /* Substitute the variable and function names.  */
 #define yyparse orfz_parse
 #define yylex orfz_lex
@@ -78,15 +84,15 @@
 #define yydebug orfz_debug
 #define yynerrs orfz_nerrs
 
-/* Copy the first part of user declarations.  */
-
-#line 73 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:339  */
-
 #ifndef YY_NULLPTR
-#if defined __cplusplus && 201103L <= __cplusplus
+#if defined __cplusplus
+#if 201103L <= __cplusplus
 #define YY_NULLPTR nullptr
 #else
 #define YY_NULLPTR 0
+#endif
+#else
+#define YY_NULLPTR ((void*)0)
 #endif
 #endif
 
@@ -98,19 +104,27 @@
 #define YYERROR_VERBOSE 1
 #endif
 
-/* In a future release of Bison, this section will be replaced
-   by #include "parser.tab.hh".  */
+/* Use api.header.include to #include this header
+   instead of duplicating it here.  */
 #ifndef YY_ORFZ_ORTOOLS_FLATZINC_PARSER_TAB_HH_INCLUDED
 #define YY_ORFZ_ORTOOLS_FLATZINC_PARSER_TAB_HH_INCLUDED
 /* Debug traces.  */
-#ifndef YYDEBUG
-#define YYDEBUG 1
-#endif
+#ifndef ORFZ_DEBUG
+#if defined YYDEBUG
 #if YYDEBUG
+#define ORFZ_DEBUG 1
+#else
+#define ORFZ_DEBUG 0
+#endif
+#else /* ! defined YYDEBUG */
+#define ORFZ_DEBUG 1
+#endif /* ! defined YYDEBUG */
+#endif /* ! defined ORFZ_DEBUG */
+#if ORFZ_DEBUG
 extern int orfz_debug;
 #endif
 /* "%code requires" blocks.  */
-#line 21 "./ortools/flatzinc/parser.yy" /* yacc.c:355  */
+#line 21 "./ortools/flatzinc/parser.yy"
 
 #if !defined(OR_TOOLS_FLATZINC_FLATZINC_TAB_HH_)
 #define OR_TOOLS_FLATZINC_FLATZINC_TAB_HH_
@@ -126,17 +140,17 @@ typedef operations_research::fz::LexerInfo YYSTYPE;
 
 #endif  // OR_TOOLS_FLATZINC_FLATZINC_TAB_HH_
 
-#line 119 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:355  */
+#line 133 "./ortools/flatzinc/parser.tab.cc"
 
 /* Token type.  */
-#ifndef YYTOKENTYPE
-#define YYTOKENTYPE
-enum yytokentype {
+#ifndef ORFZ_TOKENTYPE
+#define ORFZ_TOKENTYPE
+enum orfz_tokentype {
   ARRAY = 258,
-  BOOL = 259,
+  TOKEN_BOOL = 259,
   CONSTRAINT = 260,
-  FLOAT = 261,
-  INT = 262,
+  TOKEN_FLOAT = 261,
+  TOKEN_INT = 262,
   MAXIMIZE = 263,
   MINIMIZE = 264,
   OF = 265,
@@ -161,11 +175,8 @@ int orfz_parse(operations_research::fz::ParserContext* context,
 
 #endif /* !YY_ORFZ_ORTOOLS_FLATZINC_PARSER_TAB_HH_INCLUDED  */
 
-/* Copy the second part of user declarations.  */
-
-#line 158 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:358  */
 /* Unqualified %code blocks.  */
-#line 38 "./ortools/flatzinc/parser.yy" /* yacc.c:359  */
+#line 38 "./ortools/flatzinc/parser.yy"
 
 #include "absl/strings/match.h"
 #include "absl/strings/str_format.h"
@@ -184,7 +195,7 @@ using operations_research::fz::SolutionOutputSpecs;
 using operations_research::fz::VariableRefOrValue;
 using operations_research::fz::VariableRefOrValueArray;
 
-#line 179 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:359  */
+#line 191 "./ortools/flatzinc/parser.tab.cc"
 
 #ifdef short
 #undef short
@@ -205,13 +216,13 @@ typedef signed char yytype_int8;
 #ifdef YYTYPE_UINT16
 typedef YYTYPE_UINT16 yytype_uint16;
 #else
-typedef unsigned short int yytype_uint16;
+typedef unsigned short yytype_uint16;
 #endif
 
 #ifdef YYTYPE_INT16
 typedef YYTYPE_INT16 yytype_int16;
 #else
-typedef short int yytype_int16;
+typedef short yytype_int16;
 #endif
 
 #ifndef YYSIZE_T
@@ -223,7 +234,7 @@ typedef short int yytype_int16;
 #include <stddef.h> /* INFRINGES ON USER NAME SPACE */
 #define YYSIZE_T size_t
 #else
-#define YYSIZE_T unsigned int
+#define YYSIZE_T unsigned
 #endif
 #endif
 
@@ -259,15 +270,6 @@ typedef short int yytype_int16;
 #define YY_ATTRIBUTE_UNUSED YY_ATTRIBUTE((__unused__))
 #endif
 
-#if !defined _Noreturn && \
-    (!defined __STDC_VERSION__ || __STDC_VERSION__ < 201112)
-#if defined _MSC_VER && 1200 <= _MSC_VER
-#define _Noreturn __declspec(noreturn)
-#else
-#define _Noreturn YY_ATTRIBUTE((__noreturn__))
-#endif
-#endif
-
 /* Suppress unused-variable warnings by "using" E.  */
 #if !defined lint || defined __GNUC__
 #define YYUSE(E) ((void)(E))
@@ -275,7 +277,7 @@ typedef short int yytype_int16;
 #define YYUSE(E) /* empty */
 #endif
 
-#if defined __GNUC__ && 407 <= __GNUC__ * 100 + __GNUC_MINOR__
+#if defined __GNUC__ && !defined __ICC && 407 <= __GNUC__ * 100 + __GNUC_MINOR__
 /* Suppress an incorrect diagnostic about yylval being uninitialized.  */
 #define YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN                 \
   _Pragma("GCC diagnostic push")                            \
@@ -292,6 +294,8 @@ typedef short int yytype_int16;
 #ifndef YY_INITIAL_VALUE
 #define YY_INITIAL_VALUE(Value) /* Nothing. */
 #endif
+
+#define YY_ASSERT(E) ((void)(0 && (E)))
 
 #if !defined yyoverflow || YYERROR_VERBOSE
 
@@ -365,7 +369,7 @@ void free(void*);       /* INFRINGES ON USER NAME SPACE */
 
 #if (!defined yyoverflow &&   \
      (!defined __cplusplus || \
-      (defined YYSTYPE_IS_TRIVIAL && YYSTYPE_IS_TRIVIAL)))
+      (defined ORFZ_STYPE_IS_TRIVIAL && ORFZ_STYPE_IS_TRIVIAL)))
 
 /* A type that is properly aligned for any stack member.  */
 union yyalloc {
@@ -430,16 +434,16 @@ union yyalloc {
 /* YYNSTATES -- Number of states.  */
 #define YYNSTATES 223
 
-/* YYTRANSLATE[YYX] -- Symbol number corresponding to YYX as returned
-   by yylex, with out-of-bounds checking.  */
 #define YYUNDEFTOK 2
 #define YYMAXUTOK 276
 
+/* YYTRANSLATE(TOKEN-NUM) -- Symbol number corresponding to TOKEN-NUM
+   as returned by yylex, with out-of-bounds checking.  */
 #define YYTRANSLATE(YYX) \
-  ((unsigned int)(YYX) <= YYMAXUTOK ? yytranslate[YYX] : YYUNDEFTOK)
+  ((unsigned)(YYX) <= YYMAXUTOK ? yytranslate[YYX] : YYUNDEFTOK)
 
 /* YYTRANSLATE[TOKEN-NUM] -- Symbol number corresponding to TOKEN-NUM
-   as returned by yylex, without out-of-bounds checking.  */
+   as returned by yylex.  */
 static const yytype_uint8 yytranslate[] = {
     0,  2,  2, 2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2, 2, 2,  2,
     2,  2,  2, 2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2, 2, 2,  2,
@@ -456,7 +460,7 @@ static const yytype_uint8 yytranslate[] = {
     2,  2,  2, 2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  1, 2, 3,  4,
     5,  6,  7, 8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21};
 
-#if YYDEBUG
+#if ORFZ_DEBUG
 /* YYRLINE[YYN] -- Source line where rule number YYN was defined.  */
 static const yytype_uint16 yyrline[] = {
     0,   105, 105, 112, 116, 117, 122, 125, 126, 129, 130, 131, 132, 135,
@@ -468,17 +472,17 @@ static const yytype_uint16 yyrline[] = {
     616, 619, 620, 623, 624, 625, 626, 636, 645, 651, 666, 674, 683};
 #endif
 
-#if YYDEBUG || YYERROR_VERBOSE || 1
+#if ORFZ_DEBUG || YYERROR_VERBOSE || 1
 /* YYTNAME[SYMBOL-NUM] -- String name of the symbol SYMBOL-NUM.
    First, the terminals, then, starting at YYNTOKENS, nonterminals.  */
 static const char* const yytname[] = {"$end",
                                       "error",
                                       "$undefined",
                                       "ARRAY",
-                                      "BOOL",
+                                      "TOKEN_BOOL",
                                       "CONSTRAINT",
-                                      "FLOAT",
-                                      "INT",
+                                      "TOKEN_FLOAT",
+                                      "TOKEN_INT",
                                       "MAXIMIZE",
                                       "MINIMIZE",
                                       "OF",
@@ -713,7 +717,7 @@ static const yytype_uint8 yyr2[] = {
 #define YYERRCODE 256
 
 /* Enable debugging if requested.  */
-#if YYDEBUG
+#if ORFZ_DEBUG
 
 #ifndef YYFPRINTF
 #include <stdio.h> /* INFRINGES ON USER NAME SPACE */
@@ -739,42 +743,41 @@ static const yytype_uint8 yyr2[] = {
     }                                                                    \
   } while (0)
 
-/*----------------------------------------.
-| Print this symbol's value on YYOUTPUT.  |
-`----------------------------------------*/
+/*-----------------------------------.
+| Print this symbol's value on YYO.  |
+`-----------------------------------*/
 
 static void yy_symbol_value_print(
-    FILE* yyoutput, int yytype, YYSTYPE const* const yyvaluep,
+    FILE* yyo, int yytype, YYSTYPE const* const yyvaluep,
     operations_research::fz::ParserContext* context,
     operations_research::fz::Model* model, bool* ok, void* scanner) {
-  FILE* yyo = yyoutput;
-  YYUSE(yyo);
+  FILE* yyoutput = yyo;
+  YYUSE(yyoutput);
   YYUSE(context);
   YYUSE(model);
   YYUSE(ok);
   YYUSE(scanner);
   if (!yyvaluep) return;
 #ifdef YYPRINT
-  if (yytype < YYNTOKENS) YYPRINT(yyoutput, yytoknum[yytype], *yyvaluep);
+  if (yytype < YYNTOKENS) YYPRINT(yyo, yytoknum[yytype], *yyvaluep);
 #endif
   YYUSE(yytype);
 }
 
-/*--------------------------------.
-| Print this symbol on YYOUTPUT.  |
-`--------------------------------*/
+/*---------------------------.
+| Print this symbol on YYO.  |
+`---------------------------*/
 
-static void yy_symbol_print(FILE* yyoutput, int yytype,
+static void yy_symbol_print(FILE* yyo, int yytype,
                             YYSTYPE const* const yyvaluep,
                             operations_research::fz::ParserContext* context,
                             operations_research::fz::Model* model, bool* ok,
                             void* scanner) {
-  YYFPRINTF(yyoutput, "%s %s (", yytype < YYNTOKENS ? "token" : "nterm",
+  YYFPRINTF(yyo, "%s %s (", yytype < YYNTOKENS ? "token" : "nterm",
             yytname[yytype]);
 
-  yy_symbol_value_print(yyoutput, yytype, yyvaluep, context, model, ok,
-                        scanner);
-  YYFPRINTF(yyoutput, ")");
+  yy_symbol_value_print(yyo, yytype, yyvaluep, context, model, ok, scanner);
+  YYFPRINTF(yyo, ")");
 }
 
 /*------------------------------------------------------------------.
@@ -804,7 +807,7 @@ static void yy_reduce_print(yytype_int16* yyssp, YYSTYPE* yyvsp, int yyrule,
                             operations_research::fz::ParserContext* context,
                             operations_research::fz::Model* model, bool* ok,
                             void* scanner) {
-  unsigned long int yylno = yyrline[yyrule];
+  unsigned long yylno = yyrline[yyrule];
   int yynrhs = yyr2[yyrule];
   int yyi;
   YYFPRINTF(stderr, "Reducing stack by rule %d (line %lu):\n", yyrule - 1,
@@ -813,8 +816,7 @@ static void yy_reduce_print(yytype_int16* yyssp, YYSTYPE* yyvsp, int yyrule,
   for (yyi = 0; yyi < yynrhs; yyi++) {
     YYFPRINTF(stderr, "   $%d = ", yyi + 1);
     yy_symbol_print(stderr, yystos[yyssp[yyi + 1 - yynrhs]],
-                    &(yyvsp[(yyi + 1) - (yynrhs)]), context, model, ok,
-                    scanner);
+                    &yyvsp[(yyi + 1) - (yynrhs)], context, model, ok, scanner);
     YYFPRINTF(stderr, "\n");
   }
 }
@@ -828,12 +830,12 @@ static void yy_reduce_print(yytype_int16* yyssp, YYSTYPE* yyvsp, int yyrule,
 /* Nonzero means print parse trace.  It is left uninitialized so that
    multiple parsers can coexist.  */
 int yydebug;
-#else /* !YYDEBUG */
+#else /* !ORFZ_DEBUG */
 #define YYDPRINTF(Args)
 #define YY_SYMBOL_PRINT(Title, Type, Value, Location)
 #define YY_STACK_PRINT(Bottom, Top)
 #define YY_REDUCE_PRINT(Rule)
-#endif /* !YYDEBUG */
+#endif /* !ORFZ_DEBUG */
 
 /* YYINITDEPTH -- initial size of the parser's stacks.  */
 #ifndef YYINITDEPTH
@@ -902,8 +904,12 @@ static YYSIZE_T yytnamerr(char* yyres, const char* yystr) {
           goto do_not_strip_quotes;
 
         case '\\':
-          if (*++yyp != '\\') goto do_not_strip_quotes;
-          /* Fall through.  */
+          if (*++yyp != '\\')
+            goto do_not_strip_quotes;
+          else
+            goto append;
+
+        append:
         default:
           if (yyres) yyres[yyn] = *yyp;
           yyn++;
@@ -918,7 +924,7 @@ static YYSIZE_T yytnamerr(char* yyres, const char* yystr) {
 
   if (!yyres) return yystrlen(yystr);
 
-  return yystpcpy(yyres, yystr) - yyres;
+  return (YYSIZE_T)(yystpcpy(yyres, yystr) - yyres);
 }
 #endif
 
@@ -990,9 +996,10 @@ static int yysyntax_error(YYSIZE_T* yymsg_alloc, char** yymsg,
           yyarg[yycount++] = yytname[yyx];
           {
             YYSIZE_T yysize1 = yysize + yytnamerr(YY_NULLPTR, yytname[yyx]);
-            if (!(yysize <= yysize1 && yysize1 <= YYSTACK_ALLOC_MAXIMUM))
+            if (yysize <= yysize1 && yysize1 <= YYSTACK_ALLOC_MAXIMUM)
+              yysize = yysize1;
+            else
               return 2;
-            yysize = yysize1;
           }
         }
     }
@@ -1003,20 +1010,24 @@ static int yysyntax_error(YYSIZE_T* yymsg_alloc, char** yymsg,
   case N:             \
     yyformat = S;     \
     break
-    YYCASE_(0, YY_("syntax error"));
-    YYCASE_(1, YY_("syntax error, unexpected %s"));
-    YYCASE_(2, YY_("syntax error, unexpected %s, expecting %s"));
-    YYCASE_(3, YY_("syntax error, unexpected %s, expecting %s or %s"));
-    YYCASE_(4, YY_("syntax error, unexpected %s, expecting %s or %s or %s"));
-    YYCASE_(5,
-            YY_("syntax error, unexpected %s, expecting %s or %s or %s or %s"));
+    default: /* Avoid compiler warnings. */
+      YYCASE_(0, YY_("syntax error"));
+      YYCASE_(1, YY_("syntax error, unexpected %s"));
+      YYCASE_(2, YY_("syntax error, unexpected %s, expecting %s"));
+      YYCASE_(3, YY_("syntax error, unexpected %s, expecting %s or %s"));
+      YYCASE_(4, YY_("syntax error, unexpected %s, expecting %s or %s or %s"));
+      YYCASE_(
+          5,
+          YY_("syntax error, unexpected %s, expecting %s or %s or %s or %s"));
 #undef YYCASE_
   }
 
   {
     YYSIZE_T yysize1 = yysize + yystrlen(yyformat);
-    if (!(yysize <= yysize1 && yysize1 <= YYSTACK_ALLOC_MAXIMUM)) return 2;
-    yysize = yysize1;
+    if (yysize <= yysize1 && yysize1 <= YYSTACK_ALLOC_MAXIMUM)
+      yysize = yysize1;
+    else
+      return 2;
   }
 
   if (*yymsg_alloc < yysize) {
@@ -1140,22 +1151,31 @@ int yyparse(operations_research::fz::ParserContext* context,
   yychar = YYEMPTY; /* Cause a token to be read.  */
   goto yysetstate;
 
-  /*------------------------------------------------------------.
-  | yynewstate -- Push a new state, which is found in yystate.  |
-  `------------------------------------------------------------*/
+/*------------------------------------------------------------.
+| yynewstate -- push a new state, which is found in yystate.  |
+`------------------------------------------------------------*/
 yynewstate:
   /* In all cases, when you get here, the value and location stacks
      have just been pushed.  So pushing a state here evens the stacks.  */
   yyssp++;
 
+/*--------------------------------------------------------------------.
+| yynewstate -- set current state (the top of the stack) to yystate.  |
+`--------------------------------------------------------------------*/
 yysetstate:
-  *yyssp = yystate;
+  YYDPRINTF((stderr, "Entering state %d\n", yystate));
+  YY_ASSERT(0 <= yystate && yystate < YYNSTATES);
+  *yyssp = (yytype_int16)yystate;
 
-  if (yyss + yystacksize - 1 <= yyssp) {
+  if (yyss + yystacksize - 1 <= yyssp)
+#if !defined yyoverflow && !defined YYSTACK_RELOCATE
+    goto yyexhaustedlab;
+#else
+  {
     /* Get the current used size of the three stacks, in elements.  */
-    YYSIZE_T yysize = yyssp - yyss + 1;
+    YYSIZE_T yysize = (YYSIZE_T)(yyssp - yyss + 1);
 
-#ifdef yyoverflow
+#if defined yyoverflow
     {
       /* Give user a chance to reallocate the stack.  Use copies of
          these so that the &'s don't force the real ones into
@@ -1169,14 +1189,10 @@ yysetstate:
          be undefined if yyoverflow is a macro.  */
       yyoverflow(YY_("memory exhausted"), &yyss1, yysize * sizeof(*yyssp),
                  &yyvs1, yysize * sizeof(*yyvsp), &yystacksize);
-
       yyss = yyss1;
       yyvs = yyvs1;
     }
-#else /* no yyoverflow */
-#ifndef YYSTACK_RELOCATE
-    goto yyexhaustedlab;
-#else
+#else /* defined YYSTACK_RELOCATE */
     /* Extend the stack our own way.  */
     if (YYMAXDEPTH <= yystacksize) goto yyexhaustedlab;
     yystacksize *= 2;
@@ -1193,18 +1209,16 @@ yysetstate:
       if (yyss1 != yyssa) YYSTACK_FREE(yyss1);
     }
 #endif
-#endif /* no yyoverflow */
 
     yyssp = yyss + yysize - 1;
     yyvsp = yyvs + yysize - 1;
 
-    YYDPRINTF((stderr, "Stack size increased to %lu\n",
-               (unsigned long int)yystacksize));
+    YYDPRINTF(
+        (stderr, "Stack size increased to %lu\n", (unsigned long)yystacksize));
 
     if (yyss + yystacksize - 1 <= yyssp) YYABORT;
   }
-
-  YYDPRINTF((stderr, "Entering state %d\n", yystate));
+#endif /* !defined yyoverflow && !defined YYSTACK_RELOCATE */
 
   if (yystate == YYFINAL) YYACCEPT;
 
@@ -1214,7 +1228,6 @@ yysetstate:
 | yybackup.  |
 `-----------*/
 yybackup:
-
   /* Do appropriate processing given the current state.  Read a
      lookahead token if we need one and don't already have one.  */
 
@@ -1263,7 +1276,6 @@ yybackup:
   YY_IGNORE_MAYBE_UNINITIALIZED_BEGIN
   *++yyvsp = yylval;
   YY_IGNORE_MAYBE_UNINITIALIZED_END
-
   goto yynewstate;
 
 /*-----------------------------------------------------------.
@@ -1275,7 +1287,7 @@ yydefault:
   goto yyreduce;
 
 /*-----------------------------.
-| yyreduce -- Do a reduction.  |
+| yyreduce -- do a reduction.  |
 `-----------------------------*/
 yyreduce:
   /* yyn is the number of a rule to reduce with.  */
@@ -1294,15 +1306,15 @@ yyreduce:
   YY_REDUCE_PRINT(yyn);
   switch (yyn) {
     case 4:
-#line 116 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 116 "./ortools/flatzinc/parser.yy"
     {
       yyerrok;
     }
-#line 1425 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1439 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 19:
-#line 151 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 151 "./ortools/flatzinc/parser.yy"
     {
       // Declaration of a (named) constant: we simply register it in the
       // parser's context, and don't store it in the model.
@@ -1321,11 +1333,11 @@ yyreduce:
       }
       delete annotations;
     }
-#line 1449 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1463 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 20:
-#line 171 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 171 "./ortools/flatzinc/parser.yy"
     {
       std::vector<Annotation>* const annotations = (yyvsp[-4].annotations);
       // Declaration of a (named) constant array. See rule right above.
@@ -1341,11 +1353,11 @@ yyreduce:
       delete assignments;
       delete annotations;
     }
-#line 1468 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1482 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 21:
-#line 186 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 186 "./ortools/flatzinc/parser.yy"
     {
       std::vector<Annotation>* const annotations = (yyvsp[-3].annotations);
       // Declaration of a (named) constant array. See rule right above.
@@ -1357,11 +1369,11 @@ yyreduce:
       context->integer_array_map[identifier] = std::vector<int64>();
       delete annotations;
     }
-#line 1483 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1497 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 22:
-#line 197 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 197 "./ortools/flatzinc/parser.yy"
     {
       std::vector<Annotation>* const annotations = (yyvsp[-4].annotations);
       // Declaration of a (named) constant array. See rule right above.
@@ -1377,11 +1389,11 @@ yyreduce:
       delete assignments;
       delete annotations;
     }
-#line 1502 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1516 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 23:
-#line 212 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 212 "./ortools/flatzinc/parser.yy"
     {
       std::vector<Annotation>* const annotations = (yyvsp[-3].annotations);
       // Declaration of a (named) constant array. See rule right above.
@@ -1393,11 +1405,11 @@ yyreduce:
       context->float_array_map[identifier] = std::vector<double>();
       delete annotations;
     }
-#line 1517 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1531 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 24:
-#line 223 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 223 "./ortools/flatzinc/parser.yy"
     {
       // Declaration of a (named) constant array: See rule above.
       CHECK_EQ((yyvsp[-12].integer_value), 1)
@@ -1425,11 +1437,11 @@ yyreduce:
       delete assignments;
       delete annotations;
     }
-#line 1547 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1561 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 25:
-#line 248 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 248 "./ortools/flatzinc/parser.yy"
     {
       // Declaration of a variable. If it's unassigned or assigned to a
       // constant, we'll create a new var stored in the model. If it's
@@ -1462,11 +1474,11 @@ yyreduce:
       }
       delete annotations;
     }
-#line 1585 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1599 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 26:
-#line 282 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 282 "./ortools/flatzinc/parser.yy"
     {
       // Declaration of a "variable array": these is exactly like N simple
       // variable declarations, where the identifier for declaration #i is
@@ -1536,78 +1548,78 @@ yyreduce:
         delete annotations;
       }
     }
-#line 1657 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1671 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 27:
-#line 351 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 351 "./ortools/flatzinc/parser.yy"
     {
       (yyval.var_or_value) = (yyvsp[0].var_or_value);
     }
-#line 1663 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1677 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 28:
-#line 352 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 352 "./ortools/flatzinc/parser.yy"
     {
       (yyval.var_or_value) = VariableRefOrValue::Undefined();
     }
-#line 1669 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1683 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 29:
-#line 355 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 355 "./ortools/flatzinc/parser.yy"
     {
       (yyval.var_or_value_array) = (yyvsp[-1].var_or_value_array);
     }
-#line 1675 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1689 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 30:
-#line 356 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 356 "./ortools/flatzinc/parser.yy"
     {
       (yyval.var_or_value_array) = nullptr;
     }
-#line 1681 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1695 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 31:
-#line 357 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 357 "./ortools/flatzinc/parser.yy"
     {
       (yyval.var_or_value_array) = nullptr;
     }
-#line 1687 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1701 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 32:
-#line 360 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 360 "./ortools/flatzinc/parser.yy"
     {
       (yyval.var_or_value_array) = (yyvsp[-2].var_or_value_array);
       (yyval.var_or_value_array)->PushBack((yyvsp[0].var_or_value));
     }
-#line 1696 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1710 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 33:
-#line 364 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 364 "./ortools/flatzinc/parser.yy"
     {
       (yyval.var_or_value_array) = new VariableRefOrValueArray();
       (yyval.var_or_value_array)->PushBack((yyvsp[0].var_or_value));
     }
-#line 1705 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1719 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 34:
-#line 370 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 370 "./ortools/flatzinc/parser.yy"
     {
       (yyval.var_or_value) =
           VariableRefOrValue::Value((yyvsp[0].integer_value));
     }
-#line 1711 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1725 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 35:
-#line 371 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 371 "./ortools/flatzinc/parser.yy"
     {
       // A reference to an existing integer constant or variable.
       const std::string& id = (yyvsp[0].string_value);
@@ -1623,11 +1635,11 @@ yyreduce:
         *ok = false;
       }
     }
-#line 1729 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1743 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 36:
-#line 384 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 384 "./ortools/flatzinc/parser.yy"
     {
       // A given element of an existing constant array or variable array.
       const std::string& id = (yyvsp[-3].string_value);
@@ -1644,296 +1656,296 @@ yyreduce:
         *ok = false;
       }
     }
-#line 1750 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1764 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 37:
-#line 402 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 402 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) = Domain::Boolean();
     }
-#line 1756 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1770 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 38:
-#line 403 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 403 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) = Domain::AllInt64();
     }
-#line 1762 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1776 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 39:
-#line 404 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 404 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) =
           Domain::Interval((yyvsp[-2].integer_value), (yyvsp[0].integer_value));
     }
-#line 1768 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1782 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 40:
-#line 405 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 405 "./ortools/flatzinc/parser.yy"
     {
       CHECK((yyvsp[-1].integers) != nullptr);
       (yyval.domain) = Domain::IntegerList(std::move(*(yyvsp[-1].integers)));
       delete (yyvsp[-1].integers);
     }
-#line 1778 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1792 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 41:
-#line 412 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 412 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) = Domain::SetOfBoolean();
     }
-#line 1784 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1798 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 42:
-#line 413 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 413 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) = Domain::SetOfAllInt64();
     }
-#line 1790 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1804 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 43:
-#line 414 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 414 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) = Domain::SetOfInterval((yyvsp[-2].integer_value),
                                              (yyvsp[0].integer_value));
     }
-#line 1796 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1810 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 44:
-#line 415 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 415 "./ortools/flatzinc/parser.yy"
     {
       CHECK((yyvsp[-1].integers) != nullptr);
       (yyval.domain) =
           Domain::SetOfIntegerList(std::move(*(yyvsp[-1].integers)));
       delete (yyvsp[-1].integers);
     }
-#line 1806 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1820 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 45:
-#line 422 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 422 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) = Domain::AllInt64();
     }
-#line 1812 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1826 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 46:
-#line 423 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 423 "./ortools/flatzinc/parser.yy"
     {
       const int64 lb = ConvertAsIntegerOrDie((yyvsp[-2].double_value));
       const int64 ub = ConvertAsIntegerOrDie((yyvsp[0].double_value));
       (yyval.domain) = Domain::Interval(lb, ub);
     }
-#line 1822 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1836 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 47:
-#line 430 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 430 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) = (yyvsp[0].domain);
     }
-#line 1828 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1842 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 48:
-#line 431 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 431 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) = (yyvsp[0].domain);
     }
-#line 1834 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1848 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 49:
-#line 432 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 432 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) = (yyvsp[0].domain);
     }
-#line 1840 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1854 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 50:
-#line 435 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 435 "./ortools/flatzinc/parser.yy"
     {
       (yyval.integers) = (yyvsp[-2].integers);
       (yyval.integers)->emplace_back((yyvsp[0].integer_value));
     }
-#line 1846 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1860 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 51:
-#line 436 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 436 "./ortools/flatzinc/parser.yy"
     {
       (yyval.integers) = new std::vector<int64>();
       (yyval.integers)->emplace_back((yyvsp[0].integer_value));
     }
-#line 1852 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1866 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 52:
-#line 439 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 439 "./ortools/flatzinc/parser.yy"
     {
       (yyval.integer_value) = (yyvsp[0].integer_value);
     }
-#line 1858 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1872 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 53:
-#line 440 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 440 "./ortools/flatzinc/parser.yy"
     {
       (yyval.integer_value) =
           gtl::FindOrDie(context->integer_map, (yyvsp[0].string_value));
     }
-#line 1864 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1878 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 54:
-#line 441 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 441 "./ortools/flatzinc/parser.yy"
     {
       (yyval.integer_value) = Lookup(
           gtl::FindOrDie(context->integer_array_map, (yyvsp[-3].string_value)),
           (yyvsp[-1].integer_value));
     }
-#line 1872 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1886 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 55:
-#line 446 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 446 "./ortools/flatzinc/parser.yy"
     {
       (yyval.doubles) = (yyvsp[-2].doubles);
       (yyval.doubles)->emplace_back((yyvsp[0].double_value));
     }
-#line 1878 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1892 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 56:
-#line 447 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 447 "./ortools/flatzinc/parser.yy"
     {
       (yyval.doubles) = new std::vector<double>();
       (yyval.doubles)->emplace_back((yyvsp[0].double_value));
     }
-#line 1884 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1898 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 57:
-#line 450 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 450 "./ortools/flatzinc/parser.yy"
     {
       (yyval.double_value) = (yyvsp[0].double_value);
     }
-#line 1890 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1904 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 58:
-#line 451 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 451 "./ortools/flatzinc/parser.yy"
     {
       (yyval.double_value) =
           gtl::FindOrDie(context->float_map, (yyvsp[0].string_value));
     }
-#line 1896 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1910 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 59:
-#line 452 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 452 "./ortools/flatzinc/parser.yy"
     {
       (yyval.double_value) = Lookup(
           gtl::FindOrDie(context->float_array_map, (yyvsp[-3].string_value)),
           (yyvsp[-1].integer_value));
     }
-#line 1904 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1918 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 60:
-#line 457 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 457 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) = Domain::IntegerValue((yyvsp[0].integer_value));
     }
-#line 1910 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1924 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 61:
-#line 458 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 458 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) =
           Domain::Interval((yyvsp[-2].integer_value), (yyvsp[0].integer_value));
     }
-#line 1916 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1930 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 62:
-#line 459 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 459 "./ortools/flatzinc/parser.yy"
     {
       CHECK((yyvsp[-1].integers) != nullptr);
       (yyval.domain) = Domain::IntegerList(std::move(*(yyvsp[-1].integers)));
       delete (yyvsp[-1].integers);
     }
-#line 1926 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1940 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 63:
-#line 464 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 464 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) = Domain::EmptyDomain();
     }
-#line 1932 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1946 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 64:
-#line 465 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 465 "./ortools/flatzinc/parser.yy"
     {
       CHECK_EQ(std::round((yyvsp[0].double_value)), (yyvsp[0].double_value));
       (yyval.domain) =
           Domain::IntegerValue(static_cast<int64>((yyvsp[0].double_value)));
     }
-#line 1941 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1955 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 65:
-#line 469 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 469 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) = Domain::IntegerValue(
           gtl::FindOrDie(context->integer_map, (yyvsp[0].string_value)));
     }
-#line 1947 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1961 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 66:
-#line 470 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 470 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domain) = Domain::IntegerValue(Lookup(
           gtl::FindOrDie(context->integer_array_map, (yyvsp[-3].string_value)),
           (yyvsp[-1].integer_value)));
     }
-#line 1956 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1970 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 67:
-#line 476 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 476 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domains) = (yyvsp[-2].domains);
       (yyval.domains)->emplace_back((yyvsp[0].domain));
     }
-#line 1965 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1979 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 68:
-#line 480 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 480 "./ortools/flatzinc/parser.yy"
     {
       (yyval.domains) = new std::vector<Domain>();
       (yyval.domains)->emplace_back((yyvsp[0].domain));
     }
-#line 1971 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 1985 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 71:
-#line 490 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 490 "./ortools/flatzinc/parser.yy"
     {
       const std::string& identifier = (yyvsp[-4].string_value);
       CHECK((yyvsp[-2].args) != nullptr) << "Missing argument in constraint";
@@ -1959,73 +1971,73 @@ yyreduce:
       delete annotations;
       delete (yyvsp[-2].args);
     }
-#line 2001 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2015 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 72:
-#line 517 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 517 "./ortools/flatzinc/parser.yy"
     {
       (yyval.args) = (yyvsp[-2].args);
       (yyval.args)->emplace_back((yyvsp[0].arg));
     }
-#line 2007 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2021 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 73:
-#line 518 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 518 "./ortools/flatzinc/parser.yy"
     {
       (yyval.args) = new std::vector<Argument>();
       (yyval.args)->emplace_back((yyvsp[0].arg));
     }
-#line 2013 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2027 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 74:
-#line 521 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 521 "./ortools/flatzinc/parser.yy"
     {
       (yyval.arg) = Argument::IntegerValue((yyvsp[0].integer_value));
     }
-#line 2019 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2033 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 75:
-#line 522 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 522 "./ortools/flatzinc/parser.yy"
     {
       (yyval.arg) = Argument::IntegerValue(
           ConvertAsIntegerOrDie((yyvsp[0].double_value)));
     }
-#line 2025 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2039 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 76:
-#line 523 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 523 "./ortools/flatzinc/parser.yy"
     {
       (yyval.arg) = Argument::VoidArgument();
     }
-#line 2031 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2045 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 77:
-#line 524 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 524 "./ortools/flatzinc/parser.yy"
     {
       (yyval.arg) = Argument::Interval((yyvsp[-2].integer_value),
                                        (yyvsp[0].integer_value));
     }
-#line 2037 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2051 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 78:
-#line 525 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 525 "./ortools/flatzinc/parser.yy"
     {
       CHECK((yyvsp[-1].integers) != nullptr);
       (yyval.arg) = Argument::IntegerList(std::move(*(yyvsp[-1].integers)));
       delete (yyvsp[-1].integers);
     }
-#line 2047 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2061 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 79:
-#line 530 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 530 "./ortools/flatzinc/parser.yy"
     {
       const std::string& id = (yyvsp[0].string_value);
       if (gtl::ContainsKey(context->integer_map, id)) {
@@ -2063,11 +2075,11 @@ yyreduce:
         (yyval.arg) = Argument::DomainList(d);
       }
     }
-#line 2083 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2097 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 80:
-#line 561 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 561 "./ortools/flatzinc/parser.yy"
     {
       const std::string& id = (yyvsp[-3].string_value);
       const int64 index = (yyvsp[-1].integer_value);
@@ -2085,11 +2097,11 @@ yyreduce:
         (yyval.arg) = Argument::FromDomain(d);
       }
     }
-#line 2105 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2119 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 81:
-#line 578 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 578 "./ortools/flatzinc/parser.yy"
     {
       VariableRefOrValueArray* const arguments = (yyvsp[-1].var_or_value_array);
       CHECK(arguments != nullptr);
@@ -2116,81 +2128,81 @@ yyreduce:
       }
       delete arguments;
     }
-#line 2135 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2149 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 82:
-#line 603 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 603 "./ortools/flatzinc/parser.yy"
     {
       (yyval.arg) = Argument::VoidArgument();
     }
-#line 2143 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2157 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 83:
-#line 612 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 612 "./ortools/flatzinc/parser.yy"
     {
       (yyval.annotations) = (yyvsp[-2].annotations) != nullptr
                                 ? (yyvsp[-2].annotations)
                                 : new std::vector<Annotation>();
       (yyval.annotations)->emplace_back((yyvsp[0].annotation));
     }
-#line 2152 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2166 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 84:
-#line 616 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 616 "./ortools/flatzinc/parser.yy"
     {
       (yyval.annotations) = nullptr;
     }
-#line 2158 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2172 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 85:
-#line 619 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 619 "./ortools/flatzinc/parser.yy"
     {
       (yyval.annotations) = (yyvsp[-2].annotations);
       (yyval.annotations)->emplace_back((yyvsp[0].annotation));
     }
-#line 2164 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2178 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 86:
-#line 620 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 620 "./ortools/flatzinc/parser.yy"
     {
       (yyval.annotations) = new std::vector<Annotation>();
       (yyval.annotations)->emplace_back((yyvsp[0].annotation));
     }
-#line 2170 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2184 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 87:
-#line 623 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 623 "./ortools/flatzinc/parser.yy"
     {
       (yyval.annotation) = Annotation::Interval((yyvsp[-2].integer_value),
                                                 (yyvsp[0].integer_value));
     }
-#line 2176 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2190 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 88:
-#line 624 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 624 "./ortools/flatzinc/parser.yy"
     {
       (yyval.annotation) = Annotation::IntegerValue((yyvsp[0].integer_value));
     }
-#line 2182 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2196 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 89:
-#line 625 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 625 "./ortools/flatzinc/parser.yy"
     {
       (yyval.annotation) = Annotation::String((yyvsp[0].string_value));
     }
-#line 2188 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2202 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 90:
-#line 626 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 626 "./ortools/flatzinc/parser.yy"
     {
       const std::string& id = (yyvsp[0].string_value);
       if (gtl::ContainsKey(context->variable_map, id)) {
@@ -2203,11 +2215,11 @@ yyreduce:
         (yyval.annotation) = Annotation::Identifier(id);
       }
     }
-#line 2203 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2217 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 91:
-#line 636 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 636 "./ortools/flatzinc/parser.yy"
     {
       std::vector<Annotation>* const annotations = (yyvsp[-1].annotations);
       if (annotations != nullptr) {
@@ -2218,11 +2230,11 @@ yyreduce:
         (yyval.annotation) = Annotation::FunctionCall((yyvsp[-3].string_value));
       }
     }
-#line 2217 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2231 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 92:
-#line 645 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 645 "./ortools/flatzinc/parser.yy"
     {
       CHECK(gtl::ContainsKey(context->variable_array_map,
                              (yyvsp[-3].string_value)))
@@ -2231,11 +2243,11 @@ yyreduce:
           gtl::FindOrDie(context->variable_array_map, (yyvsp[-3].string_value)),
           (yyvsp[-1].integer_value)));
     }
-#line 2228 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2242 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 93:
-#line 651 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 651 "./ortools/flatzinc/parser.yy"
     {
       std::vector<Annotation>* const annotations = (yyvsp[-1].annotations);
       if (annotations != nullptr) {
@@ -2246,11 +2258,11 @@ yyreduce:
         (yyval.annotation) = Annotation::Empty();
       }
     }
-#line 2242 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2256 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 94:
-#line 666 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 666 "./ortools/flatzinc/parser.yy"
     {
       if ((yyvsp[-1].annotations) != nullptr) {
         model->Satisfy(std::move(*(yyvsp[-1].annotations)));
@@ -2259,11 +2271,11 @@ yyreduce:
         model->Satisfy(std::vector<Annotation>());
       }
     }
-#line 2255 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2269 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 95:
-#line 674 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 674 "./ortools/flatzinc/parser.yy"
     {
       CHECK_EQ(Argument::INT_VAR_REF, (yyvsp[0].arg).type);
       if ((yyvsp[-2].annotations) != nullptr) {
@@ -2274,11 +2286,11 @@ yyreduce:
         model->Minimize((yyvsp[0].arg).Var(), std::vector<Annotation>());
       }
     }
-#line 2269 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2283 "./ortools/flatzinc/parser.tab.cc"
     break;
 
     case 96:
-#line 683 "./ortools/flatzinc/parser.yy" /* yacc.c:1646  */
+#line 683 "./ortools/flatzinc/parser.yy"
     {
       CHECK_EQ(Argument::INT_VAR_REF, (yyvsp[0].arg).type);
       if ((yyvsp[-2].annotations) != nullptr) {
@@ -2289,10 +2301,11 @@ yyreduce:
         model->Maximize((yyvsp[0].arg).Var(), std::vector<Annotation>());
       }
     }
-#line 2283 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2297 "./ortools/flatzinc/parser.tab.cc"
     break;
 
-#line 2287 "./ortools/flatzinc/parser.tab.cc" /* yacc.c:1646  */
+#line 2301 "./ortools/flatzinc/parser.tab.cc"
+
     default:
       break;
   }
@@ -2318,14 +2331,13 @@ yyreduce:
   /* Now 'shift' the result of the reduction.  Determine what state
      that goes to, based on the state we popped back to and the rule
      number reduced by.  */
-
-  yyn = yyr1[yyn];
-
-  yystate = yypgoto[yyn - YYNTOKENS] + *yyssp;
-  if (0 <= yystate && yystate <= YYLAST && yycheck[yystate] == *yyssp)
-    yystate = yytable[yystate];
-  else
-    yystate = yydefgoto[yyn - YYNTOKENS];
+  {
+    const int yylhs = yyr1[yyn] - YYNTOKENS;
+    const int yyi = yypgoto[yylhs] + *yyssp;
+    yystate = (0 <= yyi && yyi <= YYLAST && yycheck[yyi] == *yyssp
+                   ? yytable[yyi]
+                   : yydefgoto[yylhs]);
+  }
 
   goto yynewstate;
 
@@ -2391,11 +2403,9 @@ yyerrlab:
 | yyerrorlab -- error raised explicitly by YYERROR.  |
 `---------------------------------------------------*/
 yyerrorlab:
-
-  /* Pacify compilers like GCC when the user code never invokes
-     YYERROR and the label yyerrorlab therefore never appears in user
-     code.  */
-  if (/*CONSTCOND*/ 0) goto yyerrorlab;
+  /* Pacify compilers when the user code never invokes YYERROR and the
+     label yyerrorlab therefore never appears in user code.  */
+  if (0) YYERROR;
 
   /* Do not reclaim the symbols of the rule whose action triggered
      this YYERROR.  */
@@ -2465,6 +2475,9 @@ yyexhaustedlab:
   /* Fall through.  */
 #endif
 
+/*-----------------------------------------------------.
+| yyreturn -- parsing is finished, return the result.  |
+`-----------------------------------------------------*/
 yyreturn:
   if (yychar != YYEMPTY) {
     /* Make sure we have latest lookahead translation.  See comments at
@@ -2490,4 +2503,4 @@ yyreturn:
 #endif
   return yyresult;
 }
-#line 693 "./ortools/flatzinc/parser.yy" /* yacc.c:1906  */
+#line 693 "./ortools/flatzinc/parser.yy"

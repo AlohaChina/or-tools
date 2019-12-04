@@ -13,6 +13,7 @@
 
 
 #include <atomic>
+
 #include "ortools/sat/cp_model.h"
 #include "ortools/sat/model.h"
 #include "ortools/sat/sat_parameters.pb.h"
@@ -53,7 +54,7 @@ void StopAfterNSolutionsSampleSat() {
       LOG(INFO) << "Stop search after " << kSolutionLimit << " solutions.";
     }
   }));
-  const CpSolverResponse response = SolveWithModel(cp_model, &model);
+  const CpSolverResponse response = SolveCpModel(cp_model.Build(), &model);
   LOG(INFO) << "Number of solutions found: " << num_solutions;
   CHECK_EQ(num_solutions, kSolutionLimit);
 }

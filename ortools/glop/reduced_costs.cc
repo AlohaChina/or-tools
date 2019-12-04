@@ -64,7 +64,7 @@ bool ReducedCosts::TestEnteringReducedCostPrecision(
   }
   const Fractional old_reduced_cost = reduced_costs_[entering_col];
   const Fractional precise_reduced_cost =
-      objective_[entering_col] + objective_perturbation_[entering_col] -
+      objective_[entering_col] + cost_perturbations_[entering_col] -
       PreciseScalarProduct(basic_objective_, direction);
 
   // Update the reduced cost of the entering variable with the precise version.
@@ -122,13 +122,16 @@ Fractional ReducedCosts::ComputeMaximumDualResidual() const {
   DenseRow dual_values(RowToColIndex(num_rows), 0.0);
   for (RowIndex row(0); row < num_rows; ++row) {
     const ColIndex row_as_col = RowToColIndex(row);
-    dual_values[row_as_col] = -reduced_costs_[first_slack_col + row_as_col];
+    const ColIndex slack_col = first_slack_col + row_as_col;
+    dual_values[row_as_col] = objective_[slack_col] +
+                              cost_perturbations_[slack_col] -
+                              reduced_costs_[slack_col];
   }
   Fractional dual_residual_error(0.0);
   for (RowIndex row(0); row < num_rows; ++row) {
     const ColIndex basic_col = basis_[row];
     const Fractional residual =
-        objective_[basic_col] + objective_perturbation_[basic_col] -
+        objective_[basic_col] + cost_perturbations_[basic_col] -
         matrix_.ColumnScalarProduct(basic_col, dual_values);
     dual_residual_error = std::max(dual_residual_error, std::abs(residual));
   }
@@ -246,7 +249,7 @@ void ReducedCosts::PerturbCosts() {
         std::max(max_cost_magnitude, std::abs(objective_[col]));
   }
 
-  objective_perturbation_.AssignToZero(matrix_.num_cols());
+  cost_perturbations_.AssignToZero(matrix_.num_cols());
   for (ColIndex col(0); col < structural_size; ++col) {
     const Fractional objective = objective_[col];
     const Fractional magnitude =
@@ -264,10 +267,10 @@ void ReducedCosts::PerturbCosts() {
       case VariableType::FIXED_VARIABLE:
         break;
       case VariableType::LOWER_BOUNDED:
-        objective_perturbation_[col] = magnitude;
+        cost_perturbations_[col] = magnitude;
         break;
       case VariableType::UPPER_BOUNDED:
-        objective_perturbation_[col] = -magnitude;
+        cost_perturbations_[col] = -magnitude;
         break;
       case VariableType::UPPER_AND_LOWER_BOUNDED:
         // Here we don't necessarily maintain the dual-feasibility of a dual
@@ -276,9 +279,9 @@ void ReducedCosts::PerturbCosts() {
         // done by MakeBoxedVariableDualFeasible() at the end of the dual
         // phase-I algorithm.
         if (objective > 0.0) {
-          objective_perturbation_[col] = magnitude;
+          cost_perturbations_[col] = magnitude;
         } else if (objective < 0.0) {
-          objective_perturbation_[col] = -magnitude;
+          cost_perturbations_[col] = -magnitude;
         }
         break;
     }
@@ -292,13 +295,13 @@ void ReducedCosts::ShiftCost(ColIndex col) {
       dual_feasibility_tolerance_ *
       (reduced_costs_[col] > 0.0 ? kToleranceFactor : -kToleranceFactor);
   IF_STATS_ENABLED(stats_.cost_shift.Add(reduced_costs_[col] + small_step));
-  objective_perturbation_[col] -= reduced_costs_[col] + small_step;
+  cost_perturbations_[col] -= reduced_costs_[col] + small_step;
   reduced_costs_[col] = -small_step;
 }
 
 void ReducedCosts::ClearAndRemoveCostShifts() {
   SCOPED_TIME_STAT(&stats_);
-  objective_perturbation_.AssignToZero(matrix_.num_cols());
+  cost_perturbations_.AssignToZero(matrix_.num_cols());
   recompute_basic_objective_ = true;
   recompute_basic_objective_left_inverse_ = true;
   recompute_reduced_costs_ = true;
@@ -339,12 +342,12 @@ void ReducedCosts::RecomputeReducedCostsAndPrimalEnteringCandidatesIfNeeded() {
 void ReducedCosts::ComputeBasicObjective() {
   SCOPED_TIME_STAT(&stats_);
   const ColIndex num_cols_in_basis = RowToColIndex(matrix_.num_rows());
-  objective_perturbation_.resize(matrix_.num_cols(), 0.0);
+  cost_perturbations_.resize(matrix_.num_cols(), 0.0);
   basic_objective_.resize(num_cols_in_basis, 0.0);
   for (ColIndex col(0); col < num_cols_in_basis; ++col) {
     const ColIndex basis_col = basis_[ColToRowIndex(col)];
     basic_objective_[col] =
-        objective_[basis_col] + objective_perturbation_[basis_col];
+        objective_[basis_col] + cost_perturbations_[basis_col];
   }
   recompute_basic_objective_ = false;
   recompute_basic_objective_left_inverse_ = true;
@@ -367,7 +370,7 @@ void ReducedCosts::ComputeReducedCosts() {
 #endif
   if (num_omp_threads == 1) {
     for (ColIndex col(0); col < num_cols; ++col) {
-      reduced_costs_[col] = objective_[col] + objective_perturbation_[col] -
+      reduced_costs_[col] = objective_[col] + cost_perturbations_[col] -
                             matrix_.ColumnScalarProduct(
                                 col, basic_objective_left_inverse_.values);
 
@@ -557,7 +560,7 @@ void ReducedCosts::UpdateBasicObjective(ColIndex entering_col,
                                         RowIndex leaving_row) {
   SCOPED_TIME_STAT(&stats_);
   basic_objective_[RowToColIndex(leaving_row)] =
-      objective_[entering_col] + objective_perturbation_[entering_col];
+      objective_[entering_col] + cost_perturbations_[entering_col];
   recompute_basic_objective_left_inverse_ = true;
 }
 

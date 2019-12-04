@@ -23,7 +23,7 @@ import com.google.ortools.sat.SatParameters;
  * <p>This class proposes different solve() methods, as well as accessors to get the values of
  * variables in the best solution, as well as general statistics of the search.
  */
-public class CpSolver {
+public final class CpSolver {
   /** Main construction of the CpSolver class. */
   public CpSolver() {
     this.solveParameters = SatParameters.newBuilder();
@@ -47,6 +47,8 @@ public class CpSolver {
    *
    * <p>This method searches for all feasible solutions of a given model. Then it feeds the
    * solutions to the callback.
+   *
+   * <p>Note that the model cannot have an objective.
    *
    * @param model the model to solve
    * @param cb the callback that will be called at each solution

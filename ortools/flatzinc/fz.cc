@@ -33,9 +33,8 @@
 #include "ortools/flatzinc/model.h"
 #include "ortools/flatzinc/parser.h"
 #include "ortools/flatzinc/presolve.h"
-#include "ortools/flatzinc/reporting.h"
 
-DEFINE_int32(time_limit, 0, "time limit in ms.");
+DEFINE_double(time_limit, 0, "time limit in seconds.");
 DEFINE_bool(all_solutions, false, "Search for all solutions.");
 DEFINE_int32(num_solutions, 0,
              "Maximum number of solution to search for, 0 means unspecified.");
@@ -71,6 +70,8 @@ void FixAndParseParameters(int* argc, char*** argv) {
   char seed_param[] = "--fz_seed";
   char verbose_param[] = "--fz_verbose";
   char debug_param[] = "--fz_debug";
+  char time_param[] = "--time_limit";
+  bool use_time_param = false;
   for (int i = 1; i < *argc; ++i) {
     if (strcmp((*argv)[i], "-a") == 0) {
       (*argv)[i] = all_param;
@@ -99,6 +100,10 @@ void FixAndParseParameters(int* argc, char*** argv) {
     if (strcmp((*argv)[i], "-d") == 0) {
       (*argv)[i] = debug_param;
     }
+    if (strcmp((*argv)[i], "-t") == 0) {
+      (*argv)[i] = time_param;
+      use_time_param = true;
+    }
   }
   const char kUsage[] =
       "Usage: see flags.\nThis program parses and solve a flatzinc problem.";
@@ -106,6 +111,11 @@ void FixAndParseParameters(int* argc, char*** argv) {
   gflags::SetUsageMessage(kUsage);
   gflags::ParseCommandLineFlags(argc, argv, true);
   google::InitGoogleLogging((*argv)[0]);
+
+  // Fix time limit if -t was used.
+  if (use_time_param) {
+    FLAGS_time_limit /= 1000.0;
+  }
 }
 
 Model ParseFlatzincModel(const std::string& input, bool input_is_filename) {
@@ -139,6 +149,12 @@ Model ParseFlatzincModel(const std::string& input, bool input_is_filename) {
     timer.Reset();
     timer.Start();
     presolve.Run(&model);
+    FZLOG << "  - done in " << timer.GetInMs() << " ms" << FZENDL;
+  } else {
+    FZLOG << "Presolve model using minimal rules" << FZENDL;
+    timer.Reset();
+    timer.Start();
+    presolve.RunMinimal(&model);
     FZLOG << "  - done in " << timer.GetInMs() << " ms" << FZENDL;
   }
 
@@ -174,26 +190,18 @@ int main(int argc, char** argv) {
   operations_research::fz::Model model =
       operations_research::fz::ParseFlatzincModel(input,
                                                   !FLAGS_read_from_stdin);
-  operations_research::fz::FlatzincParameters parameters;
-  parameters.all_solutions = FLAGS_all_solutions;
-  parameters.free_search = FLAGS_free_search;
-  parameters.heuristic_period = -1;
-  parameters.ignore_unknown = false;
-  parameters.last_conflict = false;
-  parameters.logging = FLAGS_fz_logging;
-  parameters.log_period = 0;
-  parameters.luby_restart = false;
-  parameters.num_solutions =
+  operations_research::fz::FlatzincSatParameters parameters;
+  parameters.display_all_solutions = FLAGS_all_solutions;
+  parameters.use_free_search = FLAGS_free_search;
+  parameters.verbose_logging = FLAGS_fz_logging;
+  parameters.max_number_of_solutions =
       FLAGS_num_solutions == 0 ?  // Not fixed.
           (FLAGS_num_solutions = FLAGS_all_solutions ? kint32max : 1)
                                : FLAGS_num_solutions;
   parameters.random_seed = FLAGS_fz_seed;
-  parameters.search_type = operations_research::fz::FlatzincParameters::DEFAULT;
-  parameters.statistics = FLAGS_statistics;
-  parameters.threads = FLAGS_threads;
-  parameters.thread_id = -1;
-  parameters.time_limit_in_ms = FLAGS_time_limit;
-  parameters.verbose_impact = false;
+  parameters.display_statistics = FLAGS_statistics;
+  parameters.number_of_threads = FLAGS_threads;
+  parameters.max_time_in_seconds = FLAGS_time_limit;
 
   operations_research::sat::SolveFzWithCpModelProto(model, parameters,
                                                     FLAGS_params);

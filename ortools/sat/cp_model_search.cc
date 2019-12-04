@@ -80,6 +80,9 @@ const std::function<LiteralIndex()> ConstructSearchStrategyInternal(
           offset = coeff_offset.second;
         }
         DCHECK_GT(coeff, 0);
+
+        // TODO(user): deal with integer overflow in case of wrongly specified
+        // coeff.
         switch (strategy.var_strategy) {
           case DecisionStrategyProto::CHOOSE_FIRST:
             break;
@@ -154,6 +157,10 @@ const std::function<LiteralIndex()> ConstructSearchStrategyInternal(
           literal = IntegerLiteral::GreaterOrEqual(
               candidate, candidate_ub - (candidate_ub - candidate_lb) / 2);
           break;
+        case DecisionStrategyProto::SELECT_MEDIAN_VALUE:
+          // TODO(user): Implement the correct method.
+          literal = IntegerLiteral::LowerOrEqual(candidate, candidate_lb);
+          break;
         default:
           LOG(FATAL) << "Unknown DomainReductionStrategy "
                      << strategy.domain_strategy;
@@ -201,14 +208,14 @@ std::function<LiteralIndex()> ConstructSearchStrategy(
     }
     strategy.var_strategy = proto.variable_selection_strategy();
     strategy.domain_strategy = proto.domain_reduction_strategy();
-    for (const auto& tranform : proto.transformations()) {
-      const int ref = tranform.var();
+    for (const auto& transform : proto.transformations()) {
+      const int ref = transform.var();
       const IntegerVariable var =
           RefIsPositive(ref) ? variable_mapping[ref]
                              : NegationOf(variable_mapping[PositiveRef(ref)]);
       if (!gtl::ContainsKey(var_to_coeff_offset_pair, var.value())) {
-        var_to_coeff_offset_pair[var.value()] = {tranform.positive_coeff(),
-                                                 tranform.offset()};
+        var_to_coeff_offset_pair[var.value()] = {transform.positive_coeff(),
+                                                 transform.offset()};
       }
     }
   }
@@ -243,7 +250,8 @@ std::function<LiteralIndex()> InstrumentSearchStrategy(
     if (decision == kNoLiteralIndex) return decision;
 
     for (const IntegerLiteral i_lit :
-         model->Get<IntegerEncoder>()->GetIntegerLiterals(Literal(decision))) {
+         model->Get<IntegerEncoder>()->GetAllIntegerLiterals(
+             Literal(decision))) {
       LOG(INFO) << "decision " << i_lit;
     }
     const int level = model->Get<Trail>()->CurrentDecisionLevel();
@@ -281,177 +289,244 @@ SatParameters DiversifySearchParameters(const SatParameters& params,
   //   - Different propatation levels for scheduling constraints
   SatParameters new_params = params;
   new_params.set_random_seed(params.random_seed() + worker_id);
-  if (cp_model.has_objective()) {
-    switch (worker_id) {
-      case 0: {  // Use default parameters and automatic search.
+  new_params.set_use_lns_only(false);
+  int index = worker_id;
+
+  if (params.reduce_memory_usage_in_interleave_mode() &&
+      params.interleave_search()) {
+    // Low memory mode for interleaved search in single thread (4 workers).
+    CHECK_LE(index, 4);
+    if (cp_model.has_objective()) {
+      // First strategy (default).
+      if (index == 0) {  // Use default parameters and automatic search.
         new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
-        new_params.set_linearization_level(1);
         *name = "auto";
-        break;
+        return new_params;
       }
-      case 1: {  // Use default parameters and fixed search if there is one.
-        if (cp_model.search_strategy_size() > 0) {
+
+      // Second strategy (fixed or pseudo costs).
+      if (cp_model.search_strategy_size() > 0) {
+        if (--index == 0) {  // Use default parameters and fixed search.
           new_params.set_search_branching(SatParameters::FIXED_SEARCH);
           *name = "fixed";
-        } else {  // Use LP_SEARCH if not.
-          new_params.set_search_branching(SatParameters::LP_SEARCH);
-          *name = "lp_br";
+          return new_params;
         }
-        break;
+      } else {
+        if (--index == 0) {
+          new_params.set_search_branching(SatParameters::PSEUDO_COST_SEARCH);
+          new_params.set_exploit_best_solution(true);
+          *name = "pseudo_cost";
+          return new_params;
+        }
       }
-      case 2: {  // Remove LP relaxation.
-        new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
-        new_params.set_linearization_level(0);
-        *name = "no_lp";
-        break;
+
+      // Third strategy (core or no lp).
+      if (cp_model.objective().vars_size() > 1) {
+        if (--index == 0) {  // Core based approach.
+          new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+          new_params.set_optimize_with_core(true);
+          new_params.set_linearization_level(0);
+          *name = "core";
+          return new_params;
+        }
+      } else {
+        if (--index == 0) {  // Remove LP relaxation.
+          new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+          new_params.set_linearization_level(0);
+          *name = "no_lp";
+          return new_params;
+        }
       }
-      case 3: {  // Reinforce LP relaxation.
+
+      // Fourth strategy: max_lp.
+      if (--index == 0) {  // Reinforce LP relaxation.
         new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
         new_params.set_linearization_level(2);
+        new_params.set_add_cg_cuts(true);
+        new_params.set_use_branching_in_lp(true);
         *name = "max_lp";
-        break;
+        return new_params;
       }
-      case 4: {  // Core based approach.
+
+      // Fifth strategy using LNS.
+      new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+      new_params.set_use_lns_only(true);
+      *name = "lns";
+      return new_params;
+    } else {  // No objective
+      // First strategy (default).
+      if (index == 0) {  // Use default parameters and automatic search.
+        new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+        *name = "auto";
+        return new_params;
+      }
+      // Second strategy (fixed or no_lp).
+      if (cp_model.search_strategy_size() > 0) {
+        if (--index == 0) {  // Use default parameters and fixed search.
+          new_params.set_search_branching(SatParameters::FIXED_SEARCH);
+          *name = "fixed";
+          return new_params;
+        }
+      } else {
+        // TODO(user): Disable lp_br if linear part is small or empty.
+        if (--index == 0) {
+          new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+          new_params.set_linearization_level(0);
+          *name = "no_lp";
+          return new_params;
+        }
+      }
+
+      // Third strategy: reduce boolean encoding.
+      if (--index == 0) {
+        new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+        new_params.set_boolean_encoding_level(0);
+        *name = "less encoding";
+        return new_params;
+      }
+
+      // Fourth strategy: max_lp.
+      if (--index == 0) {  // Reinforce LP relaxation.
+        new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+        new_params.set_linearization_level(2);
+        new_params.set_add_cg_cuts(true);
+        *name = "max_lp";
+        return new_params;
+      }
+
+      // Fifth strategy: quick restart.
+      new_params.set_search_branching(
+          SatParameters::PORTFOLIO_WITH_QUICK_RESTART_SEARCH);
+      *name = "random";
+      return new_params;
+    }
+  } else if (cp_model.has_objective()) {
+    if (index == 0) {  // Use default parameters and automatic search.
+      new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+      new_params.set_linearization_level(1);
+      *name = "auto";
+      return new_params;
+    }
+
+    if (cp_model.search_strategy_size() > 0) {
+      if (--index == 0) {  // Use default parameters and fixed search.
+        new_params.set_search_branching(SatParameters::FIXED_SEARCH);
+        *name = "fixed";
+        return new_params;
+      }
+    } else {
+      // TODO(user): Disable lp_br if linear part is small or empty.
+      if (--index == 0) {
+        new_params.set_search_branching(SatParameters::LP_SEARCH);
+        *name = "lp_br";
+        return new_params;
+      }
+    }
+
+    if (--index == 0) {
+      new_params.set_search_branching(SatParameters::PSEUDO_COST_SEARCH);
+      new_params.set_exploit_best_solution(true);
+      *name = "pseudo_cost";
+      return new_params;
+    }
+
+    // TODO(user): Disable no_lp if linear part is small.
+    if (--index == 0) {  // Remove LP relaxation.
+      new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+      new_params.set_linearization_level(0);
+      *name = "no_lp";
+      return new_params;
+    }
+
+    // TODO(user): Disable max_lp if no change in linearization against auto.
+    if (--index == 0) {  // Reinforce LP relaxation.
+      new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+      new_params.set_linearization_level(2);
+      new_params.set_add_cg_cuts(true);
+      new_params.set_use_branching_in_lp(true);
+      *name = "max_lp";
+      return new_params;
+    }
+
+    // Only add this strategy if we have enough worker left for LNS.
+    if (params.num_search_workers() > 8 && --index == 0) {
+      new_params.set_search_branching(
+          SatParameters::PORTFOLIO_WITH_QUICK_RESTART_SEARCH);
+      *name = "quick_restart";
+      return new_params;
+    }
+
+    if (cp_model.objective().vars_size() > 1) {
+      if (--index == 0) {  // Core based approach.
         new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
         new_params.set_optimize_with_core(true);
         new_params.set_linearization_level(0);
         *name = "core";
-        break;
-      }
-      default: {  // LNS.
-        new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
-        new_params.set_use_lns(true);
-        new_params.set_lns_num_threads(1);
-        *name = absl::StrFormat("lns_%i", worker_id - 5);
+        return new_params;
       }
     }
+
+    // Use LNS for the remaining workers.
+    new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+    new_params.set_use_lns_only(true);
+    *name = absl::StrFormat("lns_%i", index);
+    return new_params;
   } else {
     // The goal here is to try fixed and free search on the first two threads.
     // Then maximize diversity on the extra threads.
-    switch (worker_id) {
-      case 0: {
+    int index = worker_id;
+
+    if (index == 0) {  // Default automatic search.
+      new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+      *name = "auto";
+      return new_params;
+    }
+
+    if (cp_model.search_strategy_size() > 0) {  // Use predefined search.
+      if (--index == 0) {
         new_params.set_search_branching(SatParameters::FIXED_SEARCH);
         *name = "fixed";
-        break;
-      }
-      case 1: {
-        new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
-        *name = "auto";
-        break;
-      }
-      case 2: {
-        new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
-        new_params.set_boolean_encoding_level(0);
-        *name = "less encoding";
-        break;
-      }
-      default: {  // Randomized fixed search.
-        new_params.set_search_branching(SatParameters::FIXED_SEARCH);
-        new_params.set_randomize_search(true);
-        new_params.set_search_randomization_tolerance(worker_id - 3);
-        *name = absl::StrFormat("rnd_%i", worker_id - 3);
-        break;
+        return new_params;
       }
     }
-  }
 
-  return new_params;
-}
+    if (--index == 0) {  // Reduce boolean encoding.
+      new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+      new_params.set_boolean_encoding_level(0);
+      *name = "less encoding";
+      return new_params;
+    }
 
-// TODO(user): Better stats in the multi thread case.
-//                Should we cumul conflicts, branches... ?
-bool MergeOptimizationSolution(const CpSolverResponse& response, bool maximize,
-                               CpSolverResponse* best) {
-  // In all cases, we always update the best objective bound similarly.
-  const double current_best_bound = response.best_objective_bound();
-  const double previous_best_bound = best->best_objective_bound();
-  const double new_best_objective_bound =
-      maximize ? std::min(previous_best_bound, current_best_bound)
-               : std::max(previous_best_bound, current_best_bound);
-  const auto cleanup = ::operations_research::util::MakeCleanup(
-      [&best, new_best_objective_bound]() {
-        if (best->status() != OPTIMAL) {
-          best->set_best_objective_bound(new_best_objective_bound);
-        } else {
-          best->set_best_objective_bound(best->objective_value());
-        }
-      });
+    // TODO(user): Disable no_lp if linear part is small.
+    if (--index == 0) {  // Remove LP relaxation.
+      new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+      new_params.set_linearization_level(0);
+      *name = "no_lp";
+      return new_params;
+    }
 
-  switch (response.status()) {
-    case CpSolverStatus::FEASIBLE: {
-      const bool is_improving =
-          maximize ? response.objective_value() > best->objective_value()
-                   : response.objective_value() < best->objective_value();
-      // TODO(user): return OPTIMAL if objective is tight.
-      if (is_improving) {
-        // Overwrite solution and fix best_objective_bound.
-        *best = response;
-        return true;
-      }
-      if (new_best_objective_bound != previous_best_bound) {
-        // The new solution has a worse objective value, but a better
-        // best_objective_bound.
-        return true;
-      }
-      return false;
+    // TODO(user): Disable max_lp if no change in linearization against auto.
+    if (--index == 0) {  // Reinforce LP relaxation.
+      new_params.set_search_branching(SatParameters::AUTOMATIC_SEARCH);
+      new_params.set_linearization_level(2);
+      new_params.set_add_cg_cuts(true);
+      *name = "max_lp";
+      return new_params;
     }
-    case CpSolverStatus::INFEASIBLE: {
-      if (best->status() == CpSolverStatus::UNKNOWN ||
-          best->status() == CpSolverStatus::INFEASIBLE) {
-        // Stores the unsat solution.
-        *best = response;
-        return true;
-      } else {
-        // It can happen that the LNS finds the best solution, but does
-        // not prove it. Then another worker pulls in the best solution,
-        // does not improve upon it, returns UNSAT if it has not found a
-        // previous solution, or OPTIMAL with a bad objective value, and
-        // stops all other workers. In that case, if the last solution
-        // found has a FEASIBLE status, it is indeed optimal, and
-        // should be marked as thus.
-        best->set_status(CpSolverStatus::OPTIMAL);
-        return false;
-      }
-      break;
+
+    if (--index == 0) {
+      new_params.set_search_branching(
+          SatParameters::PORTFOLIO_WITH_QUICK_RESTART_SEARCH);
+      *name = "random";
+      return new_params;
     }
-    case CpSolverStatus::OPTIMAL: {
-      const double previous = best->objective_value();
-      const double current = response.objective_value();
-      if ((maximize && current >= previous) ||
-          (!maximize && current <= previous)) {
-        // We always overwrite the best solution with an at-least as good
-        // optimal solution.
-        *best = response;
-        return true;
-      } else {
-        // We are in the same case as the INFEASIBLE above.  Solution
-        // synchronization has forced the solver to exit with a sub-optimal
-        // solution, believing it was optimal.
-        best->set_status(CpSolverStatus::OPTIMAL);
-        return false;
-      }
-      break;
-    }
-    case CpSolverStatus::UNKNOWN: {
-      if (best->status() == CpSolverStatus::UNKNOWN) {
-        if (!std::isfinite(best->objective_value())) {
-          // TODO(user): Find a better test for never updated response.
-          *best = response;
-        } else if (maximize) {
-          // Update objective_value and best_objective_bound.
-          best->set_objective_value(
-              std::max(best->objective_value(), response.objective_value()));
-        } else {
-          best->set_objective_value(
-              std::min(best->objective_value(), response.objective_value()));
-        }
-      }
-      return false;
-      break;
-    }
-    default: {
-      return false;
-    }
+
+    // Randomized fixed search.
+    new_params.set_search_branching(SatParameters::FIXED_SEARCH);
+    new_params.set_randomize_search(true);
+    new_params.set_search_randomization_tolerance(index);
+    *name = absl::StrFormat("random_%i", index);
+    return new_params;
   }
 }
 

@@ -90,6 +90,7 @@ class Preprocessor {
   ProblemStatus status_;
   const GlopParameters& parameters_;
   bool in_mip_context_;
+  std::unique_ptr<TimeLimit> infinite_time_limit_;
   TimeLimit* time_limit_;
 };
 
@@ -953,6 +954,8 @@ class ShiftVariableBoundsPreprocessor : public Preprocessor {
   bool Run(LinearProgram* lp) final;
   void RecoverSolution(ProblemSolution* solution) const final;
 
+  const DenseRow& offsets() const { return offsets_; }
+
  private:
   // Contains for each variable by how much its bounds where shifted during
   // presolve. Note that the shift was negative (new bound = initial bound -
@@ -992,8 +995,6 @@ class ScalingPreprocessor : public Preprocessor {
 // ToMinimizationPreprocessor
 // --------------------------------------------------------
 // Changes the problem from maximization to minimization (if applicable).
-// As of 2015/09/03 this is not used by Glop, but will be used by Glip.
-// The preprocessor is kept here, because it could be used by Glop too.
 class ToMinimizationPreprocessor : public Preprocessor {
  public:
   explicit ToMinimizationPreprocessor(const GlopParameters* parameters)

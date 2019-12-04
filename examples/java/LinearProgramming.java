@@ -16,7 +16,11 @@ import com.google.ortools.linearsolver.MPObjective;
 import com.google.ortools.linearsolver.MPSolver;
 import com.google.ortools.linearsolver.MPVariable;
 
-/** Linear programming example that shows how to use the API. */
+/**
+ * Linear programming example that shows how to use the API.
+ *
+ */
+
 public class LinearProgramming {
   static {
     System.loadLibrary("jniortools");
@@ -37,7 +41,7 @@ public class LinearProgramming {
       System.out.println("Could not create solver " + solverType);
       return;
     }
-    double infinity = MPSolver.infinity();
+    double infinity = java.lang.Double.POSITIVE_INFINITY;
     // x1, x2 and x3 are continuous non-negative variables.
     MPVariable x1 = solver.makeNumVar(0.0, infinity, "x1");
     MPVariable x2 = solver.makeNumVar(0.0, infinity, "x2");
@@ -72,7 +76,7 @@ public class LinearProgramming {
     System.out.println("Number of constraints = " + solver.numConstraints());
 
     if (printModel) {
-      String model = solver.exportModelAsLpFormat(false);
+      String model = solver.exportModelAsLpFormat();
       System.out.println(model);
     }
 
@@ -86,10 +90,9 @@ public class LinearProgramming {
 
     // Verify that the solution satisfies all constraints (when using solvers
     // others than GLOP_LINEAR_PROGRAMMING, this is highly recommended!).
-    if (!solver.verifySolution(/*tolerance=*/ 1e-7, /*logErrors=*/ true)) {
-      System.err.println(
-          "The solution returned by the solver violated the"
-              + " problem constraints by at least 1e-7");
+    if (!solver.verifySolution(/*tolerance=*/1e-7, /* log_errors= */ true)) {
+      System.err.println("The solution returned by the solver violated the"
+          + " problem constraints by at least 1e-7");
       return;
     }
 

@@ -12,10 +12,13 @@
 // limitations under the License.
 
 #include "ortools/sat/cp_model.h"
+
 #include "absl/strings/str_format.h"
 #include "ortools/base/map_util.h"
 #include "ortools/sat/cp_model.pb.h"
+#include "ortools/sat/cp_model_solver.h"
 #include "ortools/sat/cp_model_utils.h"
+#include "ortools/sat/sat_parameters.pb.h"
 
 namespace operations_research {
 namespace sat {
@@ -141,6 +144,12 @@ LinearExpr LinearExpr::ScalProd(absl::Span<const IntVar> vars,
   return result;
 }
 
+LinearExpr LinearExpr::Term(IntVar var, int64 coefficient) {
+  LinearExpr result;
+  result.AddTerm(var, coefficient);
+  return result;
+}
+
 LinearExpr LinearExpr::BooleanSum(absl::Span<const BoolVar> vars) {
   LinearExpr result;
   for (const IntVar& var : vars) {
@@ -233,9 +242,9 @@ void ReservoirConstraint::AddOptionalEvent(IntVar time, int64 demand,
 
 void AutomatonConstraint::AddTransition(int tail, int head,
                                         int64 transition_label) {
-  proto_->mutable_automata()->add_transition_tail(tail);
-  proto_->mutable_automata()->add_transition_head(head);
-  proto_->mutable_automata()->add_transition_label(transition_label);
+  proto_->mutable_automaton()->add_transition_tail(tail);
+  proto_->mutable_automaton()->add_transition_head(head);
+  proto_->mutable_automaton()->add_transition_label(transition_label);
 }
 
 void NoOverlap2DConstraint::AddRectangle(IntervalVar x_coordinate,
@@ -584,11 +593,11 @@ AutomatonConstraint CpModelBuilder::AddAutomaton(
     absl::Span<const int> final_states) {
   ConstraintProto* const proto = cp_model_.add_constraints();
   for (const IntVar& var : transition_variables) {
-    proto->mutable_automata()->add_vars(GetOrCreateIntegerIndex(var.index_));
+    proto->mutable_automaton()->add_vars(GetOrCreateIntegerIndex(var.index_));
   }
-  proto->mutable_automata()->set_starting_state(starting_state);
+  proto->mutable_automaton()->set_starting_state(starting_state);
   for (const int final_state : final_states) {
-    proto->mutable_automata()->add_final_states(final_state);
+    proto->mutable_automaton()->add_final_states(final_state);
   }
   return AutomatonConstraint(proto);
 }
@@ -724,13 +733,10 @@ void CpModelBuilder::AddDecisionStrategy(
   proto->set_domain_reduction_strategy(domain_strategy);
 }
 
-CpSolverResponse Solve(CpModelBuilder cp_model) {
-  Model model;
-  return SolveCpModel(cp_model.Proto(), &model);
-}
-
-CpSolverResponse SolveWithModel(CpModelBuilder cp_model, Model* model) {
-  return SolveCpModel(cp_model.Proto(), model);
+void CpModelBuilder::AddHint(IntVar var, int64 value) {
+  cp_model_.mutable_solution_hint()->add_vars(
+      GetOrCreateIntegerIndex(var.index_));
+  cp_model_.mutable_solution_hint()->add_values(value);
 }
 
 int64 SolutionIntegerValue(const CpSolverResponse& r, const LinearExpr& expr) {

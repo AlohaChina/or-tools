@@ -12,8 +12,10 @@
 # limitations under the License.
 """Integer programming examples that show how to use the APIs."""
 # [START program]
+# [START import]
 from __future__ import print_function
 from ortools.linear_solver import pywraplp
+# [END import]
 
 
 def main():
@@ -29,19 +31,17 @@ def main():
     x = solver.IntVar(0.0, infinity, 'x')
     y = solver.IntVar(0.0, infinity, 'y')
 
-    print(('Number of variables = %d' % solver.NumVariables()))
+    print('Number of variables =', solver.NumVariables())
     # [END variables]
 
     # [START constraints]
-
-    # [END constraints]
     # x + 7 * y <= 17.5.
     solver.Add(x + 7 * y <= 17.5)
 
     # x <= 3.5.
     solver.Add(x <= 3.5)
 
-    print(('Number of constraints = ', solver.NumConstraints()))
+    print('Number of constraints =', solver.NumConstraints())
     # [END constraints]
 
     # [START objective]
@@ -50,20 +50,17 @@ def main():
     # [END objective]
 
     # [START solve]
-    result_status = solver.Solve()
-    # The problem has an optimal solution.
-    assert result_status == pywraplp.Solver.OPTIMAL
-
-    # The solution looks legit (when using solvers others than
-    # GLOP_LINEAR_PROGRAMMING, verifying the solution is highly recommended!).
-    assert solver.VerifySolution(1e-7, True)
+    status = solver.Solve()
     # [END solve]
 
     # [START print_solution]
-    print('Solution:')
-    print('Objective value = ', solver.Objective().Value())
-    print('x = ', x.solution_value())
-    print('y = ', y.solution_value())
+    if status == pywraplp.Solver.OPTIMAL:
+        print('Solution:')
+        print('Objective value =', solver.Objective().Value())
+        print('x =', x.solution_value())
+        print('y =', y.solution_value())
+    else:
+        print('The problem does not have an optimal solution.')
     # [END print_solution]
 
     # [START advanced]

@@ -61,6 +61,15 @@ class CpModelMapping {
   // as already loaded.
   void ExtractEncoding(const CpModelProto& model_proto, Model* m);
 
+  // Process all affine relations of the form a*X + b*Y == cte. For each
+  // literals associated to (X >= bound) or (X == value) associate it to its
+  // corresponding relation on Y. Also do the other side.
+  //
+  // TODO(user): In an ideal world, all affine relations like this should be
+  // removed in the presolve.
+  void PropagateEncodingFromEquivalenceRelations(
+      const CpModelProto& model_proto, Model* m);
+
   // Returns true if the given CpModelProto variable reference refers to a
   // Boolean varaible. Such variable will always have an associated Literal(),
   // but not always an associated Integer().
@@ -118,15 +127,24 @@ class CpModelMapping {
   // constraints and the linear constraint of size 1 (encodings) are usually
   // loaded first.
   bool ConstraintIsAlreadyLoaded(const ConstraintProto* ct) const {
-    return gtl::ContainsKey(already_loaded_ct_, ct);
+    return already_loaded_ct_.contains(ct);
+  }
+
+  // Returns true if the given constraint is a "half-encoding" constraint. That
+  // is, if it is of the form (b => size 1 linear) but there is no (<=) side in
+  // the model. Such constraint are detected while we extract integer encoding
+  // and are cached here so that we can deal properly with them during the
+  // linear relaxation.
+  bool IsHalfEncodingConstraint(const ConstraintProto* ct) const {
+    return is_half_encoding_ct_.contains(ct);
   }
 
   // Note that both these functions returns positive reference or -1.
-  int GetProtoVariableFromBooleanVariable(BooleanVariable var) {
+  int GetProtoVariableFromBooleanVariable(BooleanVariable var) const {
     if (var.value() >= reverse_boolean_map_.size()) return -1;
     return reverse_boolean_map_[var];
   }
-  int GetProtoVariableFromIntegerVariable(IntegerVariable var) {
+  int GetProtoVariableFromIntegerVariable(IntegerVariable var) const {
     if (var.value() >= reverse_integer_map_.size()) return -1;
     return reverse_integer_map_[var];
   }
@@ -151,6 +169,18 @@ class CpModelMapping {
     return result;
   }
 
+  // Returns a heuristic set of values that could be created for the given
+  // variable when the constraints will be loaded.
+  // Note that the pointer is not stable across calls.
+  // It returns nullptr if the set is empty.
+  const absl::flat_hash_set<int64>& PotentialEncodedValues(int var) {
+    const auto& it = variables_to_encoded_values_.find(var);
+    if (it != variables_to_encoded_values_.end()) {
+      return it->second;
+    }
+    return empty_set_;
+  }
+
  private:
   // Note that only the variables used by at least one constraint will be
   // created, the other will have a kNo[Integer,Interval,Boolean]VariableValue.
@@ -167,7 +197,22 @@ class CpModelMapping {
   // Set of constraints to ignore because they were already dealt with by
   // ExtractEncoding().
   absl::flat_hash_set<const ConstraintProto*> already_loaded_ct_;
+  absl::flat_hash_set<const ConstraintProto*> is_half_encoding_ct_;
+
+  absl::flat_hash_map<int, absl::flat_hash_set<int64>>
+      variables_to_encoded_values_;
+  const absl::flat_hash_set<int64> empty_set_;
 };
+
+// Inspects the model and use some heuristic to decide which variable, if any,
+// should be fully encoded. Note that some constraints like the element or table
+// constraints require some of their variables to be fully encoded.
+//
+// TODO(user): This function exists so that we fully encode first all the
+// variable that needs to be fully encoded so that at loading time we can adapt
+// the algorithm used. Howeve it needs to duplicate the logic that decide what
+// needs to be fully encoded. Try to come up with a more robust design.
+void MaybeFullyEncodeMoreVariables(const CpModelProto& model_proto, Model* m);
 
 // Calls one of the functions below.
 // Returns false if we do not know how to load the given constraints.
@@ -190,7 +235,7 @@ void LoadElementConstraintBounds(const ConstraintProto& ct, Model* m);
 void LoadElementConstraintAC(const ConstraintProto& ct, Model* m);
 void LoadElementConstraint(const ConstraintProto& ct, Model* m);
 void LoadTableConstraint(const ConstraintProto& ct, Model* m);
-void LoadAutomataConstraint(const ConstraintProto& ct, Model* m);
+void LoadAutomatonConstraint(const ConstraintProto& ct, Model* m);
 void LoadCircuitConstraint(const ConstraintProto& ct, Model* m);
 void LoadRoutesConstraint(const ConstraintProto& ct, Model* m);
 void LoadCircuitCoveringConstraint(const ConstraintProto& ct, Model* m);

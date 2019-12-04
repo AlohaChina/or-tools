@@ -122,7 +122,7 @@ void DynamicPartition::Refine(const std::vector<int>& distinguished_subset) {
   }
 
   // Sort affected parts. This is important to behave as advertised in the .h.
-  // TODO(user, fdid): automatically switch to an O(N) sort when it's faster
+  // TODO(user,user): automatically switch to an O(N) sort when it's faster
   // than this one, which is O(K log K) with K = tmp_affected_parts_.size().
   std::sort(tmp_affected_parts_.begin(), tmp_affected_parts_.end());
 
@@ -282,7 +282,7 @@ std::string MergingPartition::DebugString() {
     std::sort(part.begin(), part.end());
   std::sort(sorted_parts.begin(), sorted_parts.end());
   // Note: typically, a lot of elements of "sorted_parts" will be empty,
-  // but these won't be visible in the std::string that we construct below.
+  // but these won't be visible in the string that we construct below.
   std::string out;
   for (const std::vector<int>& part : sorted_parts) {
     if (!out.empty()) out += " | ";

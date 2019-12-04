@@ -16,7 +16,11 @@ import com.google.ortools.linearsolver.MPObjective;
 import com.google.ortools.linearsolver.MPSolver;
 import com.google.ortools.linearsolver.MPVariable;
 
-/** Integer programming example that shows how to use the API. */
+/**
+ * Integer programming example that shows how to use the API.
+ *
+ */
+
 public class IntegerProgramming {
   static {
     System.loadLibrary("jniortools");
@@ -27,7 +31,6 @@ public class IntegerProgramming {
       return new MPSolver(
           "IntegerProgrammingExample", MPSolver.OptimizationProblemType.valueOf(solverType));
     } catch (java.lang.IllegalArgumentException e) {
-      System.err.println("Bad solver type: " + e);
       return null;
     }
   }
@@ -38,7 +41,7 @@ public class IntegerProgramming {
       System.out.println("Could not create solver " + solverType);
       return;
     }
-    double infinity = MPSolver.infinity();
+    double infinity = java.lang.Double.POSITIVE_INFINITY;
     // x1 and x2 are integer non-negative variables.
     MPVariable x1 = solver.makeIntVar(0.0, infinity, "x1");
     MPVariable x2 = solver.makeIntVar(0.0, infinity, "x2");
@@ -63,10 +66,9 @@ public class IntegerProgramming {
 
     // Verify that the solution satisfies all constraints (when using solvers
     // others than GLOP_LINEAR_PROGRAMMING, this is highly recommended!).
-    if (!solver.verifySolution(/*tolerance=*/ 1e-7, /*logErrors=*/ true)) {
-      System.err.println(
-          "The solution returned by the solver violated the"
-              + " problem constraints by at least 1e-7");
+    if (!solver.verifySolution(/*tolerance=*/1e-7, /* log_errors= */ true)) {
+      System.err.println("The solution returned by the solver violated the"
+          + " problem constraints by at least 1e-7");
       return;
     }
 

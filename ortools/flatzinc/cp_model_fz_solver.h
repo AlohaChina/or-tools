@@ -15,13 +15,27 @@
 #define OR_TOOLS_FLATZINC_CP_MODEL_FZ_SOLVER_H_
 
 #include "ortools/flatzinc/model.h"
-#include "ortools/flatzinc/solver.h"
 
 namespace operations_research {
+namespace fz {
+
+struct FlatzincSatParameters {
+  bool display_all_solutions = false;
+  bool use_free_search = false;
+  bool verbose_logging = false;
+  bool display_statistics = false;
+  int max_number_of_solutions = 1;
+  int random_seed = 0;
+  int number_of_threads = 0;
+  double max_time_in_seconds = 0.0;
+};
+
+}  // namespace fz
+
 namespace sat {
 
 void SolveFzWithCpModelProto(const fz::Model& model,
-                             const fz::FlatzincParameters& p,
+                             const fz::FlatzincSatParameters& p,
                              const std::string& sat_params);
 
 }  // namespace sat

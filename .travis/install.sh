@@ -12,68 +12,86 @@ function installswig() {
     make install >/dev/null
 }
 
-function installmono() {
-  # Need mono >= 4.2 cf. makefiles/Makefile.port.mk:87
-  # http://www.mono-project.com/download/stable/
-  sudo apt-key adv \
-    --keyserver hkp://keyserver.ubuntu.com:80 \
-    --recv-keys 3FA7E0328081BFF6A14DA29AA6A19B38D3D831EF &&
-    echo "deb http://download.mono-project.com/repo/ubuntu stable-trusty main" | \
-    sudo tee /etc/apt/sources.list.d/mono-official-stable.list &&
-    sudo apt-get update -qq &&
-    sudo apt-get install -yqq mono-complete
-}
-
 function installdotnetsdk(){
   # Installs for Ubuntu Trusty distro
   sudo apt-get update -qq
-  sudo apt-get install -yq apt-transport-https
-  wget -q https://packages.microsoft.com/config/ubuntu/14.04/packages-microsoft-prod.deb
+  # Need to upgrade to dpkg >= 1.17.5ubuntu5.8,
+  # which fixes https://bugs.launchpad.net/ubuntu/+source/dpkg/+bug/1730627
+  sudo apt-get install -yq apt-transport-https dpkg
+  wget -q https://packages.microsoft.com/config/ubuntu/16.04/packages-microsoft-prod.deb
   sudo dpkg -i packages-microsoft-prod.deb
   # Install dotnet sdk 2.1
   sudo apt-get update -qq
-  sudo apt-get install -yqq dotnet-sdk-2.1
+  sudo apt-get install -yqq dotnet-sdk-2.2 dotnet-sdk-3.0
 }
 
 ################
 ##  MAKEFILE  ##
 ################
 if [ "${BUILDER}" == make ]; then
+  echo 'TRAVIS_OS_NAME = ${TRAVIS_OS_NAME}'
   if [ "${TRAVIS_OS_NAME}" == linux ]; then
+    echo 'travis_fold:start:c++'
     sudo apt-get -qq update
     sudo apt-get -yqq install autoconf libtool zlib1g-dev gawk curl	lsb-release
+    echo 'travis_fold:end:c++'
     if [ "${LANGUAGE}" != cc ]; then
+      echo 'travis_fold:start:swig'
       installswig
+      echo 'travis_fold:end:swig'
     fi
-    if [ "${LANGUAGE}" == python2 ]; then
-      pyenv global system 2.7
-      python2.7 -m pip install -q virtualenv wheel six;
-    elif [ "${LANGUAGE}" == python3 ]; then
-      pyenv global system 3.6
-      python3.6 -m pip install -q virtualenv wheel six
+    if [ "${LANGUAGE}" == python3 ]; then
+      echo 'travis_fold:start:python3'
+      pyenv global system 3.7
+      python3.7 -m pip install -q virtualenv wheel six
+      echo 'travis_fold:end:python3'
     elif [ "${LANGUAGE}" == dotnet ]; then
+      echo 'travis_fold:start:dotnet'
       installdotnetsdk
+      echo 'travis_fold:end:dotnet'
+    fi
+  elif [ "${TRAVIS_OS_NAME}" == linux-ppc64le ]; then
+    echo 'travis_fold:start:c++'
+    sudo apt-get -qq update
+    sudo apt-get -yqq install autoconf libtool zlib1g-dev gawk curl	lsb-release
+    echo 'travis_fold:end:c++'
+    if [ "${LANGUAGE}" != cc ]; then
+      echo 'travis_fold:start:swig'
+      installswig
+      echo 'travis_fold:end:swig'
+    fi
+    if [ "${LANGUAGE}" == python3 ]; then
+      echo 'travis_fold:start:python3'
+      pyenv global system 3.7
+      python3.7 -m pip install -q virtualenv wheel six
+      echo 'travis_fold:end:python3'
+    elif [ "${LANGUAGE}" == dotnet ]; then
+      echo 'travis_fold:start:dotnet'
+      installdotnetsdk
+      echo 'travis_fold:end:dotnet'
     fi
   elif [ "${TRAVIS_OS_NAME}" == osx ]; then
+    echo 'travis_fold:start:c++'
     brew update
     # see https://github.com/travis-ci/travis-ci/issues/10275
     brew install gcc || brew link --overwrite gcc
-    brew install make --with-default-names
+    brew install make ccache
+    echo 'travis_fold:end:c++'
     if [ "${LANGUAGE}" != cc ]; then
+      echo 'travis_fold:start:swig'
       brew install swig
+      echo 'travis_fold:end:swig'
     fi
-    if [ "${LANGUAGE}" == python2 ]; then
-      brew outdated | grep -q python@2 && brew upgrade python@2
-      python2 -m pip install -q virtualenv wheel six
-    elif [ "${LANGUAGE}" == python3 ]; then
-      brew upgrade python
+    if [ "${LANGUAGE}" == python3 ]; then
+      echo 'travis_fold:start:python3'
+      # brew upgrade python
       python3 -m pip install -q virtualenv wheel six
-    elif [ "${LANGUAGE}" == java ]; then
-      brew tap caskroom/versions
-      brew cask install java8
+      echo 'travis_fold:end:python3'
     elif [ "${LANGUAGE}" == dotnet ]; then
-      brew tap caskroom/cask
-      brew cask install dotnet-sdk
+      echo 'travis_fold:start:dotnet'
+      brew tap isen-ng/dotnet-sdk-versions
+      brew cask install dotnet-sdk-2.2.400 dotnet-sdk-3.0.100
+      echo 'travis_fold:end:dotnet'
     fi
   fi
 fi
@@ -83,14 +101,35 @@ fi
 #############
 if [ "${BUILDER}" == cmake ]; then
   if [ "${TRAVIS_OS_NAME}" == linux ]; then
-    installswig
-    pyenv global system 3.6
-    python3.6 -m pip install -q virtualenv wheel six
+    if [ "${LANGUAGE}" != cc ]; then
+      echo 'travis_fold:start:swig'
+      installswig
+      echo 'travis_fold:end:swig'
+      echo 'travis_fold:start:python3'
+      if [ "${ARCH}" == "amd64" ]; then
+ 	pyenv global system 3.7
+	python3.7 -m pip install -q virtualenv wheel six
+      elif [ "${ARCH}" == "ppc64le" ]; then
+	sudo apt-get install python3-dev python3-pip
+	python3.5 -m pip install -q virtualenv wheel six
+      elif [ "${ARCH}" == "amd64" ]; then
+	sudo apt-get install python3-dev python3-pip pcre-dev
+	python3 -m pip install -q virtualenv wheel six
+      fi
+      echo 'travis_fold:end:python3'
+    fi
   elif [ "${TRAVIS_OS_NAME}" == osx ]; then
+    echo 'travis_fold:start:c++'
     brew update
     # see https://github.com/travis-ci/travis-ci/issues/10275
     brew install gcc || brew link --overwrite gcc
+    brew install make ccache
+    echo 'travis_fold:end:c++'
+    echo 'travis_fold:start:swig'
     brew install swig
-    brew upgrade python
+    echo 'travis_fold:end:swig'
+    # echo 'travis_fold:start:python3'
+    # brew upgrade python
+    # echo 'travis_fold:end:python3'
   fi
 fi

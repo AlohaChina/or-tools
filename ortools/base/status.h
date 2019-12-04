@@ -15,6 +15,7 @@
 #define OR_TOOLS_BASE_STATUS_H_
 
 #include <string>
+
 #include "absl/strings/str_cat.h"
 #include "ortools/base/logging.h"
 
@@ -25,6 +26,8 @@ enum Error {
   INTERNAL = 1,
   INVALID_ARGUMENT = 2,
   DEADLINE_EXCEEDED = 3,
+  NOT_IMPLEMENTED = 4,
+  FAILED_PRECONDITION = 5,
 };
 }  // namespace error
 
@@ -42,6 +45,10 @@ struct Status {
   std::string ToString() const {
     if (ok()) return "OK";
     return absl::StrCat("ERROR #", error_code_, ": '", error_message_, "'");
+  }
+
+  util::error::Error code() const {
+    return static_cast<util::error::Error>(error_code_);
   }
 
   std::string error_message() const { return error_message_; }

@@ -17,6 +17,7 @@
 #include <functional>
 #include <vector>
 
+#include "absl/types/span.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/sat/integer.h"
 #include "ortools/sat/model.h"
@@ -28,23 +29,16 @@ namespace sat {
 // Enforces that the given tuple of variables is equal to one of the given
 // tuples. All the tuples must have the same size as var.size(), this is
 // Checked.
-std::function<void(Model*)> TableConstraint(
-    const std::vector<IntegerVariable>& vars,
-    const std::vector<std::vector<int64>>& tuples);
+void AddTableConstraint(absl::Span<const IntegerVariable> vars,
+                        std::vector<std::vector<int64>> tuples, Model* model);
 
-// Enforces that none of the given tuple appear. TODO(user): we could propagate
-// more than what we currently do which is simply adding one clause per tuples.
-std::function<void(Model*)> NegatedTableConstraint(
-    const std::vector<IntegerVariable>& vars,
-    const std::vector<std::vector<int64>>& tuples);
-
-// Same as NegatedTableConstraint() but uses a different literal encoding.
-// That is, instead of fully encoding the variables and having literal like
-// (x != 4) in the clause(s), we use instead two literals: (x < 4) V (x > 4).
-// This can be better for variable with large domains.
-std::function<void(Model*)> NegatedTableConstraintWithoutFullEncoding(
-    const std::vector<IntegerVariable>& vars,
-    const std::vector<std::vector<int64>>& tuples);
+// Enforces that none of the given tuple appear.
+//
+// TODO(user): we could propagate more than what we currently do which is simply
+// adding one clause per tuples.
+void AddNegatedTableConstraint(absl::Span<const IntegerVariable> vars,
+                               std::vector<std::vector<int64>> tuples,
+                               Model* model);
 
 // Enforces that exactly one literal in line_literals is true, and that
 // all literals in the corresponding line of the literal_tuples matrix are true.
@@ -54,10 +48,20 @@ std::function<void(Model*)> LiteralTableConstraint(
     const std::vector<std::vector<Literal>>& literal_tuples,
     const std::vector<Literal>& line_literals);
 
-// Given an automata defined by a set of 3-tuples:
+// This method tries to compress a list of tuples by merging complementary
+// tuples, that is a set of tuples that only differ on one variable, and that
+// cover the domain of the variable. In that case, it will keep only one tuple,
+// and replace the value for variable by any_value, the equivalent of '*' in
+// regexps.
+//
+// This method is exposed for testing purposes.
+void CompressTuples(absl::Span<const int64> domain_sizes, int64 any_value,
+                    std::vector<std::vector<int64>>* tuples);
+
+// Given an automaton defined by a set of 3-tuples:
 //     (state, transition_with_value_as_label, next_state)
 // this accepts the sequences of vars.size() variables that are recognized by
-// this automata. That is:
+// this automaton. That is:
 //   - We start from the initial state.
 //   - For each variable, we move along the transition labeled by this variable
 //     value. Moreover, the variable must take a value that correspond to a
@@ -68,7 +72,7 @@ std::function<void(Model*)> LiteralTableConstraint(
 // See the test for some examples.
 std::function<void(Model*)> TransitionConstraint(
     const std::vector<IntegerVariable>& vars,
-    const std::vector<std::vector<int64>>& automata, int64 initial_state,
+    const std::vector<std::vector<int64>>& automaton, int64 initial_state,
     const std::vector<int64>& final_states);
 
 }  // namespace sat

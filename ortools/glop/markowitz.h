@@ -80,7 +80,9 @@
 #include "ortools/glop/parameters.pb.h"
 #include "ortools/glop/status.h"
 #include "ortools/lp_data/lp_types.h"
+#include "ortools/lp_data/permutation.h"
 #include "ortools/lp_data/sparse.h"
+#include "ortools/lp_data/sparse_column.h"
 #include "ortools/util/stats.h"
 
 namespace operations_research {
@@ -106,7 +108,7 @@ class MatrixNonZeroPattern {
   // Resets the pattern to the one of the given matrix but only for the
   // rows/columns whose given permutation is kInvalidRow or kInvalidCol.
   // This also fills the singleton columns/rows with the corresponding entries.
-  void InitializeFromMatrixSubset(const MatrixView& basis_matrix,
+  void InitializeFromMatrixSubset(const CompactSparseMatrixView& basis_matrix,
                                   const RowPermutation& row_perm,
                                   const ColumnPermutation& col_perm,
                                   std::vector<ColIndex>* singleton_columns,
@@ -277,11 +279,10 @@ class Markowitz {
   // of the matrix. Moreover, by adding singleton columns with a one at the rows
   // such that 'row_perm[row] == kInvalidRow', then the matrix will be
   // non-singular.
-  ABSL_MUST_USE_RESULT Status ComputeLU(const MatrixView& basis_matrix,
-                                        RowPermutation* row_perm,
-                                        ColumnPermutation* col_perm,
-                                        TriangularMatrix* lower,
-                                        TriangularMatrix* upper);
+  ABSL_MUST_USE_RESULT Status
+  ComputeLU(const CompactSparseMatrixView& basis_matrix,
+            RowPermutation* row_perm, ColumnPermutation* col_perm,
+            TriangularMatrix* lower, TriangularMatrix* upper);
 
   // Only computes P and Q^{-1}, L and U can be computed later from these
   // permutations using another algorithm (for instance left-looking L.U). This
@@ -294,13 +295,13 @@ class Markowitz {
   // independent columns of maximum size. If all the given columns are
   // independent, the returned Status will be OK.
   ABSL_MUST_USE_RESULT Status ComputeRowAndColumnPermutation(
-      const MatrixView& basis_matrix, RowPermutation* row_perm,
+      const CompactSparseMatrixView& basis_matrix, RowPermutation* row_perm,
       ColumnPermutation* col_perm);
 
   // Releases the memory used by this class.
   void Clear();
 
-  // Returns a std::string containing the statistics for this class.
+  // Returns a string containing the statistics for this class.
   std::string StatString() const { return stats_.StatString(); }
 
   // Sets the current parameters.
@@ -331,7 +332,7 @@ class Markowitz {
   //
   // Note(user): Linear programming bases usually have a resonable percentage of
   // slack columns in them, so this gives a big speedup.
-  void ExtractSingletonColumns(const MatrixView& basis_matrix,
+  void ExtractSingletonColumns(const CompactSparseMatrixView& basis_matrix,
                                RowPermutation* row_perm,
                                ColumnPermutation* col_perm, int* index);
 
@@ -342,9 +343,14 @@ class Markowitz {
   //
   // The main gain here is that it avoids taking these columns into account in
   // InitializeResidualMatrix() and later in RemoveRowFromResidualMatrix().
-  void ExtractResidualSingletonColumns(const MatrixView& basis_matrix,
-                                       RowPermutation* row_perm,
-                                       ColumnPermutation* col_perm, int* index);
+  void ExtractResidualSingletonColumns(
+      const CompactSparseMatrixView& basis_matrix, RowPermutation* row_perm,
+      ColumnPermutation* col_perm, int* index);
+
+  // Helper function for determining if a column is a residual singleton column.
+  // If it is, RowIndex* row contains the index of the single residual edge.
+  bool IsResidualSingletonColumn(const ColumnView& column,
+                                 const RowPermutation& row_perm, RowIndex* row);
 
   // Returns the column of the current residual matrix with an index 'col' in
   // the initial matrix. We compute it by solving a linear system with the
@@ -386,7 +392,7 @@ class Markowitz {
   void UpdateResidualMatrix(RowIndex pivot_row, ColIndex pivot_col);
 
   // Pointer to the matrix to factorize.
-  MatrixView const* basis_matrix_;
+  CompactSparseMatrixView const* basis_matrix_;
 
   // These matrices are transformed during the algorithm into the final L and U
   // matrices modulo some row and column permutations. Note that the columns of

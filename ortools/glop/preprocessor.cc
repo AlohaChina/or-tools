@@ -13,6 +13,8 @@
 
 #include "ortools/glop/preprocessor.h"
 
+#include <limits>
+
 #include "absl/strings/str_format.h"
 #include "ortools/glop/revised_simplex.h"
 #include "ortools/glop/status.h"
@@ -27,7 +29,7 @@ namespace glop {
 using ::util::Reverse;
 
 namespace {
-// Returns an interval as an human readable std::string for debugging.
+// Returns an interval as an human readable string for debugging.
 std::string IntervalString(Fractional lb, Fractional ub) {
   return absl::StrFormat("[%g, %g]", lb, ub);
 }
@@ -44,7 +46,8 @@ Preprocessor::Preprocessor(const GlopParameters* parameters)
     : status_(ProblemStatus::INIT),
       parameters_(*parameters),
       in_mip_context_(false),
-      time_limit_(TimeLimit::Infinite().get()) {}
+      infinite_time_limit_(TimeLimit::Infinite()),
+      time_limit_(infinite_time_limit_.get()) {}
 Preprocessor::~Preprocessor() {}
 
 // --------------------------------------------------------
@@ -709,9 +712,9 @@ void ProportionalColumnPreprocessor::RecoverSolution(
     const ColIndex representative = merged_columns_[col];
     if (representative != kInvalidCol) {
       if (IsFinite(distance_to_bound[representative])) {
-        // If the distance if finite, then each variable is set to its
+        // If the distance is finite, then each variable is set to its
         // corresponding bound (the one from which the distance is computed) and
-        // is then changed by has much as possible until the distance is zero.
+        // is then changed by as much as possible until the distance is zero.
         const Fractional bound_factor =
             column_factors_[col] / column_factors_[representative];
         const Fractional scaled_distance =
@@ -1159,8 +1162,19 @@ bool ForcingAndImpliedFreeConstraintPreprocessor::Run(LinearProgram* lp) {
         if (is_forcing_down[e.row()]) {
           const Fractional candidate = e.coefficient() < 0.0 ? lower : upper;
           if (is_forced && candidate != target_bound) {
+            // The bounds are really close, so we fix to the bound with
+            // the lowest magnitude. As of 2019/11/19, this is "better" than
+            // fixing to the mid-point, because at postsolve, we always put
+            // non-basic variables to their exact bounds (so, with mid-point
+            // there would be a difference of epsilon/2 between the inner
+            // solution and the postsolved one, which might cause issues).
+            if (IsSmallerWithinPreprocessorZeroTolerance(upper, lower)) {
+              target_bound = std::abs(lower) < std::abs(upper) ? lower : upper;
+              continue;
+            }
             VLOG(1) << "A variable is forced in both directions! bounds: ["
-                    << lower << ", " << upper << "]. coeff:" << e.coefficient();
+                    << std::fixed << std::setprecision(10) << lower << ", "
+                    << upper << "]. coeff:" << e.coefficient();
             status_ = ProblemStatus::PRIMAL_INFEASIBLE;
             return false;
           }
@@ -1170,8 +1184,15 @@ bool ForcingAndImpliedFreeConstraintPreprocessor::Run(LinearProgram* lp) {
         if (is_forcing_up_[e.row()]) {
           const Fractional candidate = e.coefficient() < 0.0 ? upper : lower;
           if (is_forced && candidate != target_bound) {
+            // The bounds are really close, so we fix to the bound with
+            // the lowest magnitude.
+            if (IsSmallerWithinPreprocessorZeroTolerance(upper, lower)) {
+              target_bound = std::abs(lower) < std::abs(upper) ? lower : upper;
+              continue;
+            }
             VLOG(1) << "A variable is forced in both directions! bounds: ["
-                    << lower << ", " << upper << "]. coeff:" << e.coefficient();
+                    << std::fixed << std::setprecision(10) << lower << ", "
+                    << upper << "]. coeff:" << e.coefficient();
             status_ = ProblemStatus::PRIMAL_INFEASIBLE;
             return false;
           }
@@ -1573,6 +1594,7 @@ bool DoubletonFreeColumnPreprocessor::Run(LinearProgram* lp) {
     // column r.col where the coefficient will be left unchanged.
     r.deleted_row_as_column.AddMultipleToSparseVectorAndIgnoreCommonIndex(
         -r.coeff[MODIFIED] / r.coeff[DELETED], ColToRowIndex(r.col),
+        parameters_.drop_tolerance(),
         transpose->mutable_column(RowToColIndex(r.row[MODIFIED])));
 
     // We also need to correct the objective value of the variables involved in
@@ -1589,9 +1611,7 @@ bool DoubletonFreeColumnPreprocessor::Run(LinearProgram* lp) {
         // the numerical error in the formula above, we have a really low
         // objective instead. The logic is the same as in
         // AddMultipleToSparseVectorAndIgnoreCommonIndex().
-        if (std::abs(new_objective) >
-            std::numeric_limits<Fractional>::epsilon() * 2.0 *
-                std::abs(lp->objective_coefficients()[col])) {
+        if (std::abs(new_objective) > parameters_.drop_tolerance()) {
           lp->SetObjectiveCoefficient(col, new_objective);
         } else {
           lp->SetObjectiveCoefficient(col, 0.0);
@@ -3002,15 +3022,22 @@ bool DoubletonEqualityRowPreprocessor::Run(LinearProgram* lp) {
       break;
     }
     r.column[DELETED].AddMultipleToSparseVectorAndDeleteCommonIndex(
-        substitution_factor, row, lp->GetMutableSparseColumn(r.col[MODIFIED]));
+        substitution_factor, row, parameters_.drop_tolerance(),
+        lp->GetMutableSparseColumn(r.col[MODIFIED]));
 
     // Apply similar operations on the objective coefficients.
     // Note that the offset is being updated by
     // SubtractColumnMultipleFromConstraintBound() below.
-    lp->SetObjectiveCoefficient(
-        r.col[MODIFIED],
-        r.objective_coefficient[MODIFIED] +
-            substitution_factor * r.objective_coefficient[DELETED]);
+    {
+      const Fractional new_objective =
+          r.objective_coefficient[MODIFIED] +
+          substitution_factor * r.objective_coefficient[DELETED];
+      if (std::abs(new_objective) > parameters_.drop_tolerance()) {
+        lp->SetObjectiveCoefficient(r.col[MODIFIED], new_objective);
+      } else {
+        lp->SetObjectiveCoefficient(r.col[MODIFIED], 0.0);
+      }
+    }
 
     // Carry over the constant factor of the substitution as well.
     // TODO(user): rename that method to reflect the fact that it also updates
@@ -3283,11 +3310,10 @@ void DualizerPreprocessor::RecoverSolution(ProblemSolution* solution) const {
     if (solution->constraint_statuses[row] != ConstraintStatus::BASIC) {
       new_variable_statuses[col] = VariableStatus::BASIC;
     } else {
-      // Otherwise, the dual value must be zero, and the variable is at an exact
-      // bound or zero if it is VariableStatus::FREE. Note that this works
-      // because the bounds
-      // are shifted to 0.0 in the presolve!
-      DCHECK_EQ(solution->dual_values[row], 0.0);
+      // Otherwise, the dual value must be zero (if the solution is feasible),
+      // and the variable is at an exact bound or zero if it is
+      // VariableStatus::FREE. Note that this works because the bounds are
+      // shifted to 0.0 in the presolve!
       new_variable_statuses[col] = ComputeVariableStatus(shift, lower, upper);
     }
   }

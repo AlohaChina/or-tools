@@ -36,6 +36,19 @@ class RoutingSearchParameters;
 #include "ortools/util/optional_boolean.pb.h"
 %}
 
+DEFINE_INDEX_TYPE_TYPEDEF(
+    operations_research::RoutingCostClassIndex,
+    operations_research::RoutingModel::CostClassIndex);
+DEFINE_INDEX_TYPE_TYPEDEF(
+    operations_research::RoutingDimensionIndex,
+    operations_research::RoutingModel::DimensionIndex);
+DEFINE_INDEX_TYPE_TYPEDEF(
+    operations_research::RoutingDisjunctionIndex,
+    operations_research::RoutingModel::DisjunctionIndex);
+DEFINE_INDEX_TYPE_TYPEDEF(
+    operations_research::RoutingVehicleClassIndex,
+    operations_research::RoutingModel::VehicleClassIndex);
+
 
 %ignore operations_research::RoutingModel::AddMatrixDimension(
     std::vector<std::vector<int64> > values,
@@ -90,4 +103,5 @@ enum OptionalBoolean {
 }  // namespace operations_research
 
 // TODO(user): Use ignoreall/unignoreall for this one. A lot of work.
+//swiglint: disable include-h-allglobals
 %include "ortools/constraint_solver/routing.h"

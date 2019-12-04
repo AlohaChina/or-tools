@@ -14,14 +14,13 @@
 // This is the C# SWIG wrapper for ../tuple_set.h. See that file.
 // TODO(user): Refactor this file to comply with the SWIG style guide.
 
-%include "ortools/base/base.i"
-
-
 %{
-// TODO(user): See if we really need <vector>.
-#include <vector>
-#include "ortools/base/integral_types.h"
 #include "ortools/util/tuple_set.h"
 %}
 
-%include ortools/util/tuple_set.h
+// Ignored:
+%ignore operations_research::IntTupleSet::RawData;  // no typemap
+
+// TODO(user): Replace with %ignoreall/%unignoreall
+//swiglint: disable include-h-allglobals
+%include "ortools/util/tuple_set.h"

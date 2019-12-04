@@ -287,6 +287,10 @@ class SatSolver {
   // reached or the model was proven UNSAT. Returns IsModelUnsat().
   bool FinishPropagation();
 
+  // Like Backtrack(0) but make sure the propagation is finished and return
+  // false if unsat was detected. This also removes any assumptions level.
+  bool ResetToLevelZero();
+
   // Changes the assumptions level and the current solver assumptions. Returns
   // false if the model is UNSAT or ASSUMPTION_UNSAT, true otherwise.
   bool ResetWithGivenAssumptions(const std::vector<Literal>& assumptions);
@@ -320,13 +324,13 @@ class SatSolver {
     if (num_processed_fixed_variables_ < trail_->Index()) {
       ProcessNewlyFixedVariables();
     }
-    clauses_propagator_.DeleteDetachedClauses();
+    clauses_propagator_->DeleteDetachedClauses();
 
     // Note(user): Putting the binary clauses first help because the presolver
     // currently process the clauses in order.
     binary_implication_graph_->ExtractAllBinaryClauses(out);
-    for (SatClause* clause : clauses_propagator_.AllClausesInCreationOrder()) {
-      if (!clauses_propagator_.IsRemovable(clause)) {
+    for (SatClause* clause : clauses_propagator_->AllClausesInCreationOrder()) {
+      if (!clauses_propagator_->IsRemovable(clause)) {
         out->AddClause(clause->AsSpan());
       }
     }
@@ -375,7 +379,7 @@ class SatSolver {
 
   void SetDratProofHandler(DratProofHandler* drat_proof_handler) {
     drat_proof_handler_ = drat_proof_handler;
-    clauses_propagator_.SetDratProofHandler(drat_proof_handler_);
+    clauses_propagator_->SetDratProofHandler(drat_proof_handler_);
   }
 
   // This function is here to deal with the case where a SAT/CP model is found
@@ -468,10 +472,6 @@ class SatSolver {
   // Sets is_model_unsat_ to true and return false.
   bool SetModelUnsat();
 
-  // Utility function to insert spaces proportional to the search depth.
-  // It is used in the pretty print of the search.
-  std::string Indent() const;
-
   // Returns the decision level of a given variable.
   int DecisionLevel(BooleanVariable var) const {
     return trail_->Info(var).level;
@@ -512,7 +512,7 @@ class SatSolver {
 
   // Add a problem clause. The clause is assumed to be "cleaned", that is no
   // duplicate variables (not strictly required) and not empty.
-  bool AddProblemClauseInternal(const std::vector<Literal>& literals);
+  bool AddProblemClauseInternal(absl::Span<const Literal> literals);
 
   // This is used by all the Add*LinearConstraint() functions. It detects
   // infeasible/trivial constraints or clause constraints and takes the proper
@@ -674,8 +674,8 @@ class SatSolver {
   // Internal propagators. We keep them here because we need more than the
   // SatPropagator interface for them.
   BinaryImplicationGraph* binary_implication_graph_;
-  LiteralWatchers clauses_propagator_;
-  PbConstraints pb_constraints_;
+  LiteralWatchers* clauses_propagator_;
+  PbConstraints* pb_constraints_;
 
   // Ordered list of propagators used by Propagate()/Untrail().
   std::vector<SatPropagator*> propagators_;
@@ -1008,7 +1008,7 @@ inline std::function<void(Model*)> ExcludeCurrentSolutionAndBacktrack() {
   };
 }
 
-// Returns a std::string representation of a SatSolver::Status.
+// Returns a string representation of a SatSolver::Status.
 std::string SatStatusString(SatSolver::Status status);
 inline std::ostream& operator<<(std::ostream& os, SatSolver::Status status) {
   os << SatStatusString(status);

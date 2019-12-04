@@ -16,6 +16,7 @@
 #include <algorithm>
 
 #include "absl/strings/str_format.h"
+#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/util/saturated_arithmetic.h"
 
@@ -134,24 +135,71 @@ Domain Domain::FromIntervals(absl::Span<const ClosedInterval> intervals) {
   return result;
 }
 
+Domain Domain::FromFlatSpanOfIntervals(absl::Span<const int64> flat_intervals) {
+  Domain result;
+  result.intervals_.reserve(flat_intervals.size() / 2);
+  for (int i = 0; i < flat_intervals.size(); i += 2) {
+    result.intervals_.push_back({flat_intervals[i], flat_intervals[i + 1]});
+  }
+  std::sort(result.intervals_.begin(), result.intervals_.end());
+  UnionOfSortedIntervals(&result.intervals_);
+  return result;
+}
+
+Domain Domain::FromFlatIntervals(const std::vector<int64>& flat_intervals) {
+  return FromFlatSpanOfIntervals(absl::MakeSpan(flat_intervals));
+}
+
+Domain Domain::FromVectorIntervals(
+    const std::vector<std::vector<int64>>& intervals) {
+  Domain result;
+  for (const std::vector<int64>& interval : intervals) {
+    if (interval.size() == 1) {
+      result.intervals_.push_back({interval[0], interval[0]});
+    } else {
+      result.intervals_.push_back({interval[0], interval[1]});
+    }
+  }
+  std::sort(result.intervals_.begin(), result.intervals_.end());
+  UnionOfSortedIntervals(&result.intervals_);
+  return result;
+}
+
 bool Domain::IsEmpty() const { return intervals_.empty(); }
 
+bool Domain::IsFixed() const { return Min() == Max(); }
+
+int64 Domain::Size() const {
+  int64 size = 0;
+  for (const ClosedInterval interval : intervals_) {
+    size = operations_research::CapAdd(
+        size, operations_research::CapSub(interval.end, interval.start));
+  }
+  // Because the intervals are closed on both side above, with miss 1 per
+  // interval.
+  size = operations_research::CapAdd(size, intervals_.size());
+  return size;
+}
+
 int64 Domain::Min() const {
-  CHECK(!IsEmpty());
+  DCHECK(!IsEmpty());
   return intervals_.front().start;
 }
 
 int64 Domain::Max() const {
-  CHECK(!IsEmpty());
+  DCHECK(!IsEmpty());
   return intervals_.back().end;
 }
 
-// TODO(user): binary search if size is large?
 bool Domain::Contains(int64 value) const {
-  for (const ClosedInterval& interval : intervals_) {
-    if (interval.start <= value && interval.end >= value) return true;
-  }
-  return false;
+  // Because we only compare by start and there is no duplicate starts, this
+  // should be the next interval after the one that has a chance to contains
+  // value.
+  auto it = std::upper_bound(intervals_.begin(), intervals_.end(),
+                             ClosedInterval(value, value));
+  if (it == intervals_.begin()) return false;
+  --it;
+  return value <= it->end;
 }
 
 bool Domain::IsIncludedIn(const Domain& domain) const {
@@ -170,6 +218,7 @@ bool Domain::IsIncludedIn(const Domain& domain) const {
 Domain Domain::Complement() const {
   Domain result;
   int64 next_start = kint64min;
+  result.intervals_.reserve(intervals_.size() + 1);
   for (const ClosedInterval& interval : intervals_) {
     if (interval.start != kint64min) {
       result.intervals_.push_back({next_start, interval.start - 1});
@@ -184,19 +233,23 @@ Domain Domain::Complement() const {
 
 Domain Domain::Negation() const {
   Domain result = *this;
-  if (intervals_.empty()) return result;
-  std::reverse(result.intervals_.begin(), result.intervals_.end());
-  if (result.intervals_.back().end == kint64min) {
+  result.NegateInPlace();
+  return result;
+}
+
+void Domain::NegateInPlace() {
+  if (intervals_.empty()) return;
+  std::reverse(intervals_.begin(), intervals_.end());
+  if (intervals_.back().end == kint64min) {
     // corner-case
-    result.intervals_.pop_back();
+    intervals_.pop_back();
   }
-  for (ClosedInterval& ref : result.intervals_) {
+  for (ClosedInterval& ref : intervals_) {
     std::swap(ref.start, ref.end);
     ref.start = ref.start == kint64min ? kint64max : -ref.start;
     ref.end = ref.end == kint64min ? kint64max : -ref.end;
   }
-  DCHECK(IntervalsAreSortedAndNonAdjacent(result.intervals_));
-  return result;
+  DCHECK(IntervalsAreSortedAndNonAdjacent(intervals_));
 }
 
 Domain Domain::IntersectionWith(const Domain& domain) const {
@@ -238,11 +291,13 @@ Domain Domain::UnionWith(const Domain& domain) const {
   return result;
 }
 
+// TODO(user): Use a better algorithm.
 Domain Domain::AdditionWith(const Domain& domain) const {
   Domain result;
 
   const auto& a = intervals_;
   const auto& b = domain.intervals_;
+  result.intervals_.reserve(a.size() * b.size());
   for (const ClosedInterval& i : a) {
     for (const ClosedInterval& j : b) {
       result.intervals_.push_back(
@@ -250,34 +305,48 @@ Domain Domain::AdditionWith(const Domain& domain) const {
     }
   }
 
-  std::sort(result.intervals_.begin(), result.intervals_.end());
+  // The sort is not needed if one of the list is of size 1.
+  if (a.size() > 1 && b.size() > 1) {
+    std::sort(result.intervals_.begin(), result.intervals_.end());
+  }
   UnionOfSortedIntervals(&result.intervals_);
   return result;
 }
 
-Domain Domain::MultiplicationBy(int64 coeff, bool* success) const {
-  *success = true;
+Domain Domain::RelaxIfTooComplex() const {
+  if (NumIntervals() > kDomainComplexityLimit) {
+    return Domain(Min(), Max());
+  } else {
+    return *this;
+  }
+}
+
+Domain Domain::MultiplicationBy(int64 coeff, bool* exact) const {
+  if (exact != nullptr) *exact = true;
   if (intervals_.empty() || coeff == 0) return {};
 
-  Domain result;
   const int64 abs_coeff = std::abs(coeff);
-  if (abs_coeff != 1) {
-    if (CapSub(Max(), Min()) <= 1000) {
-      std::vector<int64> individual_values;
-      for (const ClosedInterval& i : intervals_) {
-        for (int v = i.start; v <= i.end; ++v) {
-          individual_values.push_back(CapProd(v, abs_coeff));
-        }
+  const int64 size_if_non_trivial = abs_coeff > 1 ? Size() : 0;
+  if (size_if_non_trivial > kDomainComplexityLimit) {
+    if (exact != nullptr) *exact = false;
+    return ContinuousMultiplicationBy(coeff);
+  }
+
+  Domain result;
+  if (abs_coeff > 1) {
+    result.intervals_.reserve(size_if_non_trivial);
+    for (const ClosedInterval& i : intervals_) {
+      for (int v = i.start; v <= i.end; ++v) {
+        // Because abs_coeff > 1, all new values are disjoint.
+        const int64 new_value = CapProd(v, abs_coeff);
+        result.intervals_.push_back({new_value, new_value});
       }
-      result = Domain::FromValues(individual_values);
-    } else {
-      *success = false;
-      return {};
     }
   } else {
     result = *this;
   }
-  return coeff > 0 ? result : result.Negation();
+  if (coeff < 0) result.NegateInPlace();
+  return result;
 }
 
 Domain Domain::ContinuousMultiplicationBy(int64 coeff) const {
@@ -288,7 +357,27 @@ Domain Domain::ContinuousMultiplicationBy(int64 coeff) const {
     i.end = CapProd(i.end, abs_coeff);
   }
   UnionOfSortedIntervals(&result.intervals_);
-  return coeff > 0 ? result : result.Negation();
+  if (coeff < 0) result.NegateInPlace();
+  return result;
+}
+
+Domain Domain::ContinuousMultiplicationBy(const Domain& domain) const {
+  Domain result;
+  for (const ClosedInterval& i : this->intervals_) {
+    for (const ClosedInterval& j : domain.intervals_) {
+      ClosedInterval new_interval;
+      const int64 a = CapProd(i.start, j.start);
+      const int64 b = CapProd(i.end, j.end);
+      const int64 c = CapProd(i.start, j.end);
+      const int64 d = CapProd(i.end, j.start);
+      new_interval.start = std::min({a, b, c, d});
+      new_interval.end = std::max({a, b, c, d});
+      result.intervals_.push_back(new_interval);
+    }
+  }
+  std::sort(result.intervals_.begin(), result.intervals_.end());
+  UnionOfSortedIntervals(&result.intervals_);
+  return result;
 }
 
 Domain Domain::DivisionBy(int64 coeff) const {
@@ -300,7 +389,8 @@ Domain Domain::DivisionBy(int64 coeff) const {
     i.end = i.end / abs_coeff;
   }
   UnionOfSortedIntervals(&result.intervals_);
-  return coeff > 0 ? result : result.Negation();
+  if (coeff < 0) result.NegateInPlace();
+  return result;
 }
 
 Domain Domain::InverseMultiplicationBy(const int64 coeff) const {
@@ -323,7 +413,69 @@ Domain Domain::InverseMultiplicationBy(const int64 coeff) const {
   result.intervals_.resize(new_size);
   result.intervals_.shrink_to_fit();
   DCHECK(IntervalsAreSortedAndNonAdjacent(result.intervals_));
-  return coeff > 0 ? result : result.Negation();
+  if (coeff < 0) result.NegateInPlace();
+  return result;
+}
+
+// It is a bit difficult to see, but this code is doing the same thing as
+// for all interval in this.UnionWith(implied_domain.Complement())):
+//  - Take the two extreme points (min and max) in interval \inter implied.
+//  - Append to result [min, max] if these points exists.
+Domain Domain::SimplifyUsingImpliedDomain(const Domain& implied_domain) const {
+  Domain result;
+  if (implied_domain.IsEmpty()) return result;
+
+  int i = 0;
+  int64 min_point;
+  int64 max_point;
+  bool started = false;
+  for (const ClosedInterval interval : intervals_) {
+    // We only "close" the new result interval if it cannot be extended by
+    // implied_domain.Complement(). The only extension possible look like:
+    // interval_:    ...]   [....
+    // implied :   ...]       [...  i  ...]
+    if (started && implied_domain.intervals_[i].start < interval.start) {
+      result.intervals_.push_back({min_point, max_point});
+      started = false;
+    }
+
+    // Find the two extreme points in interval \inter implied_domain.
+    // Always stop the loop at the first interval with and end strictly greater
+    // that interval.end.
+    for (; i < implied_domain.intervals_.size(); ++i) {
+      const ClosedInterval current = implied_domain.intervals_[i];
+      if (current.end >= interval.start && current.start <= interval.end) {
+        // Current and interval have a non-empty intersection.
+        const int64 inter_max = std::min(interval.end, current.end);
+        if (!started) {
+          started = true;
+          min_point = std::max(interval.start, current.start);
+          max_point = inter_max;
+        } else {
+          // No need to update the min_point here, and the new inter_max must
+          // necessarily be > old one.
+          DCHECK_GE(inter_max, max_point);
+          max_point = inter_max;
+        }
+      }
+      if (current.end > interval.end) break;
+    }
+    if (i == implied_domain.intervals_.size()) break;
+  }
+  if (started) {
+    result.intervals_.push_back({min_point, max_point});
+  }
+  DCHECK(IntervalsAreSortedAndNonAdjacent(result.intervals_));
+  return result;
+}
+
+std::vector<int64> Domain::FlattenedIntervals() const {
+  std::vector<int64> result;
+  for (const ClosedInterval& interval : intervals_) {
+    result.push_back(interval.start);
+    result.push_back(interval.end);
+  }
+  return result;
 }
 
 bool Domain::operator<(const Domain& other) const {
@@ -342,6 +494,24 @@ bool Domain::operator<(const Domain& other) const {
 }
 
 std::string Domain::ToString() const { return IntervalsAsString(intervals_); }
+
+int64 SumOfKMinValueInDomain(const Domain& domain, int k) {
+  int64 current_sum = 0.0;
+  int current_index = 0;
+  for (const ClosedInterval interval : domain) {
+    if (current_index >= k) break;
+    for (int v(interval.start); v <= interval.end; ++v) {
+      if (current_index >= k) break;
+      current_index++;
+      current_sum += v;
+    }
+  }
+  return current_sum;
+}
+
+int64 SumOfKMaxValueInDomain(const Domain& domain, int k) {
+  return -SumOfKMinValueInDomain(domain.Negation(), k);
+}
 
 SortedDisjointIntervalList::SortedDisjointIntervalList() {}
 

@@ -1,5 +1,5 @@
 // Renames all yy to orfz_ in public functions.
-%name-prefix "orfz_"
+%define api.prefix {orfz_}
 
 // List the parameter of the lexer.
 %lex-param {void* scanner}
@@ -54,12 +54,12 @@ using operations_research::fz::VariableRefOrValue;
 using operations_research::fz::VariableRefOrValueArray;
 }  // code
 
-%error-verbose
+%define parse.error verbose
 
 // Type declarations.
 
 // The lexer, defined in the ./flazinc.lex file, does the low-level parsing
-// of std::string tokens and converts each of them them into a YACC token. A YACC
+// of string tokens and converts each of them them into a YACC token. A YACC
 // token has a type (VAR, IVALUE, const_literal) and optionally a value,
 // stored in a token-specific field of a LexerInfo instance dedicated to this
 // token. Eg. "26" is converted into an YACC token of type IVALUE, with value
@@ -72,7 +72,7 @@ using operations_research::fz::VariableRefOrValueArray;
 //
 // Here are the terminal, valueless tokens. See the .lex file to see where
 // they come from.
-%token ARRAY BOOL CONSTRAINT FLOAT INT MAXIMIZE MINIMIZE OF
+%token ARRAY TOKEN_BOOL CONSTRAINT TOKEN_FLOAT TOKEN_INT MAXIMIZE MINIMIZE OF
 %token PREDICATE SATISFY SET SOLVE VAR DOTDOT COLONCOLON
 // Here are the terminal, value-carrying tokens, preceded by the name of the
 // LexerInfo field in which their value is stored (eg. the value of a IVALUE
@@ -136,8 +136,8 @@ predicate_array_argument:
 | IVALUE DOTDOT IVALUE
 
 predicate_ints:
-  INT ',' predicate_ints
-| INT
+  TOKEN_INT ',' predicate_ints
+| TOKEN_INT
 
 //---------------------------------------------------------------------------
 // Parsing variables or constants (named objects).
@@ -399,8 +399,8 @@ var_or_value:
 }
 
 int_domain:
-  BOOL { $$ = Domain::Boolean(); }
-| INT { $$ = Domain::AllInt64(); }
+  TOKEN_BOOL { $$ = Domain::Boolean(); }
+| TOKEN_INT { $$ = Domain::AllInt64(); }
 | IVALUE DOTDOT IVALUE { $$ = Domain::Interval($1, $3); }
 | '{' integers '}' {
   CHECK($2 != nullptr);
@@ -409,8 +409,8 @@ int_domain:
 }
 
 set_domain:
-  SET OF BOOL { $$ = Domain::SetOfBoolean(); }
-| SET OF INT { $$ = Domain::SetOfAllInt64(); }
+  SET OF TOKEN_BOOL { $$ = Domain::SetOfBoolean(); }
+| SET OF TOKEN_INT { $$ = Domain::SetOfAllInt64(); }
 | SET OF IVALUE DOTDOT IVALUE { $$ = Domain::SetOfInterval($3, $5); }
 | SET OF '{' integers '}' {
   CHECK($4 != nullptr);
@@ -419,7 +419,7 @@ set_domain:
 }
 
 float_domain:
-  FLOAT { $$ = Domain::AllInt64(); }  // TODO(lperron): implement floats.
+  TOKEN_FLOAT { $$ = Domain::AllInt64(); }  // TODO(lperron): implement floats.
 | DVALUE DOTDOT DVALUE {
   const int64 lb = ConvertAsIntegerOrDie($1);
   const int64 ub = ConvertAsIntegerOrDie($3);

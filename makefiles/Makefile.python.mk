@@ -25,6 +25,10 @@ else # UNIX
 PYTHON_COMPILER ?= python$(UNIX_PYTHON_VER)
 PYTHON_EXECUTABLE := $(shell which $(PYTHON_COMPILER))
 SET_PYTHONPATH = PYTHONPATH=$(OR_TOOLS_PYTHONPATH)
+GEN_MYPY := $(shell $(WHICH) protoc-gen-mypy)
+ifneq ($(GEN_MYPY),)
+MYPY_OUT=--mypy_out=$(GEN_PATH)
+endif
 endif
 
 # Detect python3
@@ -36,6 +40,23 @@ PYTHON3_CFLAGS := -DPY3
 endif
 endif
 
+# Set -doxygen tag for swig if possible
+ifeq ("$(SWIG_VERSION)","4.0.0")
+  ifneq ("$(PYTHON_EXECUTABLE)","")
+    ifeq ($(shell "$(PYTHON_EXECUTABLE)" -c "from sys import version_info as v; print (str(v[0]))"),3)
+SWIG_PY_DOXYGEN = -doxygen
+    endif
+  endif
+endif
+
+ifeq ("$(SWIG_VERSION)","4.0.1")
+  ifneq ("$(PYTHON_EXECUTABLE)","")
+    ifeq ($(shell "$(PYTHON_EXECUTABLE)" -c "from sys import version_info as v; print (str(v[0]))"),3)
+SWIG_PY_DOXYGEN = -doxygen
+    endif
+  endif
+endif
+
 # All libraries and dependecies
 PYALGORITHMS_LIBS = $(LIB_DIR)/_pywrapknapsack_solver.$(SWIG_PYTHON_LIB_SUFFIX)
 PYGRAPH_LIBS = $(LIB_DIR)/_pywrapgraph.$(SWIG_PYTHON_LIB_SUFFIX)
@@ -43,6 +64,7 @@ PYCP_LIBS = $(LIB_DIR)/_pywrapcp.$(SWIG_PYTHON_LIB_SUFFIX)
 PYLP_LIBS = $(LIB_DIR)/_pywraplp.$(SWIG_PYTHON_LIB_SUFFIX)
 PYSAT_LIBS = $(LIB_DIR)/_pywrapsat.$(SWIG_PYTHON_LIB_SUFFIX)
 PYDATA_LIBS = $(LIB_DIR)/_pywraprcpsp.$(SWIG_PYTHON_LIB_SUFFIX)
+PYSORTED_INTERVAL_LIST_LIBS = $(LIB_DIR)/_sorted_interval_list.$(SWIG_PYTHON_LIB_SUFFIX)
 PYTHON_OR_TOOLS_LIBS = \
  $(GEN_DIR)/ortools/__init__.py \
  $(PYALGORITHMS_LIBS) \
@@ -50,7 +72,8 @@ PYTHON_OR_TOOLS_LIBS = \
  $(PYCP_LIBS) \
  $(PYLP_LIBS) \
  $(PYSAT_LIBS) \
- $(PYDATA_LIBS)
+ $(PYDATA_LIBS) \
+ $(PYSORTED_INTERVAL_LIST_LIBS)
 
 # Main target
 .PHONY: python # Build Python OR-Tools.
@@ -108,7 +131,7 @@ $(GEN_DIR)/ortools/algorithms/pywrapknapsack_solver.py: \
  $(SRC_DIR)/ortools/algorithms/knapsack_solver.h \
  $(PROTOBUF_PYTHON_DESC) \
  | $(GEN_DIR)/ortools/algorithms
-	$(SWIG_BINARY) $(SWIG_INC) -I$(INC_DIR) -c++ -python $(SWIG_PYTHON3_FLAG) \
+	$(SWIG_BINARY) $(SWIG_INC) -I$(INC_DIR) -c++ -python $(SWIG_PYTHON3_FLAG) $(SWIG_PY_DOXYGEN) \
  -o $(GEN_PATH)$Sortools$Salgorithms$Sknapsack_solver_python_wrap.cc \
  -module pywrapknapsack_solver \
  ortools$Salgorithms$Spython$Sknapsack_solver.i
@@ -194,28 +217,28 @@ $(GEN_DIR)/ortools/constraint_solver/search_limit_pb2.py: \
  $(SRC_DIR)/ortools/constraint_solver/search_limit.proto \
  $(PROTOBUF_PYTHON_DESC) \
  | $(GEN_DIR)/ortools/constraint_solver
-	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) \
+	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) $(MYPY_OUT) \
  $(SRC_DIR)$Sortools$Sconstraint_solver$Ssearch_limit.proto
 
 $(GEN_DIR)/ortools/constraint_solver/assignment_pb2.py: \
  $(SRC_DIR)/ortools/constraint_solver/assignment.proto \
  $(PROTOBUF_PYTHON_DESC) \
  | $(GEN_DIR)/ortools/constraint_solver
-	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) \
+	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) $(MYPY_OUT) \
  $(SRC_DIR)$Sortools$Sconstraint_solver$Sassignment.proto
 
 $(GEN_DIR)/ortools/constraint_solver/solver_parameters_pb2.py: \
  $(SRC_DIR)/ortools/constraint_solver/solver_parameters.proto \
  $(PROTOBUF_PYTHON_DESC) \
  | $(GEN_DIR)/ortools/constraint_solver
-	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) \
+	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) $(MYPY_OUT) \
  $(SRC_DIR)$Sortools$Sconstraint_solver$Ssolver_parameters.proto
 
 $(GEN_DIR)/ortools/constraint_solver/routing_enums_pb2.py: \
  $(SRC_DIR)/ortools/constraint_solver/routing_enums.proto \
  $(PROTOBUF_PYTHON_DESC) \
  | $(GEN_DIR)/ortools/constraint_solver
-	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) \
+	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) $(MYPY_OUT) \
  $(SRC_DIR)$Sortools$Sconstraint_solver$Srouting_enums.proto
 
 $(GEN_DIR)/ortools/constraint_solver/routing_parameters_pb2.py: \
@@ -224,7 +247,7 @@ $(GEN_DIR)/ortools/constraint_solver/routing_parameters_pb2.py: \
  $(GEN_DIR)/ortools/constraint_solver/routing_enums_pb2.py \
  $(PROTOBUF_PYTHON_DESC) \
  | $(GEN_DIR)/ortools/constraint_solver
-	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) \
+	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) $(MYPY_OUT) \
  $(SRC_DIR)$Sortools$Sconstraint_solver$Srouting_parameters.proto
 
 $(GEN_DIR)/ortools/constraint_solver/pywrapcp.py: \
@@ -244,7 +267,7 @@ $(GEN_DIR)/ortools/constraint_solver/pywrapcp.py: \
  $(CP_LIB_OBJS) \
  $(PROTOBUF_PYTHON_DESC) \
  | $(GEN_DIR)/ortools/constraint_solver
-	$(SWIG_BINARY) $(SWIG_INC) -I$(INC_DIR) -c++ -python $(SWIG_PYTHON3_FLAG) \
+	$(SWIG_BINARY) $(SWIG_INC) -I$(INC_DIR) -c++ -python -nofastunpack $(SWIG_PYTHON3_FLAG) $(SWIG_PY_DOXYGEN) \
  -o $(GEN_PATH)$Sortools$Sconstraint_solver$Sconstraint_solver_python_wrap.cc \
  -module pywrapcp \
  $(SRC_DIR)/ortools/constraint_solver$Spython$Srouting.i
@@ -292,7 +315,7 @@ $(GEN_DIR)/ortools/util/optional_boolean_pb2.py: \
  $(SRC_DIR)/ortools/util/optional_boolean.proto \
  $(PROTOBUF_PYTHON_DESC) \
  | $(GEN_DIR)/ortools/util
-	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) \
+	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) $(MYPY_OUT) \
  $(SRC_DIR)/ortools/util/optional_boolean.proto
 
 $(GEN_DIR)/ortools/linear_solver/linear_solver_pb2.py: \
@@ -300,7 +323,7 @@ $(GEN_DIR)/ortools/linear_solver/linear_solver_pb2.py: \
  $(GEN_DIR)/ortools/util/optional_boolean_pb2.py \
  $(PROTOBUF_PYTHON_DESC) \
  | $(GEN_DIR)/ortools/linear_solver
-	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) \
+	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) $(MYPY_OUT) \
  $(SRC_DIR)/ortools/linear_solver/linear_solver.proto
 
 $(GEN_DIR)/ortools/linear_solver/pywraplp.py: \
@@ -312,7 +335,7 @@ $(GEN_DIR)/ortools/linear_solver/pywraplp.py: \
  $(GEN_DIR)/ortools/linear_solver/linear_solver_pb2.py \
  $(PROTOBUF_PYTHON_DESC) \
  | $(GEN_DIR)/ortools/linear_solver
-	$(SWIG_BINARY) $(SWIG_INC) -I$(INC_DIR) -c++ -python $(SWIG_PYTHON3_FLAG) \
+	$(SWIG_BINARY) $(SWIG_INC) -I$(INC_DIR) -c++ -python $(SWIG_PYTHON3_FLAG) $(SWIG_PY_DOXYGEN) \
  -o $(GEN_PATH)$Sortools$Slinear_solver$Slinear_solver_python_wrap.cc \
  -module pywraplp \
  $(SRC_DIR)/ortools/linear_solver$Spython$Slinear_solver.i
@@ -352,14 +375,14 @@ $(GEN_DIR)/ortools/sat/cp_model_pb2.py: \
  $(SRC_DIR)/ortools/sat/cp_model.proto \
  $(PROTOBUF_PYTHON_DESC) \
  | $(GEN_DIR)/ortools/sat
-	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) \
+	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) $(MYPY_OUT) \
  $(SRC_DIR)/ortools/sat/cp_model.proto
 
 $(GEN_DIR)/ortools/sat/sat_parameters_pb2.py: \
  $(SRC_DIR)/ortools/sat/sat_parameters.proto \
  $(PROTOBUF_PYTHON_DESC) \
  | $(GEN_DIR)/ortools/sat
-	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) \
+	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) $(MYPY_OUT) \
  $(SRC_DIR)/ortools/sat/sat_parameters.proto
 
 $(GEN_DIR)/ortools/sat/pywrapsat.py: \
@@ -411,7 +434,7 @@ $(GEN_DIR)/ortools/data/rcpsp_pb2.py: \
  $(SRC_DIR)/ortools/data/rcpsp.proto \
  $(PROTOBUF_PYTHON_DESC) \
  | $(GEN_DIR)/ortools/data
-	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) \
+	$(PROTOC) --proto_path=$(INC_DIR) --python_out=$(GEN_PATH) $(MYPY_OUT) \
  $(SRC_DIR)/ortools/data/rcpsp.proto
 
 $(GEN_DIR)/ortools/data/pywraprcpsp.py: \
@@ -453,6 +476,51 @@ else
 	cp $(PYDATA_LIBS) $(GEN_PATH)/ortools/data
 endif
 
+# sorted_interval_list
+ifeq ($(PLATFORM),MACOSX)
+PYSORTED_INTERVAL_LIST_LDFLAGS = -install_name @rpath/_sorted_interval_list.$(SWIG_PYTHON_LIB_SUFFIX) #
+endif
+
+$(GEN_DIR)/ortools/util/sorted_interval_list.py: \
+ $(SRC_DIR)/ortools/util/sorted_interval_list.h \
+ $(SRC_DIR)/ortools/base/base.i \
+ $(SRC_DIR)/ortools/util/python/vector.i \
+ $(SRC_DIR)/ortools/util/python/sorted_interval_list.i \
+ $(UTIL_DEPS) \
+ | $(GEN_DIR)/ortools/util
+	$(SWIG_BINARY) $(SWIG_INC) -I$(INC_DIR) -c++ -python $(SWIG_PY_DOXYGEN) $(SWIG_PYTHON3_FLAG) \
+ -o $(GEN_PATH)$Sortools$Sutil$Ssorted_interval_list_python_wrap.cc \
+ -module sorted_interval_list \
+ $(SRC_DIR)$Sortools$Sutil$Spython$Ssorted_interval_list.i
+	$(SED) -i -e 's/< long long >/< int64 >/g' \
+ $(GEN_PATH)$Sortools$Sutil$Ssorted_interval_list_python_wrap.cc
+
+$(GEN_DIR)/ortools/util/sorted_interval_list_python_wrap.cc: \
+ $(GEN_DIR)/ortools/util/sorted_interval_list.py
+
+$(OBJ_DIR)/swig/sorted_interval_list_python_wrap.$O: \
+ $(GEN_DIR)/ortools/util/sorted_interval_list_python_wrap.cc \
+ $(UTIL_DEPS) \
+ | $(OBJ_DIR)/swig
+	$(CCC) $(CFLAGS) $(PYTHON_INC) $(PYTHON3_CFLAGS) \
+ -c $(GEN_PATH)$Sortools$Sutil$Ssorted_interval_list_python_wrap.cc \
+ $(OBJ_OUT)$(OBJ_DIR)$Sswig$Ssorted_interval_list_python_wrap.$O
+
+$(PYSORTED_INTERVAL_LIST_LIBS): $(OBJ_DIR)/swig/sorted_interval_list_python_wrap.$O $(OR_TOOLS_LIBS)
+	$(DYNAMIC_LD) \
+ $(PYSORTED_INTERVAL_LIST_LDFLAGS) \
+ $(LD_OUT)$(LIB_DIR)$S_sorted_interval_list.$(SWIG_PYTHON_LIB_SUFFIX) \
+ $(OBJ_DIR)$Sswig$Ssorted_interval_list_python_wrap.$O \
+ $(OR_TOOLS_LNK) \
+ $(SYS_LNK) \
+ $(PYTHON_LNK) \
+ $(PYTHON_LDFLAGS)
+ifeq ($(SYSTEM),win)
+	copy $(LIB_DIR)$S_sorted_interval_list.$(SWIG_PYTHON_LIB_SUFFIX) $(GEN_PATH)\\ortools\\util\\_sorted_interval_list.pyd
+else
+	cp $(PYSORTED_INTERVAL_LIST_LIBS) $(GEN_PATH)/ortools/util
+endif
+
 #######################
 ##  Python SOURCE  ##
 #######################
@@ -480,6 +548,9 @@ rpy_%: $(CONTRIB_EX_DIR)/%.py $(PYTHON_OR_TOOLS_LIBS) FORCE
 rpy_%: ortools/algorithms/samples/%.py $(PYTHON_OR_TOOLS_LIBS) FORCE
 	$(SET_PYTHONPATH) "$(PYTHON_EXECUTABLE)" ortools$Salgorithms$Ssamples$S$*.py $(ARGS)
 
+rpy_%: ortools/constraint_solver/samples/%.py $(PYTHON_OR_TOOLS_LIBS) FORCE
+	$(SET_PYTHONPATH) "$(PYTHON_EXECUTABLE)" ortools$Sconstraint_solver$Ssamples$S$*.py $(ARGS)
+
 rpy_%: ortools/graph/samples/%.py $(PYTHON_OR_TOOLS_LIBS) FORCE
 	$(SET_PYTHONPATH) "$(PYTHON_EXECUTABLE)" ortools$Sgraph$Ssamples$S$*.py $(ARGS)
 
@@ -491,7 +562,35 @@ rpy_%: ortools/sat/samples/%.py $(PYTHON_OR_TOOLS_LIBS) FORCE
 
 .PHONY: test_python_algorithms_samples # Run all Python Algorithms Samples (located in ortools/algorithms/samples)
 test_python_algorithms_samples: \
+ rpy_knapsack \
  rpy_simple_knapsack_program
+
+.PHONY: test_python_constraint_solver_samples # Run all Python CP Samples (located in ortools/constraint_solver/samples)
+test_python_constraint_solver_samples: \
+ rpy_simple_cp_program \
+ rpy_simple_routing_program \
+ rpy_tsp \
+ rpy_tsp_cities \
+ rpy_tsp_circuit_board \
+ rpy_tsp_distance_matrix \
+ rpy_vrp \
+ rpy_vrp_capacity \
+ rpy_vrp_drop_nodes \
+ rpy_vrp_global_span \
+ rpy_vrp_initial_routes \
+ rpy_vrp_pickup_delivery \
+ rpy_vrp_pickup_delivery_fifo \
+ rpy_vrp_pickup_delivery_lifo \
+ rpy_vrp_resources \
+ rpy_vrp_starts_ends \
+ rpy_vrp_time_windows \
+ rpy_vrp_with_time_limit \
+ \
+ rpy_vrpgs \
+ rpy_cvrp \
+ rpy_cvrp_reload \
+ rpy_cvrptw \
+ rpy_cvrptw_break
 
 .PHONY: test_python_graph_samples # Run all Python Graph Samples (located in ortools/graph/samples)
 test_python_graph_samples: \
@@ -511,6 +610,7 @@ test_python_sat_samples: \
  rpy_bool_or_sample_sat \
  rpy_channeling_sample_sat \
  rpy_cp_is_fun_sat \
+ rpy_earliness_tardiness_cost_sample_sat \
  rpy_interval_sample_sat \
  rpy_literal_sample_sat \
  rpy_minimal_jobshop_sat \
@@ -524,41 +624,41 @@ test_python_sat_samples: \
  rpy_search_for_all_solutions_sample_sat \
  rpy_solve_and_print_intermediate_solutions_sample_sat \
  rpy_solve_with_time_limit_sample_sat \
+ rpy_step_function_sample_sat \
  rpy_stop_after_n_solutions_sample_sat
 
 .PHONY: check_python_pimpl
 check_python_pimpl: \
  test_python_algorithms_samples \
+ test_python_constraint_solver_samples \
  test_python_graph_samples \
  test_python_linear_solver_samples \
  test_python_sat_samples \
  \
- rpy_linear_programming \
  rpy_stigler_diet
-# rpy_constraint_programming_sat \
 # rpy_rabbits_pheasants_cp \
-# rpy_rabbits_pheasants_sat \
 # rpy_cryptarithmetic_cp \
 # rpy_cryptarithmetic_sat \
 # rpy_nqueens_cp \
 # rpy_nqueens_sat \
 # rpy_integer_programming \
-# rpy_tsp \
-# rpy_vrp \
-# rpy_cvrp \
-# rpy_cvrptw \
-# rpy_knapsack \
 # rpy_max_flow \
 # rpy_min_cost_flow \
 # rpy_assignment \
 # rpy_nurses_cp \
 # rpy_job_shop_cp \
-# rpy_job_shop_sat
 
 .PHONY: test_python_tests # Run all Python Tests (located in examples/tests)
 test_python_tests: \
+ rpy_lp_test \
+ rpy_cp_model_test \
+ rpy_sorted_interval_list_test \
  rpy_test_cp_api \
- rpy_test_lp_api
+ rpy_test_routing_api \
+ rpy_test_lp_api \
+ rpy_pywrapcp_test \
+ rpy_pywraplp_test \
+ rpy_pywraprouting_test
 
 .PHONY: test_python_contrib # Run all Python Contrib (located in examples/python and examples/contrib)
 test_python_contrib: \
@@ -700,9 +800,6 @@ test_python_python: \
  rpy_balance_group_sat \
  rpy_chemical_balance_lp \
  rpy_chemical_balance_sat \
- rpy_constraint_programming_cp \
- rpy_cvrp \
- rpy_cvrptw \
  rpy_flexible_job_shop_sat \
  rpy_gate_scheduling_sat \
  rpy_golomb8 \
@@ -710,12 +807,13 @@ test_python_python: \
  rpy_integer_programming \
  rpy_jobshop_ft06_distance_sat \
  rpy_jobshop_ft06_sat \
- rpy_knapsack \
+ rpy_jobshop_with_maintenance_sat \
  rpy_linear_assignment_api \
  rpy_linear_programming \
  rpy_magic_sequence_distribute \
  rpy_nqueens_sat \
  rpy_pyflow_example \
+ rpy_reallocate_sat \
  rpy_rcpsp_sat \
  rpy_single_machine_scheduling_with_setup_release_due_dates_sat \
  rpy_steel_mill_slab_sat \
@@ -723,10 +821,7 @@ test_python_python: \
  rpy_sudoku_sat \
  rpy_tasks_and_workers_assignment_sat \
  rpy_transit_time \
- rpy_tsp \
  rpy_vendor_scheduling_sat \
- rpy_vrpgs \
- rpy_vrp \
  rpy_wedding_optimal_chart_sat \
  rpy_worker_schedule_sat \
  rpy_zebra_sat
@@ -798,8 +893,8 @@ clean_python:
 	-$(DEL) ortools$Sutil$S*.pyc
 	-$(DELREC) ortools$Sutil$S__pycache__
 	-$(DEL) $(GEN_PATH)$Sortools$Sutil$S*_python_wrap.*
-	-$(DEL) $(GEN_PATH)$Sortools$Sutil$S_pywrap*
-	-$(DEL) $(LIB_DIR)$S_pywrap*.$(SWIG_PYTHON_LIB_SUFFIX)
+	-$(DEL) $(GEN_PATH)$Sortools$Sutil$S_*
+	-$(DEL) $(LIB_DIR)$S_*.$(SWIG_PYTHON_LIB_SUFFIX)
 	-$(DEL) $(OBJ_DIR)$Sswig$S*python_wrap.$O
 	-$(DELREC) temp_python*
 
@@ -854,18 +949,18 @@ ifeq ($(UNIX_GFLAGS_DIR),$(OR_TOOLS_TOP)/dependencies/install)
 endif
 ifeq ($(UNIX_GLOG_DIR),$(OR_TOOLS_TOP)/dependencies/install)
   ifeq ($(PLATFORM),MACOSX)
-    PYTHON_SETUP_DEPS += , 'libglog.0.3.5.$L'
+    PYTHON_SETUP_DEPS += , 'libglog.0.4.0.$L'
   endif
   ifeq ($(PLATFORM),LINUX)
-    PYTHON_SETUP_DEPS += , 'libglog.$L.0.3.5'
+    PYTHON_SETUP_DEPS += , 'libglog.$L.0.4.0'
   endif
 endif
 ifeq ($(UNIX_PROTOBUF_DIR),$(OR_TOOLS_TOP)/dependencies/install)
   ifeq ($(PLATFORM),MACOSX)
-    PYTHON_SETUP_DEPS += , 'libprotobuf.3.6.1.$L'
+    PYTHON_SETUP_DEPS += , 'libprotobuf.3.7.1.0.$L'
   endif
   ifeq ($(PLATFORM),LINUX)
-    PYTHON_SETUP_DEPS += , 'libprotobuf.$L.3.6.1'
+    PYTHON_SETUP_DEPS += , 'libprotobuf.$L.3.7.1.0'
   endif
 endif
 ifeq ($(UNIX_ABSL_DIR),$(OR_TOOLS_TOP)/dependencies/install)
@@ -941,7 +1036,7 @@ $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools/algorithms: $(PYALGORITHMS_LIBS) | $(PY
 	-$(DELREC) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Salgorithms
 	-$(MKDIR) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Salgorithms
 	$(TOUCH) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Salgorithms$S__init__.py
-	$(COPY) $(GEN_PATH)$Sortools$Salgorithms$Spywrapknapsack_solver.py $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Salgorithms
+	$(COPY) $(GEN_PATH)$Sortools$Salgorithms$Spywrapknapsack_solver.py* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Salgorithms
 	$(COPY) $(GEN_PATH)$Sortools$Salgorithms$S_pywrapknapsack_solver.* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Salgorithms
 
 $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools/graph: $(PYGRAPH_LIBS) | $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools
@@ -955,7 +1050,7 @@ $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools/constraint_solver: $(PYCP_LIBS) | $(PYP
 	-$(DELREC) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sconstraint_solver
 	-$(MKDIR) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sconstraint_solver
 	$(TOUCH) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sconstraint_solver$S__init__.py
-	$(COPY) $(GEN_PATH)$Sortools$Sconstraint_solver$S*.py $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sconstraint_solver
+	$(COPY) $(GEN_PATH)$Sortools$Sconstraint_solver$S*.py* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sconstraint_solver
 	$(COPY) $(GEN_PATH)$Sortools$Sconstraint_solver$S_pywrapcp.* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sconstraint_solver
 
 $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools/linear_solver: $(PYLP_LIBS) | $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools
@@ -963,7 +1058,7 @@ $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools/linear_solver: $(PYLP_LIBS) | $(PYPI_AR
 	-$(MKDIR) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Slinear_solver
 	$(TOUCH) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Slinear_solver$S__init__.py
 	$(COPY) ortools$Slinear_solver$S*.py $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Slinear_solver
-	$(COPY) $(GEN_PATH)$Sortools$Slinear_solver$S*.py $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Slinear_solver
+	$(COPY) $(GEN_PATH)$Sortools$Slinear_solver$S*.py* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Slinear_solver
 	$(COPY) $(GEN_PATH)$Sortools$Slinear_solver$S_pywraplp.* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Slinear_solver
 
 $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools/sat: $(PYSAT_LIBS) | $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools
@@ -972,7 +1067,7 @@ $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools/sat: $(PYSAT_LIBS) | $(PYPI_ARCHIVE_TEM
 	$(TOUCH) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Ssat$S__init__.py
 	$(COPY) ortools$Ssat$Sdoc$S*.md $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Ssat
 	$(COPY) ortools$Ssat$S*.py $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Ssat
-	$(COPY) $(GEN_PATH)$Sortools$Ssat$S*.py $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Ssat
+	$(COPY) $(GEN_PATH)$Sortools$Ssat$S*.py* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Ssat
 	$(COPY) $(GEN_PATH)$Sortools$Ssat$S_pywrapsat.* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Ssat
 	-$(MKDIR) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Ssat$Spython
 	$(COPY) ortools$Ssat$Spython$S*.py $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Ssat$Spython
@@ -981,48 +1076,51 @@ $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools/data: $(PYDATA_LIBS) | $(PYPI_ARCHIVE_T
 	-$(DELREC) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sdata
 	-$(MKDIR) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sdata
 	$(TOUCH) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sdata$S__init__.py
-	$(COPY) $(GEN_PATH)$Sortools$Sdata$S*.py $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sdata
+	$(COPY) $(GEN_PATH)$Sortools$Sdata$S*.py* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sdata
 	$(COPY) $(GEN_PATH)$Sortools$Sdata$S_pywraprcpsp.* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sdata
 
-$(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools/util: | $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools
+$(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools/util: $(PYSORTED_INTERVAL_LIST_LIBS) | $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools
 	-$(DELREC) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sutil
 	-$(MKDIR) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sutil
 	$(TOUCH) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sutil$S__init__.py
-	$(COPY) $(GEN_PATH)$Sortools$Sutil$S*.py $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sutil
+	$(COPY) $(GEN_PATH)$Sortools$Sutil$S*.py* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sutil
+	$(COPY) $(GEN_PATH)$Sortools$Sutil$S_sorted_interval_list.* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$Sutil
 
 $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools/.libs: | $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools
 	-$(DELREC) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
 	-$(MKDIR) $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
 
 ifneq ($(PYTHON_EXECUTABLE),)
-.PHONY: pypi_archive # Create Python "ortools" wheel package
-pypi_archive: $(OR_TOOLS_LIBS) python $(MISSING_PYPI_FILES)
+.PHONY: python_package # Create Python "ortools" wheel package
+.PHONY: pypi_archive
+python_package pypi_archive: $(OR_TOOLS_LIBS) python $(MISSING_PYPI_FILES)
 ifneq ($(SYSTEM),win)
 	cp $(OR_TOOLS_LIBS) $(PYPI_ARCHIVE_TEMP_DIR)/ortools/ortools/.libs
 endif
 ifeq ($(UNIX_GFLAGS_DIR),$(OR_TOOLS_TOP)/dependencies/install)
-	$(COPYREC) dependencies$Sinstall$Slib$Slibgflags* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
+	$(COPYREC) dependencies$Sinstall$Slib*$Slibgflags* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
 endif
 ifeq ($(UNIX_GLOG_DIR),$(OR_TOOLS_TOP)/dependencies/install)
-	$(COPYREC) dependencies$Sinstall$Slib$Slibglog* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
+	$(COPYREC) dependencies$Sinstall$Slib*$Slibglog* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
 endif
 ifeq ($(UNIX_PROTOBUF_DIR),$(OR_TOOLS_TOP)/dependencies/install)
-	$(COPYREC) $(subst /,$S,$(_PROTOBUF_LIB_DIR))$Slibproto* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
+	$(COPYREC) $(subst /,$S,$(_PROTOBUF_LIB_DIR))libproto* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
 endif
 ifeq ($(UNIX_ABSL_DIR),$(OR_TOOLS_TOP)/dependencies/install)
-	$(COPYREC) dependencies$Sinstall$Slib$Slibabsl_* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
+	-$(COPYREC) $(subst /,$S,$(_ABSL_LIB_DIR))$Slibabsl* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
 endif
 ifeq ($(UNIX_CBC_DIR),$(OR_TOOLS_TOP)/dependencies/install)
-	$(COPYREC) dependencies$Sinstall$Slib$SlibCbc* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
-	$(COPYREC) dependencies$Sinstall$Slib$SlibCgl* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
-	$(COPYREC) dependencies$Sinstall$Slib$SlibClp* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
-	$(COPYREC) dependencies$Sinstall$Slib$SlibOsi* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
-	$(COPYREC) dependencies$Sinstall$Slib$SlibCoinUtils* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
+	$(COPYREC) dependencies$Sinstall$Slib*$SlibCbc* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
+	$(COPYREC) dependencies$Sinstall$Slib*$SlibCgl* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
+	$(COPYREC) dependencies$Sinstall$Slib*$SlibClp* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
+	$(COPYREC) dependencies$Sinstall$Slib*$SlibOsi* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
+	$(COPYREC) dependencies$Sinstall$Slib*$SlibCoinUtils* $(PYPI_ARCHIVE_TEMP_DIR)$Sortools$Sortools$S.libs
 endif
 	cd $(PYPI_ARCHIVE_TEMP_DIR)$Sortools && "$(PYTHON_EXECUTABLE)" setup.py bdist_wheel
 
-.PHONY: test_pypi_archive # Test Python "ortools" wheel package
-test_pypi_archive: pypi_archive
+.PHONY: test_python_package # Test Python "ortools" wheel package
+.PHONY: test_pypi_archive
+test_python_package test_pypi_archive: python_package
 	-$(DELREC) $(PYPI_ARCHIVE_TEMP_DIR)$Svenv
 	$(PYTHON_EXECUTABLE) -m virtualenv $(PYPI_ARCHIVE_TEMP_DIR)$Svenv
 	$(COPY) test.py.in $(PYPI_ARCHIVE_TEMP_DIR)$Svenv$Stest.py
@@ -1109,7 +1207,9 @@ endif
 	@echo SWIG_INC = $(SWIG_INC)
 	@echo SWIG_PYTHON3_FLAG = $(SWIG_PYTHON3_FLAG)
 	@echo SWIG_PYTHON_LIB_SUFFIX = $(SWIG_PYTHON_LIB_SUFFIX)
+	@echo SWIG_PY_DOXYGEN = $(SWIG_PY_DOXYGEN)
 	@echo SET_PYTHONPATH = "$(SET_PYTHONPATH)"
+	@echo MYPY_OUT = "$(MYPY_OUT)"
 ifeq ($(SYSTEM),win)
 	@echo off & echo(
 else

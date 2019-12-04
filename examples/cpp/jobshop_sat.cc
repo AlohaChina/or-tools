@@ -11,9 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <math.h>
-
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include "absl/strings/match.h"
@@ -53,14 +52,13 @@ int64 ComputeHorizon(const JsspInputProblem& problem) {
   int64 max_earliest_start = 0;
   for (const Job& job : problem.jobs()) {
     if (job.has_latest_end()) {
-      max_latest_end =
-          std::max<int64>(max_latest_end, job.latest_end().value());
+      max_latest_end = std::max(max_latest_end, job.latest_end().value());
     } else {
       max_latest_end = kint64max;
     }
     if (job.has_earliest_start()) {
       max_earliest_start =
-          std::max<int64>(max_earliest_start, job.earliest_start().value());
+          std::max(max_earliest_start, job.earliest_start().value());
     }
     for (const Task& task : job.tasks()) {
       int64 max_duration = 0;
@@ -79,14 +77,14 @@ int64 ComputeHorizon(const JsspInputProblem& problem) {
     for (int i = 0; i < num_jobs; ++i) {
       int64 max_transition = 0;
       for (int j = 0; j < num_jobs; ++j) {
-        max_transition = std::max<int64>(
-            max_transition, matrix.transition_time(i * num_jobs + j));
+        max_transition =
+            std::max(max_transition, matrix.transition_time(i * num_jobs + j));
       }
       sum_of_transitions += max_transition;
     }
   }
-  return std::min<int64>(max_latest_end, sum_of_durations + sum_of_transitions +
-                                             max_earliest_start);
+  return std::min(max_latest_end,
+                  sum_of_durations + sum_of_transitions + max_earliest_start);
   // TODO(user): Uses transitions.
 }
 
@@ -139,8 +137,8 @@ void Solve(const JsspInputProblem& problem) {
       int64 min_duration = task.duration(0);
       int64 max_duration = task.duration(0);
       for (int i = 1; i < num_alternatives; ++i) {
-        min_duration = std::min<int64>(min_duration, task.duration(i));
-        max_duration = std::max<int64>(max_duration, task.duration(i));
+        min_duration = std::min(min_duration, task.duration(i));
+        max_duration = std::max(max_duration, task.duration(i));
       }
       const IntVar start = cp_model.NewIntVar(Domain(hard_start, hard_end));
       const IntVar duration =
@@ -340,8 +338,13 @@ void Solve(const JsspInputProblem& problem) {
   Model model;
   model.Add(NewSatParameters(FLAGS_params));
 
-  const CpSolverResponse response = SolveWithModel(cp_model, &model);
+  const CpSolverResponse response = SolveCpModel(cp_model.Build(), &model);
   LOG(INFO) << CpSolverResponseStats(response);
+
+  // Abort if we don't have any solution.
+  if (response.status() != CpSolverStatus::OPTIMAL &&
+      response.status() != CpSolverStatus::FEASIBLE)
+    return;
 
   // Check cost, recompute it from scratch.
   int64 final_cost = 0;
@@ -366,8 +369,11 @@ void Solve(const JsspInputProblem& problem) {
       final_cost += (end - late_due_date) * late_penalty;
     }
   }
+
   // TODO(user): Support alternative cost in check.
-  CHECK_EQ(response.objective_value(), final_cost);
+  const double tolerance = 1e-6;
+  CHECK_GE(response.objective_value(), final_cost - tolerance);
+  CHECK_LE(response.objective_value(), final_cost + tolerance);
 }
 
 }  // namespace sat

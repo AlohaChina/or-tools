@@ -29,29 +29,23 @@
 %define DEFINE_INDEX_TYPE(IndexT)
 
 // Convert IndexT to (32-bit signed) integers.
-%typemap(jni) IndexT "jint"
-%typemap(jtype) IndexT "int"
 %typemap(jstype) IndexT "int"
 %typemap(javain) IndexT "$javainput"
-%typemap(javaout) IndexT {
-  return $jnicall;
-}
+%typemap(jtype) IndexT "int"
+%typemap(jni) IndexT "jint"
 %typemap(in) IndexT {
   $1 = IndexT($input);
 }
 %typemap(out) IndexT {
-  $result = (jlong)$1.value();
+  $result = (jint)$1.value();
+}
+%typemap(javaout) IndexT {
+  return $jnicall;
 }
 
 // Convert std::vector<IndexT> to/from int arrays.
 VECTOR_AS_JAVA_ARRAY(IndexT, int, Int);
-
-// TODO(user): define a macro in util/java/vector.i for std::vector<std::vector<>> and
-// reuse it here.
-%typemap(jni) const std::vector<std::vector<IndexT> >& "jobjectArray"
-%typemap(jtype) const std::vector<std::vector<IndexT> >& "int[][]"
-%typemap(jstype) const std::vector<std::vector<IndexT> >& "int[][]"
-%typemap(javain) const std::vector<std::vector<IndexT> >& "$javainput"
+MATRIX_AS_JAVA_ARRAY(IndexT, int, Int);
 
 %enddef  // DEFINE_INDEX_TYPE
 

@@ -95,7 +95,7 @@ ifdef UNIX_GLPK_DIR
 endif
 # This is needed to find scip include files.
 ifdef UNIX_SCIP_DIR
-  SCIP_INC = -I$(UNIX_SCIP_DIR)/include -DUSE_SCIP
+  SCIP_INC = -I$(UNIX_SCIP_DIR)/include -DUSE_SCIP -DNO_CONFIG_HEADER
   SCIP_SWIG = $(SCIP_INC)
 endif
 ifdef UNIX_GUROBI_DIR
@@ -127,12 +127,7 @@ ifeq ($(PLATFORM),LINUX)
   GLPK_LNK = $(UNIX_GLPK_DIR)/lib/libglpk.a
   endif
   ifdef UNIX_SCIP_DIR
-    SCIP_ARCH = linux.x86_64.gnu.opt
-    SCIP_LNK = \
- $(UNIX_SCIP_DIR)/lib/libscip.a \
- $(UNIX_SCIP_DIR)/lib/libscipopt.a \
- $(UNIX_SCIP_DIR)/lib/libsoplex.a \
- $(UNIX_SCIP_DIR)/lib/libsoplex.$(SCIP_ARCH).a
+    SCIP_LNK = -Wl,-rpath,$(UNIX_SCIP_DIR)/lib -L$(UNIX_SCIP_DIR)/lib -lscip
   endif
   ifdef UNIX_GUROBI_DIR
     ifeq ($(PTRLENGTH),64)
@@ -198,12 +193,7 @@ ifeq ($(PLATFORM),MACOSX)
     GLPK_LNK = $(UNIX_GLPK_DIR)/lib/libglpk.a
   endif
   ifdef UNIX_SCIP_DIR
-    SCIP_ARCH = darwin.x86_64.gnu.opt
-    SCIP_LNK = \
- -force_load $(UNIX_SCIP_DIR)/lib/libscip.a \
- $(UNIX_SCIP_DIR)/lib/libscipopt.a \
- $(UNIX_SCIP_DIR)/lib/libsoplex.a \
- $(UNIX_SCIP_DIR)/lib/libsoplex.$(SCIP_ARCH).a
+    SCIP_LNK = -force_load $(UNIX_SCIP_DIR)/lib/libscipopt.a $(UNIX_SCIP_DIR)/lib/libsoplex-pic.a
   endif
   ifdef UNIX_GUROBI_DIR
     GUROBI_LNK = \
@@ -233,6 +223,7 @@ ifeq ($(PLATFORM),MACOSX)
   PRE_LIB = -L$(OR_ROOT)lib -l
   POST_LIB =
   LINK_FLAGS = \
+ -framework CoreFoundation \
  -Wl,-rpath,@loader_path \
  -Wl,-rpath,@loader_path/../lib \
  -Wl,-rpath,@loader_path/../dependencies/install/lib
@@ -251,7 +242,7 @@ DEPENDENCIES_INC = -I$(INC_DIR) -I$(GEN_DIR) \
  -Wno-deprecated -DUSE_GLOP -DUSE_BOP \
  $(GLPK_INC) $(SCIP_INC) $(GUROBI_INC) $(CPLEX_INC)
 
-CFLAGS = $(DEBUG) $(DEPENDENCIES_INC)
+CFLAGS = $(DEBUG) $(DEPENDENCIES_INC) -DOR_TOOLS_MAJOR=$(OR_TOOLS_MAJOR) -DOR_TOOLS_MINOR=$(OR_TOOLS_MINOR)
 JNIFLAGS = $(JNIDEBUG) $(DEPENDENCIES_INC)
 LDFLAGS += $(ZLIB_LNK) $(SYS_LNK) $(LINK_FLAGS)
 DEPENDENCIES_LNK = $(GLPK_LNK) $(SCIP_LNK) $(GUROBI_LNK) $(CPLEX_LNK)

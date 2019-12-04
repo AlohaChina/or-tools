@@ -25,8 +25,6 @@
 #include "ortools/bop/integral_solver.h"
 #include "ortools/linear_solver/linear_solver.h"
 
-#if defined(USE_BOP)
-
 namespace operations_research {
 namespace {
 
@@ -158,7 +156,8 @@ MPSolver::ResultStatus BopInterface::Solve(const MPSolverParameters& param) {
                    << "Filling the missing positions with zeros...";
     }
     initial_solution.assign(glop::ColIndex(num_vars), glop::Fractional(0.0));
-    for (const std::pair<MPVariable*, double>& p : solver_->solution_hint_) {
+    for (const std::pair<const MPVariable*, double>& p :
+         solver_->solution_hint_) {
       initial_solution[glop::ColIndex(p.first->index())] =
           glop::Fractional(p.second);
     }
@@ -395,4 +394,3 @@ MPSolverInterface* BuildBopInterface(MPSolver* const solver) {
 }
 
 }  // namespace operations_research
-#endif  //  #if defined(USE_BOP)

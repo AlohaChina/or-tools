@@ -28,12 +28,14 @@
 //
 // TODO(user): test all the APIs that are currently marked as 'untested'.
 
+%include "ortools/base/base.i"
+
+%include "std_string.i"
 %include "stdint.i"
 
-%include "ortools/base/base.i"
-%import "ortools/util/python/vector.i"
-
 %include "ortools/util/python/proto.i"
+
+%import "ortools/util/python/vector.i"
 
 // We need to forward-declare the proto here, so that the PROTO_* macros
 // involving them work correctly. The order matters very much: this declaration
@@ -46,14 +48,12 @@ class MPSolutionResponse;
 
 %{
 #include "ortools/linear_solver/linear_solver.h"
+#include "ortools/linear_solver/model_exporter.h"
+#include "ortools/linear_solver/model_exporter_swig_helper.h"
+#include "ortools/linear_solver/model_validator.h"
 %}
 
-typedef int64_t int64;
-typedef uint64_t uint64;
-
-namespace operations_research {
-
-%pythoncode {
+%pythoncode %{
 import numbers
 from ortools.linear_solver.linear_solver_natural_api import OFFSET_KEY
 from ortools.linear_solver.linear_solver_natural_api import inf
@@ -64,9 +64,25 @@ from ortools.linear_solver.linear_solver_natural_api import SumArray
 from ortools.linear_solver.linear_solver_natural_api import SumCst
 from ortools.linear_solver.linear_solver_natural_api import LinearConstraint
 from ortools.linear_solver.linear_solver_natural_api import VariableExpr
-}  // %pythoncode
 
-%extend MPVariable {
+# Remove the documentation of some functions.
+# See https://pdoc3.github.io/pdoc/doc/pdoc/#overriding-docstrings-with-
+__pdoc__ = {}
+__pdoc__['Solver_infinity'] = False
+__pdoc__['Solver_Infinity'] = False
+__pdoc__['Solver_SolveWithProto'] = False
+__pdoc__['Solver_SupportsProblemType'] = False
+__pdoc__['setup_variable_operator'] = False
+__pdoc__['Constraint.thisown'] = False
+__pdoc__['Constraint.thisown'] = False
+__pdoc__['MPSolverParameters.thisown'] = False
+__pdoc__['ModelExportOptions.thisown'] = False
+__pdoc__['Objective.thisown'] = False
+__pdoc__['Solver.thisown'] = False
+__pdoc__['Variable.thisown'] = False
+%}  // %pythoncode
+
+%extend operations_research::MPVariable {
   std::string __str__() {
     return $self->name();
   }
@@ -80,27 +96,59 @@ from ortools.linear_solver.linear_solver_natural_api import VariableExpr
   }  // %pythoncode
 }
 
-%extend MPSolver {
-  // Change a (bool, std::string*) outputs to a python std::string (empty if bool=false).
-  std::string ExportModelAsLpFormat(bool obfuscated) {
-    std::string output;
-    if (!$self->ExportModelAsLpFormat(obfuscated, &output)) return "";
-    return output;
-  }
-  std::string ExportModelAsMpsFormat(bool fixed_format, bool obfuscated) {
-    std::string output;
-    if (!$self->ExportModelAsMpsFormat(fixed_format, obfuscated, &output)) {
-      return "";
-    }
-    return output;
-  }
-
+%extend operations_research::MPSolver {
   // Change the API of LoadModelFromProto() to simply return the error message:
   // it will always be empty iff the model was valid.
-  std::string LoadModelFromProto(const MPModelProto& input_model) {
+  std::string LoadModelFromProto(const operations_research::MPModelProto& input_model) {
     std::string error_message;
     $self->LoadModelFromProto(input_model, &error_message);
     return error_message;
+  }
+
+  std::string ExportModelAsLpFormat(bool obfuscated) {
+    operations_research::MPModelExportOptions options;
+    options.obfuscate = obfuscated;
+    operations_research::MPModelProto model;
+    $self->ExportModelToProto(&model);
+    return ExportModelAsLpFormat(model, options).value_or("");
+  }
+
+  std::string ExportModelAsMpsFormat(bool fixed_format, bool obfuscated) {
+    operations_research::MPModelExportOptions options;
+    options.obfuscate = obfuscated;
+    operations_research::MPModelProto model;
+    $self->ExportModelToProto(&model);
+    return ExportModelAsMpsFormat(model, options).value_or("");
+  }
+
+  /// Set a hint for solution.
+  ///
+  /// If a feasible or almost-feasible solution to the problem is already known,
+  /// it may be helpful to pass it to the solver so that it can be used. A
+  /// solver that supports this feature will try to use this information to
+  /// create its initial feasible solution.
+  ///
+  /// Note that it may not always be faster to give a hint like this to the
+  /// solver. There is also no guarantee that the solver will use this hint or
+  /// try to return a solution "close" to this assignment in case of multiple
+  /// optimal solutions.
+  void SetHint(const std::vector<operations_research::MPVariable*>& variables,
+               const std::vector<double>& values) {
+    if (variables.size() != values.size()) {
+      LOG(FATAL) << "Different number of variables and values when setting "
+                 << "hint.";
+    }
+    std::vector<std::pair<const operations_research::MPVariable*, double> >
+        hint(variables.size());
+    for (int i = 0; i < variables.size(); ++i) {
+      hint[i] = std::make_pair(variables[i], values[i]);
+    }
+    $self->SetHint(hint);
+  }
+
+  /// Sets the number of threads to be used by the solver.
+  bool SetNumThreads(int num_theads) {
+    return $self->SetNumThreads(num_theads).ok();
   }
 
   %pythoncode {
@@ -144,11 +192,9 @@ from ortools.linear_solver.linear_solver_natural_api import VariableExpr
         for v, c, in list(coeffs.items()):
           objective.SetCoefficient(v, float(c))
   }  // %pythoncode
-}
 
-%extend MPSolver {
 // Catch runtime exceptions in class methods
-%exception MPSolver {
+%exception operations_research::MPSolver {
     try {
       $action
     } catch ( std::runtime_error& e ) {
@@ -156,13 +202,14 @@ from ortools.linear_solver.linear_solver_natural_api import VariableExpr
     }
   }
 
+
   static double Infinity() { return operations_research::MPSolver::infinity(); }
   void SetTimeLimit(int64 x) { $self->set_time_limit(x); }
   int64 WallTime() const { return $self->wall_time(); }
   int64 Iterations() const { return $self->iterations(); }
-}  // extend MPSolver
+}  // extend operations_research::MPSolver
 
-%extend MPVariable {
+%extend operations_research::MPVariable {
   double SolutionValue() const { return $self->solution_value(); }
   bool Integer() const { return $self->integer(); }
   double Lb() const { return $self->lb(); }
@@ -170,21 +217,34 @@ from ortools.linear_solver.linear_solver_natural_api import VariableExpr
   void SetLb(double x) { $self->SetLB(x); }
   void SetUb(double x) { $self->SetUB(x); }
   double ReducedCost() const { return $self->reduced_cost(); }
-}  // extend MPVariable
+}  // extend operations_research::MPVariable
 
-%extend MPConstraint {
+%extend operations_research::MPConstraint {
   double Lb() const { return $self->lb(); }
   double Ub() const { return $self->ub(); }
   void SetLb(double x) { $self->SetLB(x); }
   void SetUb(double x) { $self->SetUB(x); }
   double DualValue() const { return $self->dual_value(); }
-}  // extend MPConstraint
+}  // extend operations_research::MPConstraint
 
-%extend MPObjective {
+%extend operations_research::MPObjective {
   double Offset() const { return $self->offset();}
-}  // extend MPObjective
-}  // namespace operations_research
+}  // extend operations_research::MPObjective
 
+PY_PROTO_TYPEMAP(ortools.linear_solver.linear_solver_pb2,
+                 MPModelProto,
+                 operations_research::MPModelProto);
+
+PY_PROTO_TYPEMAP(ortools.linear_solver.linear_solver_pb2,
+                 MPSolutionResponse,
+                 operations_research::MPSolutionResponse);
+
+// Actual conversions. This also includes the conversion to std::vector<Class>.
+PY_CONVERT_HELPER_PTR(MPConstraint);
+PY_CONVERT(MPConstraint);
+
+PY_CONVERT_HELPER_PTR(MPVariable);
+PY_CONVERT(MPVariable);
 
 %ignoreall
 
@@ -212,6 +272,8 @@ from ortools.linear_solver.linear_solver_natural_api import VariableExpr
 %unignore operations_research::MPSolver::GUROBI_MIXED_INTEGER_PROGRAMMING;
 %unignore operations_research::MPSolver::CPLEX_LINEAR_PROGRAMMING;
 %unignore operations_research::MPSolver::CPLEX_MIXED_INTEGER_PROGRAMMING;
+%unignore operations_research::MPSolver::XPRESS_LINEAR_PROGRAMMING;
+%unignore operations_research::MPSolver::XPRESS_MIXED_INTEGER_PROGRAMMING;
 
 
 // Expose the MPSolver::ResultStatus enum.
@@ -242,14 +304,22 @@ from ortools.linear_solver.linear_solver_natural_api import VariableExpr
 %unignore operations_research::MPSolver::infinity;
 %unignore operations_research::MPSolver::set_time_limit;  // No unit test
 
+// Proto-based API of the MPSolver. Use is encouraged.
+%unignore operations_research::MPSolver::SolveWithProto;
+%unignore operations_research::MPSolver::ExportModelToProto;
+%unignore operations_research::MPSolver::FillSolutionResponseProto;
+// LoadModelFromProto() is also visible: it's overridden by an %extend, above.
+%unignore operations_research::MPSolver::LoadSolutionFromProto;  // No test
 
 // Expose some of the more advanced MPSolver API.
 %unignore operations_research::MPSolver::InterruptSolve;
 %unignore operations_research::MPSolver::SupportsProblemType;  // No unit test
 %unignore operations_research::MPSolver::wall_time;  // No unit test
 %unignore operations_research::MPSolver::Clear;  // No unit test
-%unignore operations_research::MPSolver::NumVariables;
+%unignore operations_research::MPSolver::constraints;
+%unignore operations_research::MPSolver::variables;
 %unignore operations_research::MPSolver::NumConstraints;
+%unignore operations_research::MPSolver::NumVariables;
 %unignore operations_research::MPSolver::EnableOutput;  // No unit test
 %unignore operations_research::MPSolver::SuppressOutput;  // No unit test
 %rename (LookupConstraint)
@@ -257,6 +327,8 @@ from ortools.linear_solver.linear_solver_natural_api import VariableExpr
 %rename (LookupVariable) operations_research::MPSolver::LookupVariableOrNull;
 %unignore operations_research::MPSolver::SetSolverSpecificParametersAsString;
 %unignore operations_research::MPSolver::NextSolution;
+// %unignore operations_research::MPSolver::ExportModelAsLpFormat;
+// %unignore operations_research::MPSolver::ExportModelAsMpsFormat;
 
 // Expose very advanced parts of the MPSolver API. For expert users only.
 %unignore operations_research::MPSolver::ComputeConstraintActivities;
@@ -270,10 +342,15 @@ from ortools.linear_solver.linear_solver_natural_api import VariableExpr
 %unignore operations_research::MPSolver::FIXED_VALUE;  // No unit test
 %unignore operations_research::MPSolver::BASIC;
 
+// MPVariable: writer API.
+%unignore operations_research::MPVariable::SetLb;
+%unignore operations_research::MPVariable::SetUb;
+%unignore operations_research::MPVariable::SetBounds;
+
 // MPVariable: reader API.
 %unignore operations_research::MPVariable::solution_value;
-%unignore operations_research::MPVariable::lb;  // No unit test
-%unignore operations_research::MPVariable::ub;  // No unit test
+%unignore operations_research::MPVariable::lb;
+%unignore operations_research::MPVariable::ub;
 %unignore operations_research::MPVariable::integer;  // No unit test
 %unignore operations_research::MPVariable::name;  // No unit test
 %unignore operations_research::MPVariable::index;  // No unit test
@@ -282,8 +359,8 @@ from ortools.linear_solver.linear_solver_natural_api import VariableExpr
 
 // MPConstraint: writer API.
 %unignore operations_research::MPConstraint::SetCoefficient;
-%unignore operations_research::MPConstraint::SetLB;
-%unignore operations_research::MPConstraint::SetUB;
+%unignore operations_research::MPConstraint::SetLb;
+%unignore operations_research::MPConstraint::SetUb;
 %unignore operations_research::MPConstraint::SetBounds;
 %unignore operations_research::MPConstraint::set_is_lazy;
 
@@ -311,6 +388,7 @@ from ortools.linear_solver.linear_solver_natural_api import VariableExpr
 %unignore operations_research::MPObjective::minimization;
 %unignore operations_research::MPObjective::maximization;
 %unignore operations_research::MPObjective::offset;
+%unignore operations_research::MPObjective::Offset;
 %unignore operations_research::MPObjective::BestBound;
 
 // MPSolverParameters API. For expert users only.
@@ -365,7 +443,23 @@ from ortools.linear_solver.linear_solver_natural_api import VariableExpr
 %unignore operations_research::MPSolverParameters::SCALING_OFF;
 %unignore operations_research::MPSolverParameters::SCALING_ON;
 
+// Expose the model exporters.
+%rename (ModelExportOptions) operations_research::MPModelExportOptions;
+%rename (ModelExportOptions) operations_research::MPModelExportOptions::MPModelExportOptions;
+%rename (ExportModelAsLpFormat) operations_research::ExportModelAsLpFormatReturnString;
+%rename (ExportModelAsMpsFormat) operations_research::ExportModelAsMpsFormatReturnString;
+
+// Expose the model validator.
+%rename (FindErrorInModelProto) operations_research::FindErrorInMPModelProto;
+
 %include "ortools/linear_solver/linear_solver.h"
+%include "ortools/linear_solver/model_exporter.h"
+%include "ortools/linear_solver/model_exporter_swig_helper.h"
+
+namespace operations_research {
+  std::string FindErrorInMPModelProto(
+      const operations_research::MPModelProto& input_model);
+}  // namespace operations_research
 
 %unignoreall
 

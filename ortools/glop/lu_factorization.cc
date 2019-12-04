@@ -12,6 +12,10 @@
 // limitations under the License.
 
 #include "ortools/glop/lu_factorization.h"
+
+#include <cstddef>
+
+#include "ortools/lp_data/lp_types.h"
 #include "ortools/lp_data/lp_utils.h"
 
 namespace operations_research {
@@ -26,10 +30,10 @@ LuFactorization::LuFactorization()
 
 void LuFactorization::Clear() {
   SCOPED_TIME_STAT(&stats_);
-  lower_.Reset(RowIndex(0));
-  upper_.Reset(RowIndex(0));
-  transpose_upper_.Reset(RowIndex(0));
-  transpose_lower_.Reset(RowIndex(0));
+  lower_.Reset(RowIndex(0), ColIndex(0));
+  upper_.Reset(RowIndex(0), ColIndex(0));
+  transpose_upper_.Reset(RowIndex(0), ColIndex(0));
+  transpose_lower_.Reset(RowIndex(0), ColIndex(0));
   is_identity_factorization_ = true;
   col_perm_.clear();
   row_perm_.clear();
@@ -37,15 +41,16 @@ void LuFactorization::Clear() {
   inverse_col_perm_.clear();
 }
 
-Status LuFactorization::ComputeFactorization(const MatrixView& matrix) {
+Status LuFactorization::ComputeFactorization(
+    const CompactSparseMatrixView& compact_matrix) {
   SCOPED_TIME_STAT(&stats_);
   Clear();
-  if (matrix.num_rows().value() != matrix.num_cols().value()) {
+  if (compact_matrix.num_rows().value() != compact_matrix.num_cols().value()) {
     GLOP_RETURN_AND_LOG_ERROR(Status::ERROR_LU, "Not a square matrix!!");
   }
 
-  GLOP_RETURN_IF_ERROR(
-      markowitz_.ComputeLU(matrix, &row_perm_, &col_perm_, &lower_, &upper_));
+  GLOP_RETURN_IF_ERROR(markowitz_.ComputeLU(compact_matrix, &row_perm_,
+                                            &col_perm_, &lower_, &upper_));
   inverse_col_perm_.PopulateFromInverse(col_perm_);
   inverse_row_perm_.PopulateFromInverse(row_perm_);
   ComputeTransposeUpper();
@@ -53,10 +58,10 @@ Status LuFactorization::ComputeFactorization(const MatrixView& matrix) {
 
   is_identity_factorization_ = false;
   IF_STATS_ENABLED({
-    stats_.lu_fill_in.Add(GetFillInPercentage(matrix));
+    stats_.lu_fill_in.Add(GetFillInPercentage(compact_matrix));
     stats_.basis_num_entries.Add(matrix.num_entries().value());
   });
-  DCHECK(CheckFactorization(matrix, Fractional(1e-6)));
+  DCHECK(CheckFactorization(compact_matrix, Fractional(1e-6)));
   return Status::OK();
 }
 
@@ -78,7 +83,7 @@ void LuFactorization::LeftSolve(DenseRow* y) const {
   DenseColumn* const x = reinterpret_cast<DenseColumn*>(y);
   ApplyInversePermutation(inverse_col_perm_, *x, &dense_column_scratchpad_);
   upper_.TransposeUpperSolve(&dense_column_scratchpad_);
-  lower_.TransposeLowerSolve(&dense_column_scratchpad_, nullptr);
+  lower_.TransposeLowerSolve(&dense_column_scratchpad_);
   ApplyInversePermutation(row_perm_, dense_column_scratchpad_, x);
 }
 
@@ -102,7 +107,7 @@ Fractional ComputeSquaredNormAndResetToZero(
 }
 }  // namespace
 
-Fractional LuFactorization::RightSolveSquaredNorm(const SparseColumn& a) const {
+Fractional LuFactorization::RightSolveSquaredNorm(const ColumnView& a) const {
   SCOPED_TIME_STAT(&stats_);
   if (is_identity_factorization_) return SquaredNorm(a);
 
@@ -177,27 +182,22 @@ bool AreEqualWithPermutation(const DenseColumn& a, const DenseColumn& b,
 }  // namespace
 
 void LuFactorization::RightSolveLWithPermutedInput(const DenseColumn& a,
-                                                   DenseColumn* x) const {
+                                                   ScatteredColumn* x) const {
   SCOPED_TIME_STAT(&stats_);
   if (!is_identity_factorization_) {
-    DCHECK(AreEqualWithPermutation(a, *x, row_perm_));
-    lower_.LowerSolve(x);
+    DCHECK(AreEqualWithPermutation(a, x->values, row_perm_));
+    lower_.ComputeRowsToConsiderInSortedOrder(&x->non_zeros);
+    if (x->non_zeros.empty()) {
+      lower_.LowerSolve(&x->values);
+    } else {
+      lower_.HyperSparseSolve(&x->values, &x->non_zeros);
+    }
   }
 }
 
-void LuFactorization::RightSolveLForSparseColumn(const SparseColumn& b,
-                                                 ScatteredColumn* x) const {
-  SCOPED_TIME_STAT(&stats_);
-  DCHECK(IsAllZero(x->values));
-  x->non_zeros.clear();
-  if (is_identity_factorization_) {
-    for (const SparseColumn::Entry e : b) {
-      (*x)[e.row()] = e.coefficient();
-      x->non_zeros.push_back(e.row());
-    }
-    return;
-  }
-
+template <typename Column>
+void LuFactorization::RightSolveLInternal(const Column& b,
+                                          ScatteredColumn* x) const {
   // This code is equivalent to
   //    b.PermutedCopyToDenseVector(row_perm_, num_rows, x);
   // but it also computes the first column index which does not correspond to an
@@ -205,7 +205,7 @@ void LuFactorization::RightSolveLForSparseColumn(const SparseColumn& b,
   // of b.
   ColIndex first_column_to_consider(RowToColIndex(x->values.size()));
   const ColIndex limit = lower_.GetFirstNonIdentityColumn();
-  for (const SparseColumn::Entry e : b) {
+  for (const auto e : b) {
     const RowIndex permuted_row = row_perm_[e.row()];
     (*x)[permuted_row] = e.coefficient();
     x->non_zeros.push_back(permuted_row);
@@ -229,6 +229,22 @@ void LuFactorization::RightSolveLForSparseColumn(const SparseColumn& b,
   }
 }
 
+void LuFactorization::RightSolveLForColumnView(const ColumnView& b,
+                                               ScatteredColumn* x) const {
+  SCOPED_TIME_STAT(&stats_);
+  DCHECK(IsAllZero(x->values));
+  x->non_zeros.clear();
+  if (is_identity_factorization_) {
+    for (const ColumnView::Entry e : b) {
+      (*x)[e.row()] = e.coefficient();
+      x->non_zeros.push_back(e.row());
+    }
+    return;
+  }
+
+  RightSolveLInternal(b, x);
+}
+
 void LuFactorization::RightSolveLWithNonZeros(ScatteredColumn* x) const {
   if (is_identity_factorization_) return;
   if (x->non_zeros.empty()) {
@@ -248,9 +264,6 @@ void LuFactorization::RightSolveLWithNonZeros(ScatteredColumn* x) const {
   }
 }
 
-// TODO(user): This code is almost the same a RightSolveLForSparseColumn()
-// except that the API to iterate on the input is different. Find a way to
-// deduplicate the code.
 void LuFactorization::RightSolveLForScatteredColumn(const ScatteredColumn& b,
                                                     ScatteredColumn* x) const {
   SCOPED_TIME_STAT(&stats_);
@@ -267,34 +280,7 @@ void LuFactorization::RightSolveLForScatteredColumn(const ScatteredColumn& b,
     return RightSolveLWithNonZeros(x);
   }
 
-  // This code is equivalent to
-  //    b.PermutedCopyToDenseVector(row_perm_, num_rows, x);
-  // but it also computes the first column index which does not correspond to an
-  // identity column of lower_ thus exploiting a bit the hyper-sparsity of b.
-  ColIndex first_column_to_consider(RowToColIndex(x->values.size()));
-  const ColIndex limit = lower_.GetFirstNonIdentityColumn();
-  for (const RowIndex row : b.non_zeros) {
-    const RowIndex permuted_row = row_perm_[row];
-    (*x)[permuted_row] = b[row];
-    x->non_zeros.push_back(permuted_row);
-
-    // The second condition only works because the elements on the diagonal of
-    // lower_ are all equal to 1.0.
-    const ColIndex col = RowToColIndex(permuted_row);
-    if (col < limit || lower_.ColumnIsDiagonalOnly(col)) {
-      DCHECK_EQ(1.0, lower_.GetDiagonalCoefficient(col));
-      continue;
-    }
-    first_column_to_consider = std::min(first_column_to_consider, col);
-  }
-
-  lower_.ComputeRowsToConsiderInSortedOrder(&x->non_zeros);
-  x->non_zeros_are_sorted = true;
-  if (x->non_zeros.empty()) {
-    lower_.LowerSolveStartingAt(first_column_to_consider, &x->values);
-  } else {
-    lower_.HyperSparseSolve(&x->values, &x->non_zeros);
-  }
+  RightSolveLInternal(b, x);
 }
 
 void LuFactorization::LeftSolveUWithNonZeros(ScatteredRow* y) const {
@@ -321,12 +307,13 @@ void LuFactorization::RightSolveUWithNonZeros(ScatteredColumn* x) const {
   // If non-zeros is non-empty, we use an hypersparse solve. Note that if
   // non_zeros starts to be too big, we clear it and thus switch back to a
   // normal sparse solve.
-  upper_.ComputeRowsToConsiderInSortedOrder(&x->non_zeros);
+  upper_.ComputeRowsToConsiderInSortedOrder(&x->non_zeros, 0.1, 0.2);
   x->non_zeros_are_sorted = true;
   if (x->non_zeros.empty()) {
-    upper_.UpperSolve(&x->values);
+    transpose_upper_.TransposeLowerSolve(&x->values);
   } else {
-    upper_.HyperSparseSolveWithReversedNonZeros(&x->values, &x->non_zeros);
+    transpose_upper_.TransposeHyperSparseSolveWithReversedNonZeros(
+        &x->values, &x->non_zeros);
   }
 }
 
@@ -341,16 +328,15 @@ bool LuFactorization::LeftSolveLWithNonZeros(
   std::vector<RowIndex>* nz = reinterpret_cast<RowIndexVector*>(&y->non_zeros);
 
   // Hypersparse?
-  RowIndex last_non_zero_row = ColToRowIndex(y->values.size() - 1);
   transpose_lower_.ComputeRowsToConsiderInSortedOrder(nz);
   y->non_zeros_are_sorted = true;
   if (nz->empty()) {
-    lower_.TransposeLowerSolve(x, &last_non_zero_row);
+    lower_.TransposeLowerSolve(x);
   } else {
     lower_.TransposeHyperSparseSolveWithReversedNonZeros(x, nz);
   }
 
-  if (result_before_permutation == nullptr || !nz->empty()) {
+  if (result_before_permutation == nullptr) {
     // Note(user): For the behavior of the two functions to be exactly the same,
     // we need the positions listed in nz to be the "exact" non-zeros of x. This
     // should be the case because the hyper-sparse functions makes sure of that.
@@ -367,23 +353,37 @@ bool LuFactorization::LeftSolveLWithNonZeros(
       }
     }
     return false;
-  } else {
-    // This computes the same thing as in the other branch but also keeps the
-    // original x in result_before_permutation. Because of this, it is faster to
-    // use a different algorithm.
-    result_before_permutation->non_zeros.clear();
-    x->swap(result_before_permutation->values);
-    x->AssignToZero(inverse_row_perm_.size());
-    y->non_zeros.clear();
-    for (RowIndex row(0); row <= last_non_zero_row; ++row) {
+  }
+
+  // This computes the same thing as in the other branch but also keeps the
+  // original x in result_before_permutation. Because of this, it is faster to
+  // use a different algorithm.
+  ClearAndResizeVectorWithNonZeros(x->size(), result_before_permutation);
+  x->swap(result_before_permutation->values);
+  if (nz->empty()) {
+    for (RowIndex row(0); row < inverse_row_perm_.size(); ++row) {
       const Fractional value = (*result_before_permutation)[row];
       if (value != 0.0) {
         const RowIndex permuted_row = inverse_row_perm_[row];
         (*x)[permuted_row] = value;
       }
     }
-    return true;
+  } else {
+    nz->swap(result_before_permutation->non_zeros);
+    nz->reserve(result_before_permutation->non_zeros.size());
+    for (const RowIndex row : result_before_permutation->non_zeros) {
+      const Fractional value = (*result_before_permutation)[row];
+      const RowIndex permuted_row = inverse_row_perm_[row];
+      (*x)[permuted_row] = value;
+      nz->push_back(permuted_row);
+    }
+    y->non_zeros_are_sorted = false;
   }
+  return true;
+}
+
+void LuFactorization::LeftSolveLWithNonZeros(ScatteredRow* y) const {
+  LeftSolveLWithNonZeros(y, nullptr);
 }
 
 ColIndex LuFactorization::LeftSolveUForUnitRow(ColIndex col,
@@ -430,7 +430,8 @@ const SparseColumn& LuFactorization::GetColumnOfU(ColIndex col) const {
   return column_of_upper_;
 }
 
-double LuFactorization::GetFillInPercentage(const MatrixView& matrix) const {
+double LuFactorization::GetFillInPercentage(
+    const CompactSparseMatrixView& matrix) const {
   const int initial_num_entries = matrix.num_entries().value();
   const int lu_num_entries =
       (lower_.num_entries() + upper_.num_entries()).value();
@@ -501,13 +502,13 @@ Fractional LuFactorization::ComputeInverseInfinityNorm() const {
 }
 
 Fractional LuFactorization::ComputeOneNormConditionNumber(
-    const MatrixView& matrix) const {
+    const CompactSparseMatrixView& matrix) const {
   if (is_identity_factorization_) return 1.0;
   return matrix.ComputeOneNorm() * ComputeInverseOneNorm();
 }
 
 Fractional LuFactorization::ComputeInfinityNormConditionNumber(
-    const MatrixView& matrix) const {
+    const CompactSparseMatrixView& matrix) const {
   if (is_identity_factorization_) return 1.0;
   return matrix.ComputeInfinityNorm() * ComputeInverseInfinityNorm();
 }
@@ -541,7 +542,7 @@ void LuFactorization::ComputeTransposeLower() const {
   transpose_lower_.PopulateFromTranspose(lower_);
 }
 
-bool LuFactorization::CheckFactorization(const MatrixView& matrix,
+bool LuFactorization::CheckFactorization(const CompactSparseMatrixView& matrix,
                                          Fractional tolerance) const {
   if (is_identity_factorization_) return true;
   SparseMatrix lu;

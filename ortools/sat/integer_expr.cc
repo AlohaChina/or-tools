@@ -31,12 +31,14 @@ IntegerSumLE::IntegerSumLE(const std::vector<Literal>& enforcement_literals,
       upper_bound_(upper),
       trail_(model->GetOrCreate<Trail>()),
       integer_trail_(model->GetOrCreate<IntegerTrail>()),
+      time_limit_(model->GetOrCreate<TimeLimit>()),
       rev_integer_value_repository_(
           model->GetOrCreate<RevIntegerValueRepository>()),
       vars_(vars),
       coeffs_(coeffs) {
   // TODO(user): deal with this corner case.
   CHECK(!vars_.empty());
+  max_variations_.resize(vars_.size());
 
   // Handle negative coefficients.
   for (int i = 0; i < vars.size(); ++i) {
@@ -51,8 +53,6 @@ IntegerSumLE::IntegerSumLE(const std::vector<Literal>& enforcement_literals,
     literal_reason_.push_back(literal.Negated());
   }
 
-  index_in_integer_reason_.resize(vars_.size());
-
   // Initialize the reversible numbers.
   rev_num_fixed_vars_ = 0;
   rev_lb_fixed_vars_ = IntegerValue(0);
@@ -60,13 +60,13 @@ IntegerSumLE::IntegerSumLE(const std::vector<Literal>& enforcement_literals,
 
 void IntegerSumLE::FillIntegerReason() {
   integer_reason_.clear();
-  for (int i = 0; i < vars_.size(); ++i) {
+  reason_coeffs_.clear();
+  const int num_vars = vars_.size();
+  for (int i = 0; i < num_vars; ++i) {
     const IntegerVariable var = vars_[i];
-    if (integer_trail_->VariableLowerBoundIsFromLevelZero(var)) {
-      index_in_integer_reason_[i] = -1;
-    } else {
-      index_in_integer_reason_[i] = integer_reason_.size();
+    if (!integer_trail_->VariableLowerBoundIsFromLevelZero(var)) {
       integer_reason_.push_back(integer_trail_->LowerBoundAsLiteral(var));
+      reason_coeffs_.push_back(coeffs_[i]);
     }
   }
 }
@@ -88,38 +88,41 @@ bool IntegerSumLE::Propagate() {
   // unassigned enforcement literal.
   if (num_unassigned_enforcement_literal > 1) return true;
 
-  // Save the current number of fixed variables.
-  rev_integer_value_repository_->SaveState(&rev_lb_fixed_vars_);
+  // Save the current sum of fixed variables.
+  if (is_registered_) {
+    rev_integer_value_repository_->SaveState(&rev_lb_fixed_vars_);
+  }
 
   // Compute the new lower bound and update the reversible structures.
   IntegerValue lb_unfixed_vars = IntegerValue(0);
-  for (int i = rev_num_fixed_vars_; i < vars_.size(); ++i) {
+  const int num_vars = vars_.size();
+  for (int i = rev_num_fixed_vars_; i < num_vars; ++i) {
     const IntegerVariable var = vars_[i];
     const IntegerValue coeff = coeffs_[i];
     const IntegerValue lb = integer_trail_->LowerBound(var);
-    if (lb != integer_trail_->UpperBound(var)) {
+    const IntegerValue ub = integer_trail_->UpperBound(var);
+    if (lb != ub) {
+      max_variations_[i] = (ub - lb) * coeff;
       lb_unfixed_vars += lb * coeff;
     } else {
       // Update the set of fixed variables.
       std::swap(vars_[i], vars_[rev_num_fixed_vars_]);
       std::swap(coeffs_[i], coeffs_[rev_num_fixed_vars_]);
+      std::swap(max_variations_[i], max_variations_[rev_num_fixed_vars_]);
       rev_num_fixed_vars_++;
       rev_lb_fixed_vars_ += lb * coeff;
     }
   }
-
-  const IntegerValue new_lb = rev_lb_fixed_vars_ + lb_unfixed_vars;
+  time_limit_->AdvanceDeterministicTime(
+      static_cast<double>(num_vars - rev_num_fixed_vars_) * 1e-9);
 
   // Conflict?
-  const IntegerValue slack = upper_bound_ - new_lb;
+  const IntegerValue slack =
+      upper_bound_ - (rev_lb_fixed_vars_ + lb_unfixed_vars);
   if (slack < 0) {
     FillIntegerReason();
-    std::vector<IntegerValue> coeffs;
-    for (int i = 0; i < vars_.size(); ++i) {
-      if (index_in_integer_reason_[i] == -1) continue;
-      coeffs.push_back(coeffs_[i]);
-    }
-    integer_trail_->RelaxLinearReason(-slack - 1, coeffs, &integer_reason_);
+    integer_trail_->RelaxLinearReason(-slack - 1, reason_coeffs_,
+                                      &integer_reason_);
 
     if (num_unassigned_enforcement_literal == 1) {
       // Propagate the only non-true literal to false.
@@ -135,34 +138,46 @@ bool IntegerSumLE::Propagate() {
   // We can only propagate more if all the enforcement literals are true.
   if (num_unassigned_enforcement_literal > 0) return true;
 
-  // The lower bound of all the variables minus one can be used to update the
+  // The lower bound of all the variables except one can be used to update the
   // upper bound of the last one.
-  for (int i = rev_num_fixed_vars_; i < vars_.size(); ++i) {
+  for (int i = rev_num_fixed_vars_; i < num_vars; ++i) {
+    if (max_variations_[i] <= slack) continue;
+
     const IntegerVariable var = vars_[i];
     const IntegerValue coeff = coeffs_[i];
-    const IntegerValue var_slack =
-        integer_trail_->UpperBound(var) - integer_trail_->LowerBound(var);
-    if (var_slack * coeff > slack) {
-      const IntegerValue new_ub =
-          integer_trail_->LowerBound(var) + slack / coeff;
-      if (!integer_trail_->Enqueue(
-              IntegerLiteral::LowerOrEqual(var, new_ub),
-              /*lazy_reason=*/[this](IntegerLiteral i_lit, int trail_index,
-                                     std::vector<Literal>* literal_reason,
-                                     std::vector<int>* trail_indices_reason) {
-                *literal_reason = literal_reason_;
-                trail_indices_reason->clear();
-                for (const IntegerVariable var : vars_) {
-                  if (PositiveVariable(var) == PositiveVariable(i_lit.var)) {
-                    continue;
-                  }
-                  const int index = integer_trail_->FindTrailIndexOfVarBefore(
-                      var, trail_index);
-                  if (index >= 0) trail_indices_reason->push_back(index);
+    const IntegerValue div = slack / coeff;
+    const IntegerValue new_ub = integer_trail_->LowerBound(var) + div;
+    const IntegerValue propagation_slack = (div + 1) * coeff - slack - 1;
+    if (!integer_trail_->Enqueue(
+            IntegerLiteral::LowerOrEqual(var, new_ub),
+            /*lazy_reason=*/[this, propagation_slack](
+                                IntegerLiteral i_lit, int trail_index,
+                                std::vector<Literal>* literal_reason,
+                                std::vector<int>* trail_indices_reason) {
+              *literal_reason = literal_reason_;
+              trail_indices_reason->clear();
+              reason_coeffs_.clear();
+              const int size = vars_.size();
+              for (int i = 0; i < size; ++i) {
+                const IntegerVariable var = vars_[i];
+                if (PositiveVariable(var) == PositiveVariable(i_lit.var)) {
+                  continue;
                 }
-              })) {
-        return false;
-      }
+                const int index =
+                    integer_trail_->FindTrailIndexOfVarBefore(var, trail_index);
+                if (index >= 0) {
+                  trail_indices_reason->push_back(index);
+                  if (propagation_slack > 0) {
+                    reason_coeffs_.push_back(coeffs_[i]);
+                  }
+                }
+              }
+              if (propagation_slack > 0) {
+                integer_trail_->RelaxLinearReason(
+                    propagation_slack, reason_coeffs_, trail_indices_reason);
+              }
+            })) {
+      return false;
     }
   }
 
@@ -170,6 +185,7 @@ bool IntegerSumLE::Propagate() {
 }
 
 void IntegerSumLE::RegisterWith(GenericLiteralWatcher* watcher) {
+  is_registered_ = true;
   const int id = watcher->Register(this);
   for (const IntegerVariable& var : vars_) {
     watcher->WatchLowerBound(var, id);
@@ -500,6 +516,65 @@ void DivisionPropagator::RegisterWith(GenericLiteralWatcher* watcher) {
   const int id = watcher->Register(this);
   watcher->WatchIntegerVariable(a_, id);
   watcher->WatchIntegerVariable(b_, id);
+  watcher->WatchIntegerVariable(c_, id);
+}
+
+FixedDivisionPropagator::FixedDivisionPropagator(IntegerVariable a,
+                                                 IntegerValue b,
+                                                 IntegerVariable c,
+                                                 IntegerTrail* integer_trail)
+    : a_(a), b_(b), c_(c), integer_trail_(integer_trail) {}
+
+bool FixedDivisionPropagator::Propagate() {
+  const IntegerValue min_a = integer_trail_->LowerBound(a_);
+  const IntegerValue max_a = integer_trail_->UpperBound(a_);
+  IntegerValue min_c = integer_trail_->LowerBound(c_);
+  IntegerValue max_c = integer_trail_->UpperBound(c_);
+
+  CHECK_GT(b_, 0);
+
+  if (max_a / b_ < max_c) {
+    max_c = max_a / b_;
+    if (!integer_trail_->Enqueue(IntegerLiteral::LowerOrEqual(c_, max_c), {},
+                                 {integer_trail_->UpperBoundAsLiteral(a_)})) {
+      return false;
+    }
+  } else if (max_a / b_ > max_c) {
+    const IntegerValue new_max_a =
+        max_c >= 0 ? max_c * b_ + b_ - 1
+                   : IntegerValue(CapProd(max_c.value(), b_.value()));
+    CHECK_LT(new_max_a, max_a);
+    if (!integer_trail_->Enqueue(IntegerLiteral::LowerOrEqual(a_, new_max_a),
+                                 {},
+                                 {integer_trail_->UpperBoundAsLiteral(c_)})) {
+      return false;
+    }
+  }
+
+  if (min_a / b_ > min_c) {
+    min_c = min_a / b_;
+    if (!integer_trail_->Enqueue(IntegerLiteral::GreaterOrEqual(c_, min_c), {},
+                                 {integer_trail_->LowerBoundAsLiteral(a_)})) {
+      return false;
+    }
+  } else if (min_a / b_ < min_c) {
+    const IntegerValue new_min_a =
+        min_c > 0 ? IntegerValue(CapProd(min_c.value(), b_.value()))
+                  : min_c * b_ - b_ + 1;
+    CHECK_GT(new_min_a, min_a);
+    if (!integer_trail_->Enqueue(IntegerLiteral::GreaterOrEqual(a_, new_min_a),
+                                 {},
+                                 {integer_trail_->LowerBoundAsLiteral(c_)})) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void FixedDivisionPropagator::RegisterWith(GenericLiteralWatcher* watcher) {
+  const int id = watcher->Register(this);
+  watcher->WatchIntegerVariable(a_, id);
   watcher->WatchIntegerVariable(c_, id);
 }
 

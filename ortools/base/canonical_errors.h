@@ -14,10 +14,28 @@
 #ifndef OR_TOOLS_BASE_CANONICAL_ERRORS_H_
 #define OR_TOOLS_BASE_CANONICAL_ERRORS_H_
 
+#include "ortools/base/status.h"
+
 namespace util {
+
+inline Status InternalError(const std::string& message) {
+  return Status(error::INTERNAL, message);
+}
 
 inline Status InvalidArgumentError(const std::string& message) {
   return Status(error::INVALID_ARGUMENT, message);
+}
+
+inline Status UnimplementedError(const std::string& message) {
+  return Status(error::NOT_IMPLEMENTED, message);
+}
+
+inline Status FailedPreconditionError(const std::string& message) {
+  return Status(error::FAILED_PRECONDITION, message);
+}
+
+inline bool IsUnimplemented(const Status& status) {
+  return status.code() == util::error::NOT_IMPLEMENTED;
 }
 
 }  // namespace util

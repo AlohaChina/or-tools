@@ -21,9 +21,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
-
 #include "absl/container/inlined_vector.h"
 #include "absl/types/span.h"
 #include "ortools/base/hash.h"
@@ -43,8 +43,8 @@ namespace operations_research {
 namespace sat {
 
 // This is how the SatSolver stores a clause. A clause is just a disjunction of
-// literals. In many places, we just use std::vector<literal> to encode one. But
-// in the critical propagation code, we use this class to remove one memory
+// literals. In many places, we just use vector<literal> to encode one. But in
+// the critical propagation code, we use this class to remove one memory
 // indirection.
 class SatClause {
  public:
@@ -52,7 +52,7 @@ class SatClause {
   // treated separatly and never constructed. In practice, we do use
   // BinaryImplicationGraph for the clause of size 2, so this is mainly used for
   // size at least 3.
-  static SatClause* Create(const std::vector<Literal>& literals);
+  static SatClause* Create(absl::Span<const Literal> literals);
 
   // Non-sized delete because this is a tail-padded class.
   void operator delete(void* p) {
@@ -151,7 +151,7 @@ struct ClauseInfo {
 // information.
 class LiteralWatchers : public SatPropagator {
  public:
-  LiteralWatchers();
+  explicit LiteralWatchers(Model* model);
   ~LiteralWatchers() override;
 
   // Must be called before adding clauses refering to such variables.
@@ -168,7 +168,7 @@ class LiteralWatchers : public SatPropagator {
   SatClause* ReasonClause(int trail_index) const;
 
   // Adds a new clause and perform initial propagation for this clause only.
-  bool AddClause(const std::vector<Literal>& literals, Trail* trail);
+  bool AddClause(absl::Span<const Literal> literals, Trail* trail);
 
   // Same as AddClause() for a removable clause. This is only called on learned
   // conflict, so this should never have all its literal at false (CHECKED).
@@ -261,9 +261,25 @@ class LiteralWatchers : public SatPropagator {
   // when the corresponding literal becomes false.
   struct Watcher {
     Watcher() {}
-    Watcher(SatClause* c, Literal b) : clause(c), blocking_literal(b) {}
-    SatClause* clause;
+    Watcher(SatClause* c, Literal b, int i = 2)
+        : blocking_literal(b), start_index(i), clause(c) {}
+
+    // Optimization. A literal from the clause that sometimes allow to not even
+    // look at the clause memory when true.
     Literal blocking_literal;
+
+    // Optimization. An index in the clause. Instead of looking for another
+    // literal to watch from the start, we will start from here instead, and
+    // loop around if needed. This allows to avoid bad quadratric corner cases
+    // and lead to an "optimal" complexity. See "Optimal Implementation of
+    // Watched Literals and more General Techniques", Ian P. Gent.
+    //
+    // Note that ideally, this should be part of a SatClause, so it can be
+    // shared across watchers. However, since we have 32 bits for "free" here
+    // because of the struct alignment, we store it here instead.
+    int32 start_index;
+
+    SatClause* clause;
   };
   gtl::ITIVector<LiteralIndex, std::vector<Watcher>> watchers_on_false_;
 
@@ -273,7 +289,7 @@ class LiteralWatchers : public SatPropagator {
   // Indicates if the corresponding watchers_on_false_ list need to be
   // cleaned. The boolean is_clean_ is just used in DCHECKs.
   SparseBitset<LiteralIndex> needs_cleaning_;
-  bool is_clean_;
+  bool is_clean_ = true;
 
   int64 num_inspected_clauses_;
   int64 num_inspected_clause_literals_;
@@ -375,8 +391,9 @@ class BinaryImplicationGraph : public SatPropagator {
  public:
   explicit BinaryImplicationGraph(Model* model)
       : SatPropagator("BinaryImplicationGraph"),
-        stats_("BinaryImplicationGraph") {
-    model->GetOrCreate<Trail>()->RegisterPropagator(this);
+        stats_("BinaryImplicationGraph"),
+        trail_(model->GetOrCreate<Trail>()) {
+    trail_->RegisterPropagator(this);
   }
 
   ~BinaryImplicationGraph() override {
@@ -386,12 +403,16 @@ class BinaryImplicationGraph : public SatPropagator {
     });
   }
 
+  // SatPropagator interface.
   bool Propagate(Trail* trail) final;
   absl::Span<const Literal> Reason(const Trail& trail,
                                    int trail_index) const final;
 
   // Resizes the data structure.
   void Resize(int num_variables);
+
+  // Returns true if there is no constraints in this class.
+  bool IsEmpty() { return num_implications_ == 0 && at_most_ones_.empty(); }
 
   // Adds the binary clause (a OR b), which is the same as (not a => b).
   // Note that it is also equivalent to (not b => a).
@@ -403,11 +424,11 @@ class BinaryImplicationGraph : public SatPropagator {
   void AddBinaryClauseDuringSearch(Literal a, Literal b, Trail* trail);
 
   // An at most one constraint of size n is a compact way to encode n * (n - 1)
-  // implications.
+  // implications. This must only be called at level zero.
   //
-  // TODO(user): For large constraint, handle them natively instead of
-  // converting them into implications?
-  void AddAtMostOne(absl::Span<const Literal> at_most_one);
+  // Returns false if this creates a conflict. Currently this can only happens
+  // if there is duplicate literal already assigned to true in this constraint.
+  ABSL_MUST_USE_RESULT bool AddAtMostOne(absl::Span<const Literal> at_most_one);
 
   // Uses the binary implication graph to minimize the given conflict by
   // removing literals that implies others. The idea is that if a and b are two
@@ -433,10 +454,6 @@ class BinaryImplicationGraph : public SatPropagator {
   // - Frees the propagation list of the assigned literals.
   void RemoveFixedVariables(int first_unprocessed_trail_index,
                             const Trail& trail);
-
-  // Remove all duplicate implications. Note that as a side effect, this will
-  // sort the propagation lists.
-  void RemoveDuplicates();
 
   // Returns false if the model is unsat, otherwise detects equivalent variable
   // (with respect to the implications only) and reorganize the propagation
@@ -471,7 +488,8 @@ class BinaryImplicationGraph : public SatPropagator {
   // This function will transform each of the given constraint into a maximal
   // one in the underlying implication graph. Constraints that are redundant
   // after other have been expanded (i.e. included into) will be cleared.
-  void TransformIntoMaxCliques(std::vector<std::vector<Literal>>* at_most_ones);
+  void TransformIntoMaxCliques(std::vector<std::vector<Literal>>* at_most_ones,
+                               int64 max_num_explored_nodes = 1e8);
 
   // Number of literal propagated by this class (including conflicts).
   int64 num_propagations() const { return num_propagations_; }
@@ -527,6 +545,15 @@ class BinaryImplicationGraph : public SatPropagator {
   std::vector<Literal> ExpandAtMostOne(
       const absl::Span<const Literal> at_most_one);
 
+  // Process all at most one constraints starting at or after base_index in
+  // at_most_one_buffer_. This replace literal by their representative, remove
+  // fixed literals and deal with duplicates. Return false iff the model is
+  // UNSAT.
+  bool CleanUpAndAddAtMostOnes(const int base_index);
+
+  mutable StatsGroup stats_;
+  Trail* trail_;
+
   // Binary reasons by trail_index. We need a deque because we kept pointers to
   // elements of this array and this can dynamically change size.
   std::deque<Literal> reasons_;
@@ -543,6 +570,16 @@ class BinaryImplicationGraph : public SatPropagator {
   // for us and we could store in common the inlined/not-inlined size.
   gtl::ITIVector<LiteralIndex, absl::InlinedVector<Literal, 6>> implications_;
   int64 num_implications_ = 0;
+
+  // Internal representation of at_most_one constraints. Each entry point to the
+  // start of a constraint in the buffer. Contraints are terminated by
+  // kNoLiteral. When LiteralIndex is true, then all entry in the at most one
+  // constraint must be false except the one refering to LiteralIndex.
+  //
+  // TODO(user): We could be more cache efficient by combining this with
+  // implications_ in some way. Do some propagation speed benchmark.
+  gtl::ITIVector<LiteralIndex, absl::InlinedVector<int32, 6>> at_most_ones_;
+  std::vector<Literal> at_most_one_buffer_;
 
   // Some stats.
   int64 num_propagations_ = 0;
@@ -571,7 +608,6 @@ class BinaryImplicationGraph : public SatPropagator {
   gtl::ITIVector<LiteralIndex, bool> is_redundant_;
   gtl::ITIVector<LiteralIndex, LiteralIndex> representative_of_;
 
-  mutable StatsGroup stats_;
   DISALLOW_COPY_AND_ASSIGN(BinaryImplicationGraph);
 };
 

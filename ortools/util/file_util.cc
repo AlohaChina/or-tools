@@ -13,23 +13,33 @@
 
 #include "ortools/util/file_util.h"
 
+#include "absl/strings/str_cat.h"
 #include "google/protobuf/descriptor.h"
 #include "google/protobuf/io/zero_copy_stream_impl_lite.h"
 #include "google/protobuf/message.h"
 #include "google/protobuf/text_format.h"
 #include "ortools/base/file.h"
 #include "ortools/base/logging.h"
+#include "ortools/base/status_macros.h"
 
 namespace operations_research {
 
 using ::google::protobuf::TextFormat;
+
+util::StatusOr<std::string> ReadFileToString(absl::string_view filename) {
+  std::string contents;
+  RETURN_IF_ERROR(file::GetContents(filename, &contents, file::Defaults()));
+  // Note that gzipped files are currently not supported.
+  return contents;
+}
 
 bool ReadFileToProto(absl::string_view filename,
                      google::protobuf::Message* proto) {
   std::string data;
   CHECK_OK(file::GetContents(filename, &data, file::Defaults()));
   // Note that gzipped files are currently not supported.
-  // Try binary format first, then text format, then JSON, then give up.
+  // Try binary format first, then text format, then JSON, then proto3 JSON,
+  // then give up.
   if (proto->ParseFromString(data)) return true;
   if (google::protobuf::TextFormat::ParseFromString(data, proto)) return true;
   LOG(WARNING) << "Could not parse protocol buffer";
@@ -55,7 +65,7 @@ bool WriteProtoToFile(absl::string_view filename,
       break;
     case ProtoWriteFormat::kProtoText:
       if (!google::protobuf::TextFormat::PrintToString(proto, &output_string)) {
-        LOG(WARNING) << "Printing to std::string failed.";
+        LOG(WARNING) << "Printing to string failed.";
         return false;
       }
       break;

@@ -35,15 +35,14 @@
 #include "ortools/graph/min_cost_flow.h"
 %}
 
-typedef int64_t int64;
-typedef uint64_t uint64;
-
 // ############ max_flow.h ############
 
 %ignoreall
 
 %unignore operations_research;
 %rename (MaxFlow) operations_research::SimpleMaxFlow;
+%ignore operations_research::SimpleMaxFlow::GetSourceSideMinCut;  // missing typemap for argument
+%ignore operations_research::SimpleMaxFlow::GetSinkSideMinCut;  // missing typemap for argument
 %unignore operations_research::SimpleMaxFlow::SimpleMaxFlow;
 %unignore operations_research::SimpleMaxFlow::~SimpleMaxFlow;
 %unignore operations_research::SimpleMaxFlow::AddArcWithCapacity;
@@ -55,8 +54,6 @@ typedef uint64_t uint64;
 %unignore operations_research::SimpleMaxFlow::Capacity;
 %unignore operations_research::SimpleMaxFlow::OptimalFlow;
 %unignore operations_research::SimpleMaxFlow::Flow;
-%unignore operations_research::SimpleMaxFlow::GetSourceSideMinCut;
-%unignore operations_research::SimpleMaxFlow::GetSinkSideMinCut;
 
 // Expose the "operations_research::SimpleMaxFlow::Status" enum.
 %unignore operations_research::SimpleMaxFlow::Status;

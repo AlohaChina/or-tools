@@ -21,16 +21,20 @@
 // std::function utilities.
 %include "ortools/util/python/functions.i"
 
+// import the domain class.
+%import "ortools/util/python/sorted_interval_list.i"
+
 %{
 #include "ortools/sat/cp_model.pb.h"
 #include "ortools/sat/sat_parameters.pb.h"
 #include "ortools/sat/swig_helper.h"
 %}
 
-typedef int64_t int64;
-typedef uint64_t uint64;
+%pythoncode {
+import numbers
+}
 
-%module(directors="1") operations_research_sat
+%module(directors="1", threads="1") operations_research_sat
 
 PY_PROTO_TYPEMAP(ortools.sat.cp_model_pb2,
                  CpModelProto,
@@ -62,6 +66,8 @@ PY_PROTO_TYPEMAP(ortools.sat.sat_parameters_pb2,
 %unignore operations_research::sat::SolutionCallback::~SolutionCallback;
 %unignore operations_research::sat::SolutionCallback::BestObjectiveBound;
 %feature("nodirector") operations_research::sat::SolutionCallback::BestObjectiveBound;
+%unignore operations_research::sat::SolutionCallback::HasResponse;
+%feature("nodirector") operations_research::sat::SolutionCallback::HasResponse;
 %unignore operations_research::sat::SolutionCallback::NumBinaryPropagations;
 %feature("nodirector") operations_research::sat::SolutionCallback::NumBinaryPropagations;
 %unignore operations_research::sat::SolutionCallback::NumBooleans;

@@ -14,6 +14,7 @@
 #ifndef OR_TOOLS_SAT_LINEAR_PROGRAMMING_CONSTRAINT_H_
 #define OR_TOOLS_SAT_LINEAR_PROGRAMMING_CONSTRAINT_H_
 
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -21,13 +22,16 @@
 #include "ortools/base/int_type.h"
 #include "ortools/glop/revised_simplex.h"
 #include "ortools/lp_data/lp_data.h"
+#include "ortools/lp_data/lp_data_utils.h"
 #include "ortools/lp_data/lp_types.h"
-#include "ortools/lp_data/matrix_scaler.h"
 #include "ortools/sat/cuts.h"
+#include "ortools/sat/implied_bounds.h"
 #include "ortools/sat/integer.h"
+#include "ortools/sat/integer_expr.h"
 #include "ortools/sat/linear_constraint.h"
 #include "ortools/sat/linear_constraint_manager.h"
 #include "ortools/sat/model.h"
+#include "ortools/sat/util.h"
 #include "ortools/util/rev.h"
 #include "ortools/util/time_limit.h"
 
@@ -45,6 +49,13 @@ namespace sat {
 struct LinearProgrammingConstraintLpSolution
     : public gtl::ITIVector<IntegerVariable, double> {
   LinearProgrammingConstraintLpSolution() {}
+};
+
+// Helper struct to combine info generated from solving LP.
+struct LPSolveInfo {
+  glop::ProblemStatus status;
+  double lp_objective = -std::numeric_limits<double>::infinity();
+  IntegerValue new_obj_bound = kMinIntegerValue;
 };
 
 // A SAT constraint that enforces a set of linear inequality constraints on
@@ -71,6 +82,7 @@ class LinearProgrammingConstraint : public PropagatorInterface,
   typedef glop::RowIndex ConstraintIndex;
 
   explicit LinearProgrammingConstraint(Model* model);
+  ~LinearProgrammingConstraint() override;
 
   // Add a new linear constraint to this LP.
   void AddLinearConstraint(const LinearConstraint& ct);
@@ -146,68 +158,124 @@ class LinearProgrammingConstraint : public PropagatorInterface,
   // Tie-breaking is done using the variable natural order.
   std::function<LiteralIndex()> LPReducedCostAverageBranching();
 
+  // Average number of nonbasic variables with zero reduced costs.
+  double average_degeneracy() const {
+    return average_degeneracy_.CurrentAverage();
+  }
+
  private:
+  // Helper methods for branching. Returns true if branching on the given
+  // variable helps with more propagation or finds a conflict.
+  bool BranchOnVar(IntegerVariable var);
+  LPSolveInfo SolveLpForBranching();
+
+  // Helper method to fill reduced cost / dual ray reason in 'integer_reason'.
+  // Generates a set of IntegerLiterals explaining why the best solution can not
+  // be improved using reduced costs. This is used to generate explanations for
+  // both infeasibility and bounds deductions.
+  void FillReducedCostReasonIn(const glop::DenseRow& reduced_costs,
+                               std::vector<IntegerLiteral>* integer_reason);
+
   // Reinitialize the LP from a potentially new set of constraints.
   // This fills all data structure and properly rescale the underlying LP.
-  void CreateLpFromConstraintManager();
+  //
+  // Returns false if the problem is UNSAT (it can happen when presolve is off
+  // and some LP constraint are trivially false).
+  bool CreateLpFromConstraintManager();
 
   // Solve the LP, returns false if something went wrong in the LP solver.
   bool SolveLp();
 
-  // The factor to multiply a CP variable value to get the value in the LP side.
-  glop::Fractional CpToLpScalingFactor(glop::ColIndex col) const;
-  glop::Fractional LpToCpScalingFactor(glop::ColIndex col) const;
+  // Add a "MIR" cut obtained by first taking the linear combination of the
+  // row of the matrix according to "integer_multipliers" and then trying
+  // some integer rounding heuristic.
+  void AddCutFromConstraints(
+      const std::string& name,
+      const std::vector<std::pair<glop::RowIndex, IntegerValue>>&
+          integer_multipliers);
+
+  // Computes and adds Chvatal-Gomory cuts.
+  // This can currently only be called at the root node.
+  void AddCGCuts();
+
+  // Computes and adds MIR cuts.
+  // This can currently only be called at the root node.
+  void AddMirCuts();
 
   // Updates the bounds of the LP variables from the CP bounds.
   void UpdateBoundsOfLpVariables();
 
-  // Generates a set of IntegerLiterals explaining why the best solution can not
-  // be improved using reduced costs. This is used to generate explanations for
-  // both infeasibility and bounds deductions.
-  void FillReducedCostsReason();
-
   // Use the dual optimal lp values to compute an EXACT lower bound on the
   // objective. Fills its reason and perform reduced cost strenghtening.
-  // Returns the exact objective lower bound.
-  //
-  // TODO(user): Split into subfunctions.
-  IntegerValue ExactLpReasonning();
-
-  // Same as FillReducedCostReason() but for the case of a DUAL_UNBOUNDED
-  // problem. This exploit the dual ray as a reason for the primal infeasiblity.
-  void FillDualRayReason();
+  // Returns false in case of conflict.
+  bool ExactLpReasonning();
 
   // Same as FillDualRayReason() but perform the computation EXACTLY. Returns
   // false in the case that the problem is not provably infeasible with exact
   // computations, true otherwise.
   bool FillExactDualRayReason();
 
+  // Returns number of non basic variables with zero reduced costs.
+  int64 CalculateDegeneracy();
+
   // From a set of row multipliers (at LP scale), scale them back to the CP
   // world and then make them integer (eventually multiplying them by a new
   // scaling factor returned in *scaling).
   //
-  // Then computes from this linear combination of the integer rows of the LP a
-  // new constraint of the form "sum terms <= upper_bound". Note that whatever
-  // lp_multipliers are given, the constraint will always be an exact valid
-  // constraint of the problem.
+  // Note that this will loose some precision, but our subsequent computation
+  // will still be exact as it will work for any set of multiplier.
+  std::vector<std::pair<glop::RowIndex, IntegerValue>> ScaleLpMultiplier(
+      bool take_objective_into_account,
+      const glop::DenseColumn& dense_lp_multipliers, glop::Fractional* scaling,
+      int max_pow = 62) const;
+
+  // Computes from an integer linear combination of the integer rows of the LP a
+  // new constraint of the form "sum terms <= upper_bound". All computation are
+  // exact here.
   //
   // Returns false if we encountered any integer overflow.
   bool ComputeNewLinearConstraint(
-      bool take_objective_into_account,  // For the scaling.
-      const glop::DenseColumn& dense_lp_multipliers, glop::Fractional* scaling,
+      const std::vector<std::pair<glop::RowIndex, IntegerValue>>&
+          integer_multipliers,
+      gtl::ITIVector<glop::ColIndex, IntegerValue>* dense_terms,
+      IntegerValue* upper_bound) const;
+
+  // Simple heuristic to try to minimize |upper_bound - ImpliedLB(terms)|. This
+  // should make the new constraint tighter and correct a bit the imprecision
+  // introduced by rounding the floating points values.
+  void AdjustNewLinearConstraint(
+      std::vector<std::pair<glop::RowIndex, IntegerValue>>* integer_multipliers,
       gtl::ITIVector<glop::ColIndex, IntegerValue>* dense_terms,
       IntegerValue* upper_bound) const;
 
   // Shortcut for an integer linear expression type.
   using LinearExpression = std::vector<std::pair<glop::ColIndex, IntegerValue>>;
 
+  // Converts a dense represenation of a linear constraint to a sparse one
+  // expressed in terms of IntegerVariable.
+  LinearConstraint ConvertToLinearConstraint(
+      const gtl::ITIVector<glop::ColIndex, IntegerValue>& dense_vector,
+      IntegerValue upper_bound);
+
   // Compute the implied lower bound of the given linear expression using the
   // current variable bound. Return kMinIntegerValue in case of overflow.
-  IntegerValue GetImpliedLowerBound(const LinearExpression& terms) const;
+  IntegerValue GetImpliedLowerBound(const LinearConstraint& terms) const;
+
+  // Tests for possible overflow in the propagation of the given linear
+  // constraint.
+  bool PossibleOverflow(const LinearConstraint& constraint);
+
+  // Reduce the coefficient of the constraint so that we cannot have overflow
+  // in the propagation of the given linear constraint. Note that we may loose
+  // some strength by doing so.
+  //
+  // We make sure that any partial sum involving any variable value in their
+  // domain do not exceed 2 ^ max_pow.
+  void PreventOverflow(LinearConstraint* constraint, int max_pow = 62);
 
   // Fills integer_reason_ with the reason for the implied lower bound of the
   // given linear expression. We relax the reason if we have some slack.
-  void SetImpliedLowerBoundReason(const LinearExpression& terms,
+  void SetImpliedLowerBoundReason(const LinearConstraint& terms,
                                   IntegerValue slack);
 
   // Fills the deductions vector with reduced cost deductions that can be made
@@ -223,8 +291,20 @@ class LinearProgrammingConstraint : public PropagatorInterface,
   // The variable should be a positive reference.
   glop::ColIndex GetOrCreateMirrorVariable(IntegerVariable positive_variable);
 
+  // Returns a "score" (higher is better) for the given LP variable using
+  // the average reduced costs as a signal.
+  double GetCostFromAverageReducedCosts(int position);
+
   // Callback underlying LPReducedCostAverageBranching().
   LiteralIndex LPReducedCostAverageDecision();
+
+  // Updates the simplex iteration limit for the next visit.
+  // As per current algorithm, we use a limit which is dependent on size of the
+  // problem and drop it significantly if degeneracy is detected. We use
+  // DUAL_FEASIBLE status as a signal to correct the prediction. The next limit
+  // is capped by 'min_iter' and 'max_iter'. Note that this is enabled only for
+  // linearization level 2 and above.
+  void UpdateSimplexIterationLimit(const int64 min_iter, const int64 max_iter);
 
   // This epsilon is related to the precision of the value/reduced_cost returned
   // by the LP once they have been scaled back into the CP domain. So for large
@@ -246,15 +326,17 @@ class LinearProgrammingConstraint : public PropagatorInterface,
     LinearExpression terms;
   };
   LinearExpression integer_objective_;
-  std::vector<LinearConstraintInternal> integer_lp_;
+  IntegerValue objective_infinity_norm_ = IntegerValue(0);
+  gtl::ITIVector<glop::RowIndex, LinearConstraintInternal> integer_lp_;
+  gtl::ITIVector<glop::RowIndex, IntegerValue> infinity_norms_;
 
   // Underlying LP solver API.
   glop::LinearProgram lp_data_;
   glop::RevisedSimplex simplex_;
+  int64 next_simplex_iter_ = 500;
 
   // For the scaling.
-  glop::SparseMatrixScaler scaler_;
-  double bound_scaling_factor_;
+  glop::LpScalingHelper scaler_;
 
   // Structures used for mirroring IntegerVariables inside the underlying LP
   // solver: an integer variable var is mirrored by mirror_lp_variable_[var].
@@ -270,11 +352,15 @@ class LinearProgrammingConstraint : public PropagatorInterface,
 
   // Singletons from Model.
   const SatParameters& sat_parameters_;
+  Model* model_;
   TimeLimit* time_limit_;
   IntegerTrail* integer_trail_;
   Trail* trail_;
   SearchHeuristicsVector* model_heuristics_;
   IntegerEncoder* integer_encoder_;
+
+  // Used while deriving cuts.
+  ImpliedBoundsProcessor implied_bounds_processor_;
 
   // The dispatcher for all LP propagators of the model, allows to find which
   // LinearProgrammingConstraint has a given IntegerVariable.
@@ -283,6 +369,14 @@ class LinearProgrammingConstraint : public PropagatorInterface,
   std::vector<IntegerLiteral> integer_reason_;
   std::vector<IntegerLiteral> deductions_;
   std::vector<IntegerLiteral> deductions_reason_;
+
+  // Repository of IntegerSumLE that needs to be kept around for the lazy
+  // reasons. Those are new integer constraint that are created each time we
+  // solve the LP to a dual-feasible solution. Propagating these constraints
+  // both improve the objective lower bound but also perform reduced cost
+  // fixing.
+  int rev_optimal_constraints_size_ = 0;
+  std::vector<std::unique_ptr<IntegerSumLE>> optimal_constraints_;
 
   // Last OPTIMAL solution found by a call to the underlying LP solver.
   // On IncrementalPropagate(), if the bound updates do not invalidate this
@@ -299,13 +393,16 @@ class LinearProgrammingConstraint : public PropagatorInterface,
   // solution is no longer optimal though.
   std::vector<double> level_zero_lp_solution_;
 
+  // True if the last time we solved the exact same LP at level zero, no cuts
+  // and no lazy constraints where added.
+  bool lp_at_level_zero_is_final_ = false;
+
   // Same as lp_solution_ but this vector is indexed differently.
   LinearProgrammingConstraintLpSolution& expanded_lp_solution_;
 
   // Linear constraints cannot be created or modified after this is registered.
   bool lp_constraint_is_registered_ = false;
 
-  int num_cuts_ = 0;
   std::vector<CutGenerator> cut_generators_;
 
   // Store some statistics for HeuristicLPReducedCostAverage().
@@ -315,6 +412,18 @@ class LinearProgrammingConstraint : public PropagatorInterface,
   std::vector<double> sum_cost_down_;
   std::vector<int> num_cost_up_;
   std::vector<int> num_cost_down_;
+
+  // Defined as average number of nonbasic variables with zero reduced costs.
+  IncrementalAverage average_degeneracy_;
+  bool is_degenerate_ = false;
+
+  // Used by the strong branching heuristic.
+  int branching_frequency_ = 1;
+  int64 count_since_last_branching_ = 0;
+
+  // Sum of all simplex iterations performed by this class. This is useful to
+  // test the incrementality and compare to other solvers.
+  int64 total_num_simplex_iterations_ = 0;
 };
 
 // A class that stores which LP propagator is associated to each variable.
@@ -345,7 +454,7 @@ class LinearProgrammingConstraintCollection
 // we do not add any cuts for components of size 1.
 CutGenerator CreateStronglyConnectedGraphCutGenerator(
     int num_nodes, const std::vector<int>& tails, const std::vector<int>& heads,
-    const std::vector<IntegerVariable>& vars);
+    const std::vector<Literal>& literals, Model* model);
 
 // Almost the same as CreateStronglyConnectedGraphCutGenerator() but for each
 // components, computes the demand needed to serves it, and depending on whether
@@ -354,9 +463,9 @@ CutGenerator CreateStronglyConnectedGraphCutGenerator(
 CutGenerator CreateCVRPCutGenerator(int num_nodes,
                                     const std::vector<int>& tails,
                                     const std::vector<int>& heads,
-                                    const std::vector<IntegerVariable>& vars,
+                                    const std::vector<Literal>& literals,
                                     const std::vector<int64>& demands,
-                                    int64 capacity);
+                                    int64 capacity, Model* model);
 }  // namespace sat
 }  // namespace operations_research
 

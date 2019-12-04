@@ -53,7 +53,7 @@ ifeq ($(SYSTEM),unix)
     LDFLAGS = \
 -Wl,-rpath,@loader_path \
 -Wl,-rpath,@loader_path/../lib \
--lz
+-lz -framework CoreFoundation
     PORT = MacOsX64
     ARCH = -DARCH_K8
     NETPLATFORM = x64
@@ -69,29 +69,35 @@ ifeq ($(SYSTEM),unix)
   PRE_LIB = -Llib -Llib64
   CBC_LNK = -lCbcSolver -lCbc -lOsiCbc -lCgl -lClpSolver -lClp -lOsiClp -lOsi -lCoinUtils
   ABSL_LNK = \
--labsl_bad_any_cast \
+-labsl_bad_any_cast_impl \
 -labsl_bad_optional_access \
+-labsl_bad_variant_access \
 -labsl_base \
--labsl_container \
+-labsl_city \
+-labsl_civil_time \
+-labsl_debugging_internal \
+-labsl_demangle_internal \
 -labsl_dynamic_annotations \
 -labsl_examine_stack \
 -labsl_failure_signal_handler \
+-labsl_graphcycles_internal \
 -labsl_hash \
+-labsl_hashtablez_sampler \
 -labsl_int128 \
 -labsl_leak_check \
 -labsl_malloc_internal \
 -labsl_optional \
+-labsl_raw_hash_set \
 -labsl_spinlock_wait \
--labsl_stack_consumption \
 -labsl_stacktrace \
--labsl_strings \
--labsl_str_format_extension_internal \
 -labsl_str_format_internal \
+-labsl_strings \
+-labsl_strings_internal \
 -labsl_symbolize \
 -labsl_synchronization \
 -labsl_throw_delegate \
 -labsl_time \
--labsl_variant
+-labsl_time_zone
   OR_TOOLS_LNK = $(PRE_LIB) $(ABSL_LNK) -lprotobuf -lglog -lgflags $(CBC_LNK) -lortools
   OBJ_OUT = -o #
   EXE_OUT = -o #
@@ -371,7 +377,6 @@ $(LIB_DIR)/Issue173$J \
 $(LIB_DIR)/KnapsackMIP$J \
 $(LIB_DIR)/LeastDiff$J \
 $(LIB_DIR)/LinearAssignmentAPI$J \
-$(LIB_DIR)/LsApi$J \
 $(LIB_DIR)/MagicSquare$J \
 $(LIB_DIR)/Map2$J \
 $(LIB_DIR)/Map$J \
@@ -493,6 +498,9 @@ dotnet:
 # Linear Solver
 	$(MAKE) run SOURCE=examples/dotnet/SimpleLpProgram.cs
 	$(MAKE) run SOURCE=examples/dotnet/SimpleMipProgram.cs
+# Constraint Solver
+	$(MAKE) run SOURCE=examples/dotnet/Tsp.cs
+	$(MAKE) run SOURCE=examples/dotnet/Vrp.cs
 # Sat
 	$(MAKE) run SOURCE=examples/dotnet/NursesSat.cs
 	$(MAKE) run SOURCE=examples/dotnet/JobshopSat.cs
@@ -502,8 +510,6 @@ dotnet:
 # Misc
 	$(MAKE) run SOURCE=examples/dotnet/cslinearprogramming.cs
 	$(MAKE) run SOURCE=examples/dotnet/csintegerprogramming.cs
-	$(MAKE) run SOURCE=examples/dotnet/tsp.cs
-	$(MAKE) run SOURCE=examples/dotnet/vrp.cs
 	$(MAKE) run SOURCE=examples/dotnet/assignment.cs
 	$(MAKE) run SOURCE=examples/dotnet/alldifferent_except_0.cs
 	$(MAKE) run SOURCE=examples/dotnet/all_interval.cs
@@ -632,8 +638,8 @@ dotnet:
 test_dotnet: detect_dotnet
 	$(MAKE) run SOURCE=examples/dotnet/SimpleLpProgram.cs
 	$(MAKE) run SOURCE=examples/dotnet/SimpleMipProgram.cs
-	$(MAKE) run SOURCE=examples/dotnet/tsp.cs
-	$(MAKE) run SOURCE=examples/dotnet/vrp.cs
+	$(MAKE) run SOURCE=examples/dotnet/Tsp.cs
+	$(MAKE) run SOURCE=examples/dotnet/Vrp.cs
 	$(MAKE) run SOURCE=examples/dotnet/JobshopSat.cs
 	$(MAKE) run SOURCE=examples/dotnet/NursesSat.cs
 

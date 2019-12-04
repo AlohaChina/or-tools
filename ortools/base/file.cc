@@ -13,6 +13,7 @@
 
 #include <sys/stat.h>
 #include <sys/types.h>
+
 #include "absl/strings/str_cat.h"
 #if defined(_MSC_VER)
 #include <io.h>
@@ -262,6 +263,16 @@ void WriteProtoToFileOrDie(const google::protobuf::Message& proto,
   CHECK(WriteProtoToFile(proto, file_name)) << "file_name: " << file_name;
 }
 
+util::Status GetTextProto(const absl::string_view& filename,
+                          google::protobuf::Message* proto, int flags) {
+  if (flags == Defaults()) {
+    if (ReadFileToProto(filename, proto)) return util::Status::OK;
+  }
+  return util::Status(
+      util::error::INVALID_ARGUMENT,
+      absl::StrCat("Could not read proto from '", filename, "'."));
+}
+
 util::Status SetTextProto(const absl::string_view& filename,
                           const google::protobuf::Message& proto, int flags) {
   if (flags == Defaults()) {
@@ -284,7 +295,7 @@ util::Status SetBinaryProto(const absl::string_view& filename,
 
 util::Status Delete(const absl::string_view& path, int flags) {
   if (flags == Defaults()) {
-    if (remove(path.data())) return util::Status::OK;
+    if (remove(path.data()) == 0) return util::Status::OK;
   }
   return util::Status(util::error::INVALID_ARGUMENT,
                       absl::StrCat("Could not delete '", path, "'."));

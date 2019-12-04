@@ -4,13 +4,13 @@ cc_library(
     name = "base",
     hdrs = [
         "basictypes.h",
-        "casts.h",
         "commandlineflags.h",
         "integral_types.h",
         "logging.h",
         "macros.h",
-        "port.h",
-        "strtoint.h",  # Move to a separate library?
+    ],
+    srcs = [
+        "logging.cc",
     ],
     deps = [
         "@com_github_gflags_gflags//:gflags",
@@ -27,7 +27,6 @@ cc_library(
         ":base",
     ],
 )
-
 
 cc_library(
     name = "status",
@@ -51,6 +50,18 @@ cc_library(
 )
 
 cc_library(
+    name = "status_macros",
+    hdrs = [
+        "status_macros.h",
+    ],
+    deps = [
+        ":base",
+        ":status",
+        ":statusor",
+    ],
+)
+
+cc_library(
     name = "encodingutils",
     hdrs = [
         "encodingutils.h",
@@ -61,25 +72,9 @@ cc_library(
 )
 
 cc_library(
-    name = "strings",
-    srcs = [
-        "join.cc",
-        "numbers.cc",
-        "split.cc",
-        "string_view.cc",
-        "stringprintf.cc",
-    ],
+    name = "ptr_util",
     hdrs = [
-        "join.h",
-        "numbers.h",
-        "split.h",
-        "string_view.h",
-        "stringpiece_utils.h",
-        "stringprintf.h",
-        "strutil.h",
-    ],
-    deps = [
-        ":base",
+        "ptr_util.h",
     ],
 )
 
@@ -93,7 +88,7 @@ cc_library(
     ],
     deps = [
         ":base",
-        ":strings",
+        "@com_google_absl//absl/strings:strings",
     ],
 )
 
@@ -108,8 +103,19 @@ cc_library(
     deps = [
         ":base",
         ":status",
-        ":strings",
+        "@com_google_absl//absl/strings",
         "@com_google_protobuf_cc//:protobuf",
+    ],
+)
+
+cc_library(
+    name = "filelineiter",
+    hdrs = ["filelineiter.h"],
+    deps = [
+        ":base",
+        ":file",
+        ":status",
+        "@com_google_absl//absl/strings:strings",
     ],
 )
 
@@ -126,35 +132,20 @@ cc_library(
         ":base",
         ":file",
         ":status",
-        ":strings",
+        "@com_google_absl//absl/strings:strings",
         "@com_google_protobuf_cc//:protobuf",
     ],
 )
 
 cc_library(
-    name = "callback",
+    name = "protoutil",
     hdrs = [
-        "callback.h",
+        "protoutil.h",
     ],
     deps = [
-        ":base",
-    ],
-)
-
-cc_library(
-    name = "filelinereader",
-    srcs = [
-        "filelinereader.cc",
-    ],
-    hdrs = [
-        "filelinereader.h",
-    ],
-    deps = [
-        ":base",
-        ":callback",
-        ":file",
         ":status",
-        ":strings",
+        ":statusor",
+        ":timer",
         "@com_google_protobuf_cc//:protobuf",
     ],
 )
@@ -167,7 +158,7 @@ cc_library(
     ],
     deps = [
         ":base",
-        ":strings",
+        "@com_google_absl//absl/strings:strings",
         "@com_google_protobuf_cc//:protobuf",
     ],
 )
@@ -190,6 +181,7 @@ cc_library(
     deps = [
         ":base",
         ":hash",
+        "@com_google_absl//absl/random",
     ],
 )
 
@@ -211,7 +203,7 @@ cc_library(
     deps = [
         ":base",
         ":hash",
-        ":strings",
+        "@com_google_absl//absl/strings:strings",
     ],
 )
 
@@ -246,19 +238,23 @@ cc_library(
 )
 
 cc_library(
-    name = "stl_util",
+    name = "canonical_errors",
     hdrs = [
-        "stl_util.h",
-    ],
-    deps = [
-        ":base",
+        "canonical_errors.h",
     ],
 )
 
 cc_library(
-    name = "sparsetable",
+    name = "protobuf_util",
     hdrs = [
-        "sparsetable.h",
+        "protobuf_util.h",
+    ],
+)
+
+cc_library(
+    name = "stl_util",
+    hdrs = [
+        "stl_util.h",
     ],
     deps = [
         ":base",
@@ -286,27 +282,16 @@ cc_library(
 )
 
 cc_library(
-    name = "strongly_connected_components",
-    hdrs = [
-        "strongly_connected_components.h",
-    ],
-    deps = [
-        ":base",
-    ],
-)
-
-cc_library(
     name = "timer",
     srcs = [
-        "time_support.cc",
         "timer.cc",
     ],
     hdrs = [
-        "time_support.h",
         "timer.h",
     ],
     deps = [
         ":base",
+        "@com_google_absl//absl/time",
     ],
 )
 
@@ -350,19 +335,6 @@ cc_library(
 )
 
 cc_library(
-    name = "mutex",
-    srcs = [
-        "mutex.cc",
-    ],
-    hdrs = [
-        "mutex.h",
-    ],
-    deps = [
-        ":base",
-    ],
-)
-
-cc_library(
     name = "threadpool",
     srcs = [
         "threadpool.cc",
@@ -372,27 +344,6 @@ cc_library(
     ],
     deps = [
         ":base",
-        ":mutex",
-    ],
-)
-
-cc_library(
-    name = "inlined_vector",
-    hdrs = [
-        "inlined_vector.h",
-    ],
-    deps = [
-        ":base",
-    ],
-)
-
-cc_library(
-    name = "span",
-    hdrs = [
-        "span.h",
-    ],
-    deps = [
-        ":base",
-        ":inlined_vector",
+        "@com_google_absl//absl/synchronization",
     ],
 )

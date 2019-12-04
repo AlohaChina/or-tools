@@ -1,5 +1,44 @@
+| [home](README.md) | [boolean logic](boolean_logic.md) | [integer arithmetic](integer_arithmetic.md) | [channeling constraints](channeling.md) | [scheduling](scheduling.md) | [Using the CP-SAT solver](solver.md) | [Model manipulation](model.md) | [Python API](https://google.github.io/or-tools/python/ortools/sat/python/cp_model.html) |
+| ----------------- | --------------------------------- | ------------------------------------------- | --------------------------------------- | --------------------------- | ------------------------------------ | ------------------------------ | -------------------------------- |
+
 # Scheduling recipes for the CP-SAT solver.
 
+
+<!--ts-->
+   * [Scheduling recipes for the CP-SAT solver.](#scheduling-recipes-for-the-cp-sat-solver)
+      * [Introduction](#introduction)
+      * [Interval variables](#interval-variables)
+         * [Python code](#python-code)
+         * [C   code](#c-code)
+         * [Java code](#java-code)
+         * [C# code](#c-code-1)
+      * [Optional intervals](#optional-intervals)
+         * [Python code](#python-code-1)
+         * [C   code](#c-code-2)
+         * [Java code](#java-code-1)
+         * [C# code](#c-code-3)
+      * [NoOverlap constraint](#nooverlap-constraint)
+         * [Python code](#python-code-2)
+         * [C   code](#c-code-4)
+         * [Java code](#java-code-2)
+         * [C# code](#c-code-5)
+      * [Cumulative constraint](#cumulative-constraint)
+      * [Alternative resources for one interval](#alternative-resources-for-one-interval)
+      * [Ranking tasks in a disjunctive resource](#ranking-tasks-in-a-disjunctive-resource)
+         * [Python code](#python-code-3)
+         * [C   code](#c-code-6)
+         * [Java code](#java-code-3)
+         * [C# code](#c-code-7)
+      * [Intervals spanning over breaks in the calendar](#intervals-spanning-over-breaks-in-the-calendar)
+         * [Python code](#python-code-4)
+      * [Transitions in a disjunctive resource](#transitions-in-a-disjunctive-resource)
+      * [Precedences between intervals](#precedences-between-intervals)
+      * [Convex hull of a set of intervals](#convex-hull-of-a-set-of-intervals)
+      * [Reservoir constraint](#reservoir-constraint)
+
+<!-- Added by: lperron, at: Thu Nov 14 21:15:57 CET 2019 -->
+
+<!--te-->
 
 
 ## Introduction
@@ -392,7 +431,7 @@ void NoOverlapSampleSat() {
 
   // Solving part.
   Model model;
-  const CpSolverResponse response = SolveWithModel(cp_model, &model);
+  const CpSolverResponse response = SolveCpModel(cp_model.Build(), &model);
   LOG(INFO) << CpSolverResponseStats(response);
 
   if (response.status() == CpSolverStatus::OPTIMAL) {
@@ -575,11 +614,10 @@ number of other intervals that precede it.
 ```python
 """Code sample to demonstrates how to rank intervals."""
 
-from __future__ import absolute_import
-from __future__ import division
 from __future__ import print_function
 
 from ortools.sat.python import cp_model
+
 
 
 def RankTasks(model, starts, presences, ranks):
@@ -657,7 +695,7 @@ def RankingSampleSat():
     start = model.NewIntVar(0, horizon, 'start_%i' % t)
     duration = t + 1
     end = model.NewIntVar(0, horizon, 'end_%i' % t)
-    if t < num_tasks / 2:
+    if t < num_tasks // 2:
       interval = model.NewIntervalVar(start, duration, end, 'interval_%i' % t)
       presence = True
     else:
@@ -832,7 +870,7 @@ void RankingSampleSat() {
   cp_model.Minimize(objective);
 
   // Solving part.
-  const CpSolverResponse response = Solve(cp_model);
+  const CpSolverResponse response = Solve(cp_model.Build());
   LOG(INFO) << CpSolverResponseStats(response);
 
   if (response.status() == CpSolverStatus::OPTIMAL) {
@@ -869,6 +907,7 @@ import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.CpSolver;
 import com.google.ortools.sat.IntVar;
 import com.google.ortools.sat.IntervalVar;
+import com.google.ortools.sat.LinearExpr;
 import com.google.ortools.sat.Literal;
 import java.util.ArrayList;
 import java.util.List;
@@ -941,7 +980,7 @@ public class RankingSampleSat {
       vars[numTasks] = ranks[i];
       coefs[numTasks] = -1;
       // ranks == sum(precedences) - 1;
-      model.addScalProdEqual(vars, coefs, 1);
+      model.addEquality(LinearExpr.scalProd(vars, coefs), 1);
     }
   }
 
@@ -1006,7 +1045,7 @@ public class RankingSampleSat {
     }
     objectiveVars[numTasks] = makespan;
     objectiveCoefs[numTasks] = 2;
-    model.minimizeScalProd(objectiveVars, objectiveCoefs);
+    model.minimize(LinearExpr.scalProd(objectiveVars, objectiveCoefs));
 
     // Creates a solver and solves the model.
     CpSolver solver = new CpSolver();
@@ -1078,7 +1117,7 @@ public class RankingSampleSat
         // The following bool_or will enforce that for any two intervals:
         //    i precedes j or j precedes i or at least one interval is not
         //        performed.
-        model.AddBoolOr(tmp_array.ToArray());
+        model.AddBoolOr(tmp_array);
         // Redundant constraint: it propagates early that at most one precedence
         // is true.
         model.AddImplication(precedences[i, j], precedences[j, i].Not());
@@ -1092,7 +1131,7 @@ public class RankingSampleSat
       for (int j = 0; j < num_tasks; ++j) {
         tmp_array[j] = (IntVar)precedences[j, i];
       }
-      model.Add(ranks[i] == tmp_array.Sum() - 1);
+      model.Add(ranks[i] == LinearExpr.Sum(tmp_array) - 1);
     }
   }
 
@@ -1153,7 +1192,7 @@ public class RankingSampleSat
     for (int t = 0; t < num_tasks; ++t) {
       presences_as_int_vars[t] = (IntVar)presences[t];
     }
-    model.Minimize(2 * makespan - 7 * presences_as_int_vars.Sum());
+    model.Minimize(2 * makespan - 7 * LinearExpr.Sum(presences_as_int_vars));
 
     // Creates a solver and solves the model.
     CpSolver solver = new CpSolver();
@@ -1182,6 +1221,100 @@ public class RankingSampleSat
 }
 ```
 
+## Intervals spanning over breaks in the calendar
+
+Sometimes, a task can be interrupted by a break (overnight, lunch break). In
+that context, although the processing time of the task is the same, the duration
+can vary.
+
+To implement this feature, we will have the duration of the task be a function
+of the start of the task. This is implemented using channeling constraints.
+
+The following code displays:
+
+    start=8 duration=3 across=0
+    start=9 duration=3 across=0
+    start=10 duration=3 across=0
+    start=11 duration=4 across=1
+    start=12 duration=4 across=1
+    start=14 duration=3 across=0
+    start=15 duration=3 across=0
+
+### Python code
+
+```python
+"""Code sample to demonstrate how an interval can span across a break."""
+
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+from ortools.sat.python import cp_model
+
+
+class VarArraySolutionPrinter(cp_model.CpSolverSolutionCallback):
+  """Print intermediate solutions."""
+
+  def __init__(self, variables):
+    cp_model.CpSolverSolutionCallback.__init__(self)
+    self.__variables = variables
+    self.__solution_count = 0
+
+  def on_solution_callback(self):
+    self.__solution_count += 1
+    for v in self.__variables:
+      print('%s=%i' % (v, self.Value(v)), end=' ')
+    print()
+
+  def solution_count(self):
+    return self.__solution_count
+
+
+def SchedulingWithCalendarSampleSat():
+  """Interval spanning across a lunch break."""
+  model = cp_model.CpModel()
+
+  # The data is the following:
+  #   Work starts at 8h, ends at 18h, with a lunch break between 13h and 14h.
+  #   We need to schedule a task that needs 3 hours of processing time.
+  #   Total duration can be 3 or 4 (if it spans the lunch break).
+  #
+  # Because the duration is at least 3 hours, work cannot start after 15h.
+  # Because of the break, work cannot start at 13h.
+
+  start = model.NewIntVarFromDomain(
+      cp_model.Domain.FromIntervals([(8, 12), (14, 15)]), 'start')
+  duration = model.NewIntVar(3, 4, 'duration')
+  end = model.NewIntVar(8, 18, 'end')
+  unused_interval = model.NewIntervalVar(start, duration, end, 'interval')
+
+  # We have 2 states (spanning across lunch or not)
+  across = model.NewBoolVar('across')
+  non_spanning_hours = cp_model.Domain.FromValues([8, 9, 10, 14, 15])
+  model.AddLinearExpressionInDomain(start, non_spanning_hours).OnlyEnforceIf(
+      across.Not())
+  model.AddLinearConstraint(start, 11, 12).OnlyEnforceIf(across)
+  model.Add(duration == 3).OnlyEnforceIf(across.Not())
+  model.Add(duration == 4).OnlyEnforceIf(across)
+
+  # Search for x values in increasing order.
+  model.AddDecisionStrategy([start], cp_model.CHOOSE_FIRST,
+                            cp_model.SELECT_MIN_VALUE)
+
+  # Create a solver and solve with a fixed search.
+  solver = cp_model.CpSolver()
+
+  # Force the solver to follow the decision strategy exactly.
+  solver.parameters.search_branching = cp_model.FIXED_SEARCH
+
+  # Search and print all solutions.
+  solution_printer = VarArraySolutionPrinter([start, duration, across])
+  solver.SearchForAllSolutions(model, solution_printer)
+
+
+SchedulingWithCalendarSampleSat()
+```
+
 ## Transitions in a disjunctive resource
 
 ## Precedences between intervals
@@ -1189,4 +1322,3 @@ public class RankingSampleSat
 ## Convex hull of a set of intervals
 
 ## Reservoir constraint
-

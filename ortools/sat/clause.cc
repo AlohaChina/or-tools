@@ -48,13 +48,14 @@ void RemoveIf(Container c, Predicate p) {
 
 // ----- LiteralWatchers -----
 
-LiteralWatchers::LiteralWatchers()
+LiteralWatchers::LiteralWatchers(Model* model)
     : SatPropagator("LiteralWatchers"),
-      is_clean_(true),
       num_inspected_clauses_(0),
       num_inspected_clause_literals_(0),
       num_watched_clauses_(0),
-      stats_("LiteralWatchers") {}
+      stats_("LiteralWatchers") {
+  model->GetOrCreate<Trail>()->RegisterPropagator(this);
+}
 
 LiteralWatchers::~LiteralWatchers() {
   gtl::STLDeleteElements(&clauses_);
@@ -109,17 +110,30 @@ bool LiteralWatchers::PropagateOnFalse(Literal false_literal, Trail* trail) {
         LiteralIndex(literals[0].Index().value() ^ literals[1].Index().value() ^
                      false_literal.Index().value()));
     if (assignment.LiteralIsTrue(other_watched_literal)) {
-      *new_it++ = Watcher(it->clause, other_watched_literal);
+      *new_it = *it;
+      new_it->blocking_literal = other_watched_literal;
+      ++new_it;
       ++num_inspected_clause_literals_;
       continue;
     }
 
-    // Look for another literal to watch.
+    // Look for another literal to watch. We go through the list in a cyclic
+    // fashion from start. The first two literals can be ignored as they are the
+    // watched ones.
     {
-      int i = 2;
+      const int start = it->start_index;
       const int size = it->clause->Size();
+      DCHECK_GE(start, 2);
+
+      int i = start;
       while (i < size && assignment.LiteralIsFalse(literals[i])) ++i;
-      num_inspected_clause_literals_ += i;
+      num_inspected_clause_literals_ += i - start + 2;
+      if (i >= size) {
+        i = 2;
+        while (i < start && assignment.LiteralIsFalse(literals[i])) ++i;
+        num_inspected_clause_literals_ += i - 2;
+        if (i >= start) i = size;
+      }
       if (i < size) {
         // literal[i] is unassigned or true, it's now the new literal to watch.
         // Note that by convention, we always keep the two watched literals at
@@ -127,7 +141,8 @@ bool LiteralWatchers::PropagateOnFalse(Literal false_literal, Trail* trail) {
         literals[0] = other_watched_literal;
         literals[1] = literals[i];
         literals[i] = false_literal;
-        AttachOnFalse(literals[1], other_watched_literal, it->clause);
+        watchers_on_false_[literals[1].Index()].emplace_back(
+            it->clause, other_watched_literal, i + 1);
         continue;
       }
     }
@@ -179,7 +194,7 @@ SatClause* LiteralWatchers::ReasonClause(int trail_index) const {
   return reasons_[trail_index];
 }
 
-bool LiteralWatchers::AddClause(const std::vector<Literal>& literals,
+bool LiteralWatchers::AddClause(absl::Span<const Literal> literals,
                                 Trail* trail) {
   SatClause* clause = SatClause::Create(literals);
   clauses_.push_back(clause);
@@ -324,6 +339,7 @@ void LiteralWatchers::DeleteDetachedClauses() {
 void BinaryImplicationGraph::Resize(int num_variables) {
   SCOPED_TIME_STAT(&stats_);
   implications_.resize(num_variables << 1);
+  is_redundant_.resize(implications_.size(), false);
   reasons_.resize(num_variables);
 }
 
@@ -351,29 +367,129 @@ void BinaryImplicationGraph::AddBinaryClauseDuringSearch(Literal a, Literal b,
   }
 }
 
-void BinaryImplicationGraph::AddAtMostOne(
+bool BinaryImplicationGraph::AddAtMostOne(
     absl::Span<const Literal> at_most_one) {
-  if (at_most_one.empty()) return;
-  for (const Literal a : at_most_one) {
-    for (const Literal b : at_most_one) {
-      if (a == b) continue;
-      implications_[a.Index()].push_back(b.Negated());
-    }
-  }
+  CHECK_EQ(trail_->CurrentDecisionLevel(), 0);
+  if (at_most_one.size() <= 1) return true;
+
+  // Temporarily copy the at_most_one constraint at the end of
+  // at_most_one_buffer_. It will be cleaned up and added by
+  // CleanUpAndAddAtMostOnes().
+  const int base_index = at_most_one_buffer_.size();
+  at_most_one_buffer_.insert(at_most_one_buffer_.end(), at_most_one.begin(),
+                             at_most_one.end());
+  at_most_one_buffer_.push_back(Literal(kNoLiteralIndex));
+
   is_dag_ = false;
-  num_implications_ += at_most_one.size() * (at_most_one.size() - 1);
+  return CleanUpAndAddAtMostOnes(base_index);
+}
+
+// This works by doing a linear scan on the at_most_one_buffer_ and
+// cleaning/copying the at most ones on the fly to the beginning of the same
+// buffer.
+bool BinaryImplicationGraph::CleanUpAndAddAtMostOnes(const int base_index) {
+  const VariablesAssignment& assignment = trail_->Assignment();
+  int local_end = base_index;
+  const int buffer_size = at_most_one_buffer_.size();
+  for (int i = base_index; i < buffer_size; ++i) {
+    if (at_most_one_buffer_[i].Index() == kNoLiteralIndex) continue;
+
+    // Process a new at most one.
+    // It will be copied into buffer[local_start, local_end].
+    const int local_start = local_end;
+    bool set_all_left_to_false = false;
+    for (;; ++i) {
+      const Literal l = at_most_one_buffer_[i];
+      if (l.Index() == kNoLiteralIndex) break;
+      if (assignment.LiteralIsFalse(l)) continue;
+      if (!set_all_left_to_false && assignment.LiteralIsTrue(l)) {
+        set_all_left_to_false = true;
+        continue;
+      }
+      at_most_one_buffer_[local_end++] = RepresentativeOf(l);
+    }
+
+    // Deal with all false.
+    if (set_all_left_to_false) {
+      for (int j = local_start; j < local_end; ++j) {
+        const Literal l = at_most_one_buffer_[j];
+        if (assignment.LiteralIsFalse(l)) continue;
+        if (assignment.LiteralIsTrue(l)) return false;
+        trail_->EnqueueWithUnitReason(l.Negated());
+      }
+      local_end = local_start;
+      continue;
+    }
+
+    // Deal with duplicates.
+    // Any duplicate in an "at most one" must be false.
+    {
+      int new_local_end = local_start;
+      std::sort(&at_most_one_buffer_[local_start],
+                &at_most_one_buffer_[local_end]);
+      for (int j = local_start; j < local_end; ++j) {
+        const Literal l = at_most_one_buffer_[j];
+        if (new_local_end > local_start &&
+            l == at_most_one_buffer_[new_local_end - 1]) {
+          if (trail_->Assignment().LiteralIsTrue(l)) return false;
+          trail_->EnqueueWithUnitReason(l.Negated());
+          --new_local_end;
+          continue;
+        }
+        at_most_one_buffer_[new_local_end++] = l;
+      }
+      local_end = new_local_end;
+    }
+
+    // Create a Span<> to simplify the code below.
+    const absl::Span<const Literal> at_most_one(
+        &at_most_one_buffer_[local_start], local_end - local_start);
+
+    // We expand small sizes into implications.
+    // TODO(user): Investigate what the best threshold is.
+    if (at_most_one.size() < 10) {
+      // Note that his automatically skip size 0 and 1.
+      for (const Literal a : at_most_one) {
+        for (const Literal b : at_most_one) {
+          if (a == b) continue;
+          implications_[a.Index()].push_back(b.Negated());
+        }
+      }
+      num_implications_ += at_most_one.size() * (at_most_one.size() - 1);
+
+      // This will erase the at_most_one from the buffer.
+      local_end = local_start;
+      continue;
+    }
+
+    // Index the new at most one.
+    for (const Literal l : at_most_one) {
+      if (l.Index() >= at_most_ones_.size()) {
+        at_most_ones_.resize(l.Index().value() + 1);
+      }
+      at_most_ones_[l.Index()].push_back(local_start);
+    }
+
+    // Add sentinel.
+    at_most_one_buffer_[local_end++] = Literal(kNoLiteralIndex);
+  }
+
+  at_most_one_buffer_.resize(local_end);
+  return true;
 }
 
 bool BinaryImplicationGraph::PropagateOnTrue(Literal true_literal,
                                              Trail* trail) {
   SCOPED_TIME_STAT(&stats_);
 
+  const VariablesAssignment& assignment = trail->Assignment();
+  DCHECK(assignment.LiteralIsTrue(true_literal));
+
   // Note(user): This update is not exactly correct because in case of conflict
   // we don't inspect that much clauses. But doing ++num_inspections_ inside the
   // loop does slow down the code by a few percent.
   num_inspections_ += implications_[true_literal.Index()].size();
 
-  const VariablesAssignment& assignment = trail->Assignment();
   for (Literal literal : implications_[true_literal.Index()]) {
     if (assignment.LiteralIsTrue(literal)) {
       // Note(user): I tried to update the reason here if the literal was
@@ -395,11 +511,45 @@ bool BinaryImplicationGraph::PropagateOnTrue(Literal true_literal,
       trail->Enqueue(literal, propagator_id_);
     }
   }
+
+  // Propagate the at_most_one constraints.
+  if (true_literal.Index() < at_most_ones_.size()) {
+    for (const int start : at_most_ones_[true_literal.Index()]) {
+      bool seen = false;
+      for (int i = start;; ++i) {
+        const Literal literal = at_most_one_buffer_[i];
+        if (literal.Index() == kNoLiteralIndex) break;
+
+        ++num_inspections_;
+        if (literal == true_literal) {
+          if (DEBUG_MODE) {
+            CHECK(!seen);
+            seen = true;
+          }
+          continue;
+        }
+        if (assignment.LiteralIsFalse(literal)) continue;
+
+        ++num_propagations_;
+        if (assignment.LiteralIsTrue(literal)) {
+          // Conflict.
+          *(trail->MutableConflict()) = {true_literal.Negated(),
+                                         literal.Negated()};
+          return false;
+        } else {
+          // Propagation.
+          reasons_[trail->Index()] = true_literal.Negated();
+          trail->Enqueue(literal.Negated(), propagator_id_);
+        }
+      }
+    }
+  }
+
   return true;
 }
 
 bool BinaryImplicationGraph::Propagate(Trail* trail) {
-  if (num_implications_ == 0) {
+  if (IsEmpty()) {
     propagation_trail_index_ = trail->Index();
     return true;
   }
@@ -420,6 +570,8 @@ absl::Span<const Literal> BinaryImplicationGraph::Reason(
 // that this algorithm is "optimal" in the sense that it leads to a minimized
 // conflict with a backjump level as low as possible. However, not all possible
 // literals are removed.
+//
+// TODO(user): Also consider at most one?
 void BinaryImplicationGraph::MinimizeConflictWithReachability(
     std::vector<Literal>* conflict) {
   SCOPED_TIME_STAT(&stats_);
@@ -501,21 +653,12 @@ void BinaryImplicationGraph::MinimizeConflictFirst(
     const Trail& trail, std::vector<Literal>* conflict,
     SparseBitset<BooleanVariable>* marked) {
   SCOPED_TIME_STAT(&stats_);
+  CHECK(!conflict->empty());
   is_marked_.ClearAndResize(LiteralIndex(implications_.size()));
-  dfs_stack_.clear();
-  dfs_stack_.push_back(conflict->front().Negated());
-  while (!dfs_stack_.empty()) {
-    const Literal literal = dfs_stack_.back();
-    dfs_stack_.pop_back();
-    if (!is_marked_[literal.Index()]) {
-      is_marked_.Set(literal.Index());
-      // If the literal is assigned to false, we mark it.
-      if (trail.Assignment().LiteralIsFalse(literal)) {
-        marked->Set(literal.Variable());
-      }
-      for (Literal implied : implications_[literal.Index()]) {
-        if (!is_marked_[implied.Index()]) dfs_stack_.push_back(implied);
-      }
+  MarkDescendants(conflict->front().Negated());
+  for (const LiteralIndex i : is_marked_.PositionsSetAtLeastOnce()) {
+    if (trail.Assignment().LiteralIsFalse(Literal(i))) {
+      marked->Set(Literal(i).Variable());
     }
   }
   RemoveRedundantLiterals(conflict);
@@ -585,6 +728,7 @@ void BinaryImplicationGraph::RemoveRedundantLiterals(
   }
 }
 
+// TODO(user): Also consider at most one?
 void BinaryImplicationGraph::MinimizeConflictExperimental(
     const Trail& trail, std::vector<Literal>* conflict) {
   SCOPED_TIME_STAT(&stats_);
@@ -653,52 +797,152 @@ void BinaryImplicationGraph::RemoveFixedVariables(
     }
     gtl::STLClearObject(&(implications_[true_literal.Index()]));
     gtl::STLClearObject(&(implications_[true_literal.NegatedIndex()]));
+
+    if (true_literal.Index() < at_most_ones_.size()) {
+      gtl::STLClearObject(&(at_most_ones_[true_literal.Index()]));
+    }
+    if (true_literal.NegatedIndex() < at_most_ones_.size()) {
+      gtl::STLClearObject(&(at_most_ones_[true_literal.NegatedIndex()]));
+    }
   }
   for (const LiteralIndex i : is_marked_.PositionsSetAtLeastOnce()) {
     RemoveIf(&implications_[i], [&assignment](const Literal& lit) {
       return assignment.LiteralIsTrue(lit);
     });
   }
+
+  // TODO(user): This might be a bit slow. Do not call all the time if needed,
+  // this shouldn't change the correctness of the code.
+  at_most_ones_.clear();
+  CleanUpAndAddAtMostOnes(/*base_index=*/0);
 }
 
-void BinaryImplicationGraph::RemoveDuplicates() {
-  int64 num_removed = 0;
-  for (auto& list : implications_) {
-    const int old_size = list.size();
-    gtl::STLSortAndRemoveDuplicates(&list);
-    num_removed += old_size - list.size();
-  }
-  num_implications_ -= num_removed;
-  if (num_removed > 0) {
-    VLOG(1) << "Removed " << num_removed << " duplicate implications. "
-            << num_implications_ << " implications left.";
-  }
-}
-
-class SccWrapper {
+class SccGraph {
  public:
-  using Graph = gtl::ITIVector<LiteralIndex, absl::InlinedVector<Literal, 6>>;
+  using Implication =
+      gtl::ITIVector<LiteralIndex, absl::InlinedVector<Literal, 6>>;
+  using AtMostOne = gtl::ITIVector<LiteralIndex, absl::InlinedVector<int32, 6>>;
+  using SccFinder =
+      StronglyConnectedComponentsFinder<int32, SccGraph,
+                                        std::vector<std::vector<int32>>>;
 
-  explicit SccWrapper(Graph* graph) : graph_(*graph) {}
-  std::vector<int32> operator[](int32 node) const {
+  explicit SccGraph(SccFinder* finder, Implication* graph,
+                    AtMostOne* at_most_ones,
+                    std::vector<Literal>* at_most_one_buffer)
+      : finder_(*finder),
+        implications_(*graph),
+        at_most_ones_(*at_most_ones),
+        at_most_one_buffer_(*at_most_one_buffer) {}
+
+  const std::vector<int32>& operator[](int32 node) const {
     tmp_.clear();
-    for (const Literal l : graph_[LiteralIndex(node)]) {
+    for (const Literal l : implications_[LiteralIndex(node)]) {
       tmp_.push_back(l.Index().value());
+      if (finder_.NodeIsInCurrentDfsPath(l.NegatedIndex().value())) {
+        to_fix_.push_back(l);
+      }
+    }
+    if (node < at_most_ones_.size()) {
+      for (const int start : at_most_ones_[LiteralIndex(node)]) {
+        if (start >= at_most_one_already_explored_.size()) {
+          at_most_one_already_explored_.resize(start + 1, false);
+          previous_node_to_explore_at_most_one_.resize(start + 1);
+        }
+
+        // In the presence of at_most_ones_ contraints, expanding them
+        // implicitely to implications in the SCC computation can result in a
+        // quadratic complexity rather than a linear one in term of the input
+        // data structure size. So this test here is critical on problem with
+        // large at_most ones like the "ivu06-big.mps.gz" where without it, the
+        // full FindStronglyConnectedComponents() take more than on hour instead
+        // of less than a second!
+        if (at_most_one_already_explored_[start]) {
+          // We never expand a node twice.
+          const int first_node = previous_node_to_explore_at_most_one_[start];
+          CHECK_NE(node, first_node);
+
+          if (finder_.NodeIsInCurrentDfsPath(first_node)) {
+            // If the first node is not settled, then we do explore the
+            // at_most_one constraint again. In "Mixed-Integer-Programming:
+            // Analyzing 12 years of progress", Tobias Achterberg and Roland
+            // Wunderling explains that an at most one need to be looped over at
+            // most twice. I am not sure exactly how that works, so for now we
+            // are not fully linear, but on actual instances, we only rarely
+            // run into this case.
+            //
+            // Note that we change the previous node to explore at most one
+            // since the current node will be settled before the old ones.
+            //
+            // TODO(user): avoid looping more than twice on the same at most one
+            // constraints? Note that the second time we loop we have x => y =>
+            // not(x), so we can already detect that x must be false which we
+            // detect below.
+            previous_node_to_explore_at_most_one_[start] = node;
+          } else {
+            // The first node is already settled and so are all its child. Only
+            // not(first_node) might still need exploring.
+            tmp_.push_back(
+                Literal(LiteralIndex(first_node)).NegatedIndex().value());
+            continue;
+          }
+        } else {
+          at_most_one_already_explored_[start] = true;
+          previous_node_to_explore_at_most_one_[start] = node;
+        }
+
+        for (int i = start;; ++i) {
+          const Literal l = at_most_one_buffer_[i];
+          if (l.Index() == kNoLiteralIndex) break;
+          if (l.Index() == node) continue;
+          tmp_.push_back(l.NegatedIndex().value());
+          if (finder_.NodeIsInCurrentDfsPath(l.Index().value())) {
+            to_fix_.push_back(l.Negated());
+          }
+        }
+      }
     }
     return tmp_;
   }
 
+  // All these literals where detected to be true during the SCC computation.
+  mutable std::vector<Literal> to_fix_;
+
  private:
+  const SccFinder& finder_;
+  const Implication& implications_;
+  const AtMostOne& at_most_ones_;
+  const std::vector<Literal>& at_most_one_buffer_;
+
   mutable std::vector<int32> tmp_;
-  const Graph& graph_;
+
+  // Used to get a non-quadratic complexity in the presence of at most ones.
+  mutable std::vector<bool> at_most_one_already_explored_;
+  mutable std::vector<int> previous_node_to_explore_at_most_one_;
 };
 
 bool BinaryImplicationGraph::DetectEquivalences() {
   const int32 size(implications_.size());
-  is_redundant_.resize(size, false);
 
   std::vector<std::vector<int32>> scc;
-  FindStronglyConnectedComponents(size, SccWrapper(&implications_), &scc);
+  {
+    SccGraph::SccFinder finder;
+    SccGraph graph(&finder, &implications_, &at_most_ones_,
+                   &at_most_one_buffer_);
+    finder.FindStronglyConnectedComponents(size, graph, &scc);
+
+    int num_fixed_during_scc = 0;
+    const VariablesAssignment& assignment = trail_->Assignment();
+    for (const Literal l : graph.to_fix_) {
+      if (assignment.LiteralIsFalse(l)) return false;
+      if (assignment.LiteralIsTrue(l)) continue;
+      ++num_fixed_during_scc;
+      trail_->EnqueueWithUnitReason(l);
+    }
+    if (num_fixed_during_scc > 0) {
+      VLOG(1) << num_fixed_during_scc
+              << " variable fixed during SCC computation because x => not(x).";
+    }
+  }
 
   int num_equivalences = 0;
   reverse_topological_order_.clear();
@@ -748,32 +992,40 @@ bool BinaryImplicationGraph::DetectEquivalences() {
   is_dag_ = true;
   if (num_equivalences == 0) return true;
 
-  // Remap all the implications to only use representative.
-  // Note that this also does the job of RemoveDuplicates().
+  // Remap all at most ones. Remove fixed variables, process duplicates.
+  // Note that this might result in more implications when we expand small at
+  // most one, so we do that before cleaning up the implication list below.
+  at_most_ones_.clear();
+  CleanUpAndAddAtMostOnes(/*base_index=*/0);
+
+  // Remap all the implications to only use representative. Remove duplicates.
   num_implications_ = 0;
   for (LiteralIndex i(0); i < size; ++i) {
-    if (is_redundant_[i]) {
-      num_implications_ += implications_[i].size();
-      continue;
+    if (!is_redundant_[i]) {
+      for (Literal& ref : implications_[i]) {
+        const LiteralIndex rep = representative_of_[ref.Index()];
+        if (rep == i) continue;
+        if (rep == kNoLiteralIndex) continue;
+        ref = Literal(rep);
+      }
+      gtl::STLSortAndRemoveDuplicates(&implications_[i]);
     }
-    for (Literal& ref : implications_[i]) {
-      const LiteralIndex rep = representative_of_[ref.Index()];
-      if (rep == i) continue;
-      if (rep == kNoLiteralIndex) continue;
-      ref = Literal(rep);
-    }
-    gtl::STLSortAndRemoveDuplicates(&implications_[i]);
     num_implications_ += implications_[i].size();
   }
 
   VLOG(1) << num_equivalences << " redundant equivalent literals. "
           << num_implications_ << " implications left. " << implications_.size()
-          << " literals.";
+          << " literals."
+          << " size of at_most_one buffer = " << at_most_one_buffer_.size()
+          << ".";
   return true;
 }
 
 bool BinaryImplicationGraph::ComputeTransitiveReduction() {
+  CHECK_EQ(trail_->CurrentDecisionLevel(), 0);
   if (!DetectEquivalences()) return false;
+
+  int64 num_fixed = 0;
   work_done_in_mark_descendants_ = 0;
 
   // For each node we do a graph traversal and only keep the literals
@@ -783,24 +1035,50 @@ bool BinaryImplicationGraph::ComputeTransitiveReduction() {
   for (const LiteralIndex i : reverse_topological_order_) {
     CHECK(!is_redundant_[i]);
     auto& direct_implications = implications_[i];
+    if (direct_implications.empty()) continue;
 
     is_marked_.ClearAndResize(size);
     for (const Literal root : direct_implications) {
       if (is_redundant_[root.Index()]) continue;
       if (is_marked_[root.Index()]) continue;
 
+      // This is a corner case where because of equivalent literal, i appear
+      // in implications_[i], we will remove it below.
+      if (root.Index() == i) continue;
+
+      // When this happens, then i must be false, we handle this just after the
+      // loop.
+      if (root.NegatedIndex() == i) break;
+
       MarkDescendants(root);
 
       // We have a DAG, so root could only be marked first.
       is_marked_.Clear(root.Index());
     }
+    CHECK(!is_marked_[i]) << "DetectEquivalences() should have removed cycles!";
+
+    // If this is the case, then i => not(i), so i must be false.
+    if (is_marked_[Literal(i).NegatedIndex()]) {
+      ++num_fixed;
+      if (!trail_->Assignment().LiteralIsFalse(Literal(i))) {
+        trail_->EnqueueWithUnitReason(Literal(i).Negated());
+      }
+      num_implications_ -= direct_implications.size();
+      num_redundant_implications_ += direct_implications.size();
+      direct_implications.clear();
+      direct_implications.shrink_to_fit();
+      continue;
+    }
 
     // Only keep the non-marked literal (and the redundant one which are never
-    // marked).
+    // marked). We mark i to remove it in the corner case where it was there.
     int new_size = 0;
+    is_marked_.Set(i);
     for (const Literal l : direct_implications) {
       if (!is_marked_[l.Index()]) {
         direct_implications[new_size++] = l;
+      } else {
+        CHECK(!is_redundant_[l.Index()]);
       }
     }
     const int diff = direct_implications.size() - new_size;
@@ -813,6 +1091,10 @@ bool BinaryImplicationGraph::ComputeTransitiveReduction() {
     if (work_done_in_mark_descendants_ > 1e8) break;
   }
 
+  if (num_fixed > 0) {
+    VLOG(1) << num_fixed
+            << " literals where fixed during ComputeTransitiveReduction().";
+  }
   if (num_redundant_implications_ > 0) {
     VLOG(1) << "Transitive reduction removed " << num_redundant_implications_
             << " literals. " << num_implications_ << " implications left. "
@@ -854,7 +1136,8 @@ struct VectorHash {
 }  // namespace
 
 void BinaryImplicationGraph::TransformIntoMaxCliques(
-    std::vector<std::vector<Literal>>* at_most_ones) {
+    std::vector<std::vector<Literal>>* at_most_ones,
+    int64 max_num_explored_nodes) {
   // The code below assumes a DAG.
   if (!is_dag_) DetectEquivalences();
   work_done_in_mark_descendants_ = 0;
@@ -889,7 +1172,9 @@ void BinaryImplicationGraph::TransformIntoMaxCliques(
 
     // Special case for clique of size 2, we don't expand them if they
     // are included in an already added clique.
-    if (old_size == 2) {
+    //
+    // TODO(user): the second condition means the literal must be false!
+    if (old_size == 2 && clique[0] != clique[1]) {
       if (!IntersectionIsEmpty(max_cliques_containing[clique[0].Index()],
                                max_cliques_containing[clique[1].Index()])) {
         ++num_removed;
@@ -899,18 +1184,17 @@ void BinaryImplicationGraph::TransformIntoMaxCliques(
     }
 
     // We only expand the clique as long as we didn't spend too much time.
-    if (work_done_in_mark_descendants_ < 1e8) {
+    if (work_done_in_mark_descendants_ < max_num_explored_nodes) {
       clique = ExpandAtMostOne(clique);
     }
     std::sort(clique.begin(), clique.end());
-    if (max_cliques.count(clique)) {
+    if (!gtl::InsertIfNotPresent(&max_cliques, clique)) {
       ++num_removed;
       clique.clear();
       continue;
     }
 
     const int clique_index = max_cliques.size();
-    max_cliques.insert(clique);
     for (const Literal l : clique) {
       max_cliques_containing[l.Index()].push_back(clique_index);
     }
@@ -921,7 +1205,9 @@ void BinaryImplicationGraph::TransformIntoMaxCliques(
   if (num_extended > 0 || num_removed > 0 || num_added > 0) {
     VLOG(1) << "Clique Extended: " << num_extended
             << " Removed: " << num_removed << " Added: " << num_added
-            << (work_done_in_mark_descendants_ > 1e8 ? " (Aborted)" : "");
+            << (work_done_in_mark_descendants_ > max_num_explored_nodes
+                    ? " (Aborted)"
+                    : "");
   }
 }
 
@@ -936,6 +1222,19 @@ void BinaryImplicationGraph::MarkDescendants(Literal root) {
       if (!is_marked_[l.Index()] && !is_redundant_[l.Index()]) {
         dfs_stack_.push_back(l);
         is_marked_.Set(l.Index());
+      }
+    }
+
+    if (current.Index() >= at_most_ones_.size()) continue;
+    for (const int start : at_most_ones_[current.Index()]) {
+      for (int i = start;; ++i) {
+        const Literal l = at_most_one_buffer_[i];
+        if (l.Index() == kNoLiteralIndex) break;
+        if (l == current) continue;
+        if (!is_marked_[l.NegatedIndex()] && !is_redundant_[l.NegatedIndex()]) {
+          dfs_stack_.push_back(l.Negated());
+          is_marked_.Set(l.NegatedIndex());
+        }
       }
     }
   }
@@ -983,7 +1282,7 @@ std::vector<Literal> BinaryImplicationGraph::ExpandAtMostOne(
 // ----- SatClause -----
 
 // static
-SatClause* SatClause::Create(const std::vector<Literal>& literals) {
+SatClause* SatClause::Create(absl::Span<const Literal> literals) {
   CHECK_GE(literals.size(), 2);
   SatClause* clause = reinterpret_cast<SatClause*>(
       ::operator new(sizeof(SatClause) + literals.size() * sizeof(Literal)));

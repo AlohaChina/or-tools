@@ -20,6 +20,8 @@
 #include "ortools/glop/rank_one_update.h"
 #include "ortools/glop/status.h"
 #include "ortools/lp_data/lp_types.h"
+#include "ortools/lp_data/permutation.h"
+#include "ortools/lp_data/scattered_vector.h"
 #include "ortools/lp_data/sparse.h"
 #include "ortools/util/stats.h"
 
@@ -143,9 +145,13 @@ class EtaFactorization {
 //
 // To speed-up and improve stability the factorization is refactorized at least
 // every 'refactorization_period' updates.
+//
+// This class does not take ownership of the underlying matrix and basis, and
+// thus they must outlive this class (and keep the same address in memory).
 class BasisFactorization {
  public:
-  BasisFactorization(const MatrixView& matrix, const RowToColMapping& basis);
+  BasisFactorization(const CompactSparseMatrix* compact_matrix,
+                     const RowToColMapping* basis);
   virtual ~BasisFactorization();
 
   // Sets the parameters for this component.
@@ -183,7 +189,7 @@ class BasisFactorization {
   ABSL_MUST_USE_RESULT Status Initialize();
 
   // Return the number of rows in the basis.
-  RowIndex GetNumberOfRows() const { return matrix_.num_rows(); }
+  RowIndex GetNumberOfRows() const { return compact_matrix_.num_rows(); }
 
   // Clears eta factorization and refactorizes LU.
   // Nothing happens if this is called on an already refactorized basis.
@@ -211,6 +217,9 @@ class BasisFactorization {
   // coefficient of value 1.0 at position 'j'.
   void LeftSolveForUnitRow(ColIndex j, ScatteredRow* y) const;
 
+  // Same as LeftSolveForUnitRow() but does not update any internal data.
+  void TemporaryLeftSolveForUnitRow(ColIndex j, ScatteredRow* y) const;
+
   // Right solves the system B.d = a where the input is the initial value of d.
   void RightSolve(ScatteredColumn* d) const;
 
@@ -228,7 +237,7 @@ class BasisFactorization {
   // Returns the norm of B^{-1}.a, this is a specific function because
   // it is a bit faster and it avoids polluting the stats of RightSolve().
   // It can be called only when IsRefactorized() is true.
-  Fractional RightSolveSquaredNorm(const SparseColumn& a) const;
+  Fractional RightSolveSquaredNorm(const ColumnView& a) const;
 
   // Returns the norm of (B^T)^{-1}.e_row where e is an unit vector.
   // This is a bit faster and avoids polluting the stats of LeftSolve().
@@ -301,7 +310,7 @@ class BasisFactorization {
   GlopParameters parameters_;
 
   // References to the basis subpart of the linear program matrix.
-  const MatrixView& matrix_;
+  const CompactSparseMatrix& compact_matrix_;
   const RowToColMapping& basis_;
 
   // Middle form product update factorization and scratchpad_ used to construct

@@ -48,6 +48,11 @@ class Presolver {
   // TODO(user): Returns the number of rules applied instead.
   bool Run(Model* model);
 
+  // Minimal version of the presolve.
+  // TODO(user): Currently, without this, the solver fails on a series of
+  // problems like hrc_exp1-1-945_sat.fzn. To investigate.
+  bool RunMinimal(Model* model);
+
   // Cleans the model for the CP solver.
   // In particular, it knows if we use a sat solver inside the CP
   // solver. In that case, for Boolean constraints, it remove the link
@@ -134,6 +139,7 @@ class Presolver {
   RuleStatus PresolveBool2Int(Constraint* ct, std::string* log);
   RuleStatus PresolveIntEq(Constraint* ct, std::string* log);
   RuleStatus Unreify(Constraint* ct, std::string* log);
+  RuleStatus RemoveFixedEnforcementLiteral(Constraint* ct, std::string* log);
   RuleStatus PresolveInequalities(Constraint* ct, std::string* log);
   RuleStatus PresolveIntNe(Constraint* ct, std::string* log);
   RuleStatus PresolveSetNotIn(Constraint* ct, std::string* log);
@@ -155,9 +161,12 @@ class Presolver {
   RuleStatus PresolveSimplifyElement(Constraint* ct, std::string* log);
   RuleStatus PresolveSimplifyExprElement(Constraint* ct, std::string* log);
   RuleStatus PropagateReifiedComparisons(Constraint* ct, std::string* log);
+  RuleStatus PropagateImpliedComparisons(Constraint* ct, std::string* log);
   RuleStatus StoreAbs(Constraint* ct, std::string* log);
+  RuleStatus PropagateAbsBounds(Constraint* ct, std::string* log);
   RuleStatus RemoveAbsFromIntLeReif(Constraint* ct, std::string* log);
   RuleStatus RemoveAbsFromIntEqNeReif(Constraint* ct, std::string* log);
+  RuleStatus RemoveAbsFromIntLinLe(Constraint* ct, std::string* log);
   RuleStatus SimplifyUnaryLinear(Constraint* ct, std::string* log);
   RuleStatus SimplifyBinaryLinear(Constraint* ct, std::string* log);
   RuleStatus CheckIntLinReifBounds(Constraint* ct, std::string* log);
@@ -195,7 +204,7 @@ class Presolver {
   // See http://en.wikipedia.org/wiki/Disjoint-set_data_structure.
   // Note that the equivalence is directed. We prefer to replace all instances
   // of 'from' with 'to', rather than the opposite.
-  void AddVariableSubstition(IntegerVariable* from, IntegerVariable* to);
+  void AddVariableSubstitution(IntegerVariable* from, IntegerVariable* to);
   IntegerVariable* FindRepresentativeOfVar(IntegerVariable* var);
   absl::flat_hash_map<const IntegerVariable*, IntegerVariable*>
       var_representative_map_;
@@ -203,6 +212,8 @@ class Presolver {
 
   // Stores abs_map_[x] = y if x = abs(y).
   absl::flat_hash_map<const IntegerVariable*, IntegerVariable*> abs_map_;
+  // Link the abs_var with its constraint.
+  absl::flat_hash_map<const IntegerVariable*, Constraint*> abs_ct_;
 
   // Stores affine_map_[x] = a * y + b.
   absl::flat_hash_map<const IntegerVariable*, AffineMapping> affine_map_;

@@ -1,38 +1,47 @@
-# Channeling constraints.
+| [home](README.md) | [boolean logic](boolean_logic.md) | [integer arithmetic](integer_arithmetic.md) | [channeling constraints](channeling.md) | [scheduling](scheduling.md) | [Using the CP-SAT solver](solver.md) | [Model manipulation](model.md) | [Python API](https://google.github.io/or-tools/python/ortools/sat/python/cp_model.html) |
+| ----------------- | --------------------------------- | ------------------------------------------- | --------------------------------------- | --------------------------- | ------------------------------------ | ------------------------------ | -------------------------------- |
+
+# Channeling constraints
 
 
+<!--ts-->
+   * [Channeling constraints](#channeling-constraints)
+      * [If-Then-Else expressions](#if-then-else-expressions)
+         * [Python code](#python-code)
+         * [C   code](#c-code)
+         * [Java code](#java-code)
+         * [C# code](#c-code-1)
+      * [A bin-packing problem](#a-bin-packing-problem)
+         * [Python code](#python-code-1)
+         * [C   code](#c-code-2)
+         * [Java code](#java-code-1)
+         * [C# code](#c-code-3)
 
-## Introduction
+<!-- Added by: lperron, at: Thu Nov 14 21:15:54 CET 2019 -->
 
-Channeling constraints are used to link different aspects of the same model.
+<!--te-->
 
-For instance, with a bin packing problem, one part of the model computes the
-load of each bin. Another part would like to maximize the number of bins under a
-given threshold. To implement this, we will channel the load of each bin into a
-set of Boolean variables that indicate if one bin load is under the threshold.
 
-Channeling is usually implemented using half-reified linear constraints.
+A *channeling constraint* links variables inside a model. They're used when you
+want to express a complicated relationship between variables, such as "if this
+variable satisfies a condition, force another variable to a particular value".
 
-## Implementing an If-Then-Else expression
+Channeling is usually implemented using *half-reified* linear constraints: one
+constraint implies another (a &rarr; b), but not necessarily the other way
+around (a &larr; b).
 
-We want to implement `y == x < 5 ? 0 : 10 - x`. This will be done with an
-intermediate boolean variable `b` and some half-reified constraints.
+## If-Then-Else expressions
 
-The following code produces the following output:
+Let's say you want to implement the following: "If *x* is less than 5, set *y*
+to 0. Otherwise, set *y* to 10-*x*". You can do this creating an intermediate
+boolean variable *b* that is true if *x* is greater than or equal to 5, and
+false otherwise:
 
-```
-x=0 y=0 b=0
-x=1 y=0 b=0
-x=2 y=0 b=0
-x=3 y=0 b=0
-x=4 y=0 b=0
-x=5 y=5 b=1
-x=6 y=4 b=1
-x=7 y=3 b=1
-x=8 y=2 b=1
-x=9 y=1 b=1
-x=10 y=0 b=1
-```
+*b* implies *y* == 10 - *x*
+
+not(*b*) implies *y* == 0
+
+These are implemented using the `OnlyEnforceIf` method as shown below.
 
 ### Python code
 
@@ -67,22 +76,24 @@ class VarArraySolutionPrinter(cp_model.CpSolverSolutionCallback):
 def ChannelingSampleSat():
   """Demonstrates how to link integer constraints together."""
 
-  # Model.
+  # Create the CP-SAT model.
   model = cp_model.CpModel()
 
-  # Variables.
+  # Declare our two primary variables.
   x = model.NewIntVar(0, 10, 'x')
   y = model.NewIntVar(0, 10, 'y')
 
+  # Declare our intermediate boolean variable.
   b = model.NewBoolVar('b')
 
   # Implement b == (x >= 5).
   model.Add(x >= 5).OnlyEnforceIf(b)
   model.Add(x < 5).OnlyEnforceIf(b.Not())
 
-  # b implies (y == 10 - x).
+  # Create our two half-reified constraints.
+  # First, b implies (y == 10 - x).
   model.Add(y == 10 - x).OnlyEnforceIf(b)
-  # not(b) implies y == 0.
+  # Second, not(b) implies y == 0.
   model.Add(y == 0).OnlyEnforceIf(b.Not())
 
   # Search for x values in increasing order.
@@ -92,10 +103,10 @@ def ChannelingSampleSat():
   # Create a solver and solve with a fixed search.
   solver = cp_model.CpSolver()
 
-  # Force solver to follow the decision strategy exactly.
+  # Force the solver to follow the decision strategy exactly.
   solver.parameters.search_branching = cp_model.FIXED_SEARCH
 
-  # Searches and prints out all solutions.
+  # Search and print out all solutions.
   solution_printer = VarArraySolutionPrinter([x, y, b])
   solver.SearchForAllSolutions(model, solution_printer)
 
@@ -114,27 +125,31 @@ namespace operations_research {
 namespace sat {
 
 void ChannelingSampleSat() {
-  // Model.
+  // Create the CP-SAT model.
   CpModelBuilder cp_model;
 
-  // Main variables.
+  // Declare our two primary variables.
   const IntVar x = cp_model.NewIntVar({0, 10});
   const IntVar y = cp_model.NewIntVar({0, 10});
+
+  // Declare our intermediate boolean variable.
   const BoolVar b = cp_model.NewBoolVar();
 
-  // b == (x >= 5).
+  // Implement b == (x >= 5).
   cp_model.AddGreaterOrEqual(x, 5).OnlyEnforceIf(b);
   cp_model.AddLessThan(x, 5).OnlyEnforceIf(Not(b));
 
-  // b implies (y == 10 - x).
+  // Create our two half-reified constraints.
+  // First, b implies (y == 10 - x).
   cp_model.AddEquality(LinearExpr::Sum({x, y}), 10).OnlyEnforceIf(b);
-  // not(b) implies y == 0.
+  // Second, not(b) implies y == 0.
   cp_model.AddEquality(y, 0).OnlyEnforceIf(Not(b));
 
   // Search for x values in increasing order.
   cp_model.AddDecisionStrategy({x}, DecisionStrategyProto::CHOOSE_FIRST,
                                DecisionStrategyProto::SELECT_MIN_VALUE);
 
+  // Create a solver and solve with a fixed search.
   Model model;
   SatParameters parameters;
   parameters.set_search_branching(SatParameters::FIXED_SEARCH);
@@ -145,7 +160,7 @@ void ChannelingSampleSat() {
               << " y=" << SolutionIntegerValue(r, y)
               << " b=" << SolutionBooleanValue(r, b);
   }));
-  SolveWithModel(cp_model, &model);
+  SolveCpModel(cp_model.Build(), &model);
 }
 
 }  // namespace sat
@@ -167,6 +182,7 @@ import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.CpSolver;
 import com.google.ortools.sat.CpSolverSolutionCallback;
 import com.google.ortools.sat.IntVar;
+import com.google.ortools.sat.LinearExpr;
 
 /** Link integer constraints together. */
 public class ChannelingSampleSat {
@@ -174,37 +190,39 @@ public class ChannelingSampleSat {
   static { System.loadLibrary("jniortools"); }
 
   public static void main(String[] args) throws Exception {
-    // Model.
+    // Create the CP-SAT model.
     CpModel model = new CpModel();
 
-    // Variables.
+    // Declare our two primary variables.
     IntVar x = model.newIntVar(0, 10, "x");
     IntVar y = model.newIntVar(0, 10, "y");
 
+    // Declare our intermediate boolean variable.
     IntVar b = model.newBoolVar("b");
 
-    // Implements b == (x >= 5).
+    // Implement b == (x >= 5).
     model.addGreaterOrEqual(x, 5).onlyEnforceIf(b);
     model.addLessOrEqual(x, 4).onlyEnforceIf(b.not());
 
-    // b implies (y == 10 - x).
-    model.addLinearSumEqual(new IntVar[] {x, y}, 10).onlyEnforceIf(b);
-    // not(b) implies y == 0.
+    // Create our two half-reified constraints.
+    // First, b implies (y == 10 - x).
+    model.addEquality(LinearExpr.sum(new IntVar[] {x, y}), 10).onlyEnforceIf(b);
+    // Second, not(b) implies y == 0.
     model.addEquality(y, 0).onlyEnforceIf(b.not());
 
-    // Searches for x values in increasing order.
+    // Search for x values in increasing order.
     model.addDecisionStrategy(
         new IntVar[] {x},
         DecisionStrategyProto.VariableSelectionStrategy.CHOOSE_FIRST,
         DecisionStrategyProto.DomainReductionStrategy.SELECT_MIN_VALUE);
 
-    // Creates the solver.
+    // Create the solver.
     CpSolver solver = new CpSolver();
 
-    // Forces the solver to follow the decision strategy exactly.
+    // Force the solver to follow the decision strategy exactly.
     solver.getParameters().setSearchBranching(SatParameters.SearchBranching.FIXED_SEARCH);
 
-    // Solves the problem with the printer callback.
+    // Solve the problem with the printer callback.
     solver.searchAllSolutions(
         model,
         new CpSolverSolutionCallback() {
@@ -232,6 +250,7 @@ public class ChannelingSampleSat {
 ```cs
 using System;
 using Google.OrTools.Sat;
+using Google.OrTools.Util;
 
 public class VarArraySolutionPrinter : CpSolverSolutionCallback
 {
@@ -258,22 +277,24 @@ public class ChannelingSampleSat
 {
   static void Main()
   {
-    // Model.
+    // Create the CP-SAT model.
     CpModel model = new CpModel();
 
-    // Variables.
+    // Declare our two primary variables.
     IntVar x = model.NewIntVar(0, 10, "x");
     IntVar y = model.NewIntVar(0, 10, "y");
 
+    // Declare our intermediate boolean variable.
     IntVar b = model.NewBoolVar("b");
 
     // Implement b == (x >= 5).
     model.Add(x >= 5).OnlyEnforceIf(b);
     model.Add(x < 5).OnlyEnforceIf(b.Not());
 
-    // b implies (y == 10 - x).
+    // Create our two half-reified constraints.
+    // First, b implies (y == 10 - x).
     model.Add(y == 10 - x).OnlyEnforceIf(b);
-    // not(b) implies y == 0.
+    // Second, not(b) implies y == 0.
     model.Add(y == 0).OnlyEnforceIf(b.Not());
 
     // Search for x values in increasing order.
@@ -282,7 +303,7 @@ public class ChannelingSampleSat
         DecisionStrategyProto.Types.VariableSelectionStrategy.ChooseFirst,
         DecisionStrategyProto.Types.DomainReductionStrategy.SelectMinValue);
 
-    // Create a solver and solve with a fixed search.
+    // Create the solver.
     CpSolver solver = new CpSolver();
 
     // Force solver to follow the decision strategy exactly.
@@ -295,25 +316,48 @@ public class ChannelingSampleSat
 }
 ```
 
+This displays the following:
+
+```
+x=0 y=0 b=0
+x=1 y=0 b=0
+x=2 y=0 b=0
+x=3 y=0 b=0
+x=4 y=0 b=0
+x=5 y=5 b=1
+x=6 y=4 b=1
+x=7 y=3 b=1
+x=8 y=2 b=1
+x=9 y=1 b=1
+x=10 y=0 b=1
+```
+
+
 ## A bin-packing problem
 
-We have 10 bins of capacity 100, and items to pack into the bins. We would like
-to maximize the number of bins that can accept one emergency load of size 20.
+As another example of a channeling constraint, consider a bin packing problem in
+which one part of the model computes the load of each bin, while another
+maximizes the number of bins under a given threshold. To implement this, you can
+*channel* the load of each bin into a set of boolean variables, each indicating
+whether it's under the threshold.
 
-So, we need to maximize the number of bins that have a load less than 80.
-Channeling is used to link the *load* and *slack* variables together in the
-following code samples.
+To make this more concrete, let's say you have 10 bins of capacity 100, and
+items to pack into the bins. You would like to maximize the number of bins that
+can accept one emergency load of size 20.
+
+To do this, you need to maximize the number of bins that have a load less
+than 80.  In the code below, channeling is used to link the *load* and *slack*
+variables together:
 
 ### Python code
 
 ```python
 """Solves a binpacking problem using the CP-SAT solver."""
 
-from __future__ import absolute_import
-from __future__ import division
 from __future__ import print_function
 
 from ortools.sat.python import cp_model
+
 
 
 def BinpackingProblemSat():
@@ -448,7 +492,7 @@ void BinpackingProblemSat() {
   cp_model.Maximize(LinearExpr::BooleanSum(slacks));
 
   // Solving part.
-  const CpSolverResponse response = Solve(cp_model);
+  const CpSolverResponse response = Solve(cp_model.Build());
   LOG(INFO) << CpSolverResponseStats(response);
 }
 
@@ -469,6 +513,7 @@ import com.google.ortools.sat.CpSolverStatus;
 import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.CpSolver;
 import com.google.ortools.sat.IntVar;
+import com.google.ortools.sat.LinearExpr;
 
 /** Solves a bin packing problem with the CP-SAT solver. */
 public class BinPackingProblemSat {
@@ -518,7 +563,7 @@ public class BinPackingProblemSat {
       for (int i = 0; i < numItems; ++i) {
         vars[i] = x[i][b];
       }
-      model.addScalProdEqual(vars, sizes, load[b]);
+      model.addEquality(LinearExpr.scalProd(vars, sizes), load[b]);
     }
 
     // Place all items.
@@ -527,7 +572,7 @@ public class BinPackingProblemSat {
       for (int b = 0; b < numBins; ++b) {
         vars[b] = x[i][b];
       }
-      model.addLinearSumEqual(vars, items[i][1]);
+      model.addEquality(LinearExpr.sum(vars), items[i][1]);
     }
 
     // Links load and slack.
@@ -540,7 +585,7 @@ public class BinPackingProblemSat {
     }
 
     // Maximize sum of slacks.
-    model.maximizeSum(slacks);
+    model.maximize(LinearExpr.sum(slacks));
 
     // Solves and prints out the solution.
     CpSolver solver = new CpSolver();
@@ -576,9 +621,9 @@ public class BinPackingProblemSat
     // Data.
     int bin_capacity = 100;
     int slack_capacity = 20;
-    int num_bins = 10;
+    int num_bins = 5;
 
-    int[,] items = new int[,] { { 20, 12 }, { 15, 12 }, { 30, 8 }, { 45, 5 } };
+    int[,] items = new int[,] { { 20, 6 }, { 15, 6 }, { 30, 4 }, { 45, 3 } };
     int num_items = items.GetLength(0);
 
     // Model.
@@ -633,7 +678,7 @@ public class BinPackingProblemSat
       {
         tmp[b] = x[i, b];
       }
-      model.Add(tmp.Sum() == items[i, 1]);
+      model.Add(LinearExpr.Sum(tmp) == items[i, 1]);
     }
 
     // Links load and slack.
@@ -647,7 +692,7 @@ public class BinPackingProblemSat
     }
 
     // Maximize sum of slacks.
-    model.Maximize(slacks.Sum());
+    model.Maximize(LinearExpr.Sum(slacks));
 
     // Solves and prints out the solution.
     CpSolver solver = new CpSolver();

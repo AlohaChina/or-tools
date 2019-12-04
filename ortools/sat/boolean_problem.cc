@@ -18,8 +18,8 @@
 #include <limits>
 #include <numeric>
 #include <utility>
-#include "absl/container/flat_hash_map.h"
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_format.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/integral_types.h"
@@ -60,7 +60,7 @@ namespace {
 // Used by BooleanProblemIsValid() to test that there is no duplicate literals,
 // that they are all within range and that there is no zero coefficient.
 //
-// A non-empty std::string indicates an error.
+// A non-empty string indicates an error.
 template <typename LinearTerms>
 std::string ValidateLinearTerms(const LinearTerms& terms,
                                 std::vector<bool>* variable_seen) {

@@ -23,9 +23,10 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include "absl/memory/memory.h"
-#include "ortools/base/random.h"
 
+#include "absl/memory/memory.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/file.h"
 #include "ortools/base/integral_types.h"
@@ -82,6 +83,13 @@ DEFINE_bool(cp_diffn_use_cumulative, true,
             "Diffn constraint adds redundant cumulative constraint");
 DEFINE_bool(cp_use_element_rmq, true,
             "If true, rmq's will be used in element expressions.");
+DEFINE_int32(cp_check_solution_period, 1,
+             "Number of solutions explored between two solution checks during "
+             "local search.");
+DEFINE_int64(cp_random_seed, 12345,
+             "Random seed used in several (but not all) random number "
+             "generators used by the CP solver. Use -1 to auto-generate an"
+             "undeterministic random seed.");
 
 void ConstraintSolverFailsHere() { VLOG(3) << "Fail"; }
 
@@ -136,6 +144,7 @@ ConstraintSolverParameters Solver::DefaultSolverParameters() {
   params.set_max_edge_finder_size(FLAGS_cp_max_edge_finder_size);
   params.set_diffn_use_cumulative(FLAGS_cp_diffn_use_cumulative);
   params.set_use_element_rmq(FLAGS_cp_use_element_rmq);
+  params.set_check_solution_period(FLAGS_cp_check_solution_period);
   return params;
 }
 
@@ -941,6 +950,7 @@ class Search {
         marker_stack_(),
         fail_buffer_(),
         solution_counter_(0),
+        unchecked_solution_counter_(0),
         decision_builder_(nullptr),
         created_by_solve_(false),
         search_depth_(0),
@@ -959,6 +969,7 @@ class Search {
         marker_stack_(),
         fail_buffer_(),
         solution_counter_(0),
+        unchecked_solution_counter_(0),
         decision_builder_(nullptr),
         created_by_solve_(false),
         search_depth_(-1),
@@ -989,6 +1000,8 @@ class Search {
   bool LocalOptimum();
   bool AcceptDelta(Assignment* delta, Assignment* deltadelta);
   void AcceptNeighbor();
+  void AcceptUncheckedNeighbor();
+  bool IsUncheckedSolutionLimitReached();
   void PeriodicCheck();
   int ProgressPercent();
   void Accept(ModelVisitor* const visitor) const;
@@ -996,6 +1009,10 @@ class Search {
   void Clear();
   void IncrementSolutionCounter() { ++solution_counter_; }
   int64 solution_counter() const { return solution_counter_; }
+  void IncrementUncheckedSolutionCounter() { ++unchecked_solution_counter_; }
+  int64 unchecked_solution_counter() const {
+    return unchecked_solution_counter_;
+  }
   void set_decision_builder(DecisionBuilder* const db) {
     decision_builder_ = db;
   }
@@ -1047,6 +1064,7 @@ class Search {
   std::vector<SearchMonitor*> monitors_;
   jmp_buf fail_buffer_;
   int64 solution_counter_;
+  int64 unchecked_solution_counter_;
   DecisionBuilder* decision_builder_;
   bool created_by_solve_;
   Solver::BranchSelector selector_;
@@ -1179,6 +1197,7 @@ void Search::EnterSearch() {
   // leaving search. This enables the information to persist outside of
   // top-level search.
   solution_counter_ = 0;
+  unchecked_solution_counter_ = 0;
 
   ForAll(monitors_, &SearchMonitor::EnterSearch);
 }
@@ -1283,6 +1302,19 @@ void Search::AcceptNeighbor() {
   ForAll(monitors_, &SearchMonitor::AcceptNeighbor);
 }
 
+void Search::AcceptUncheckedNeighbor() {
+  ForAll(monitors_, &SearchMonitor::AcceptUncheckedNeighbor);
+}
+
+bool Search::IsUncheckedSolutionLimitReached() {
+  for (SearchMonitor* const monitor : monitors_) {
+    if (monitor->IsUncheckedSolutionLimitReached()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void Search::PeriodicCheck() {
   ForAll(monitors_, &SearchMonitor::PeriodicCheck);
 }
@@ -1312,6 +1344,10 @@ bool AcceptDelta(Search* const search, Assignment* delta,
 }
 
 void AcceptNeighbor(Search* const search) { search->AcceptNeighbor(); }
+
+void AcceptUncheckedNeighbor(Search* const search) {
+  search->AcceptUncheckedNeighbor();
+}
 
 namespace {
 
@@ -1364,8 +1400,9 @@ Solver::Solver(const std::string& name,
                const ConstraintSolverParameters& parameters)
     : name_(name),
       parameters_(parameters),
-      random_(ACMRandom::DeterministicSeed()),
+      random_(CpRandomSeed()),
       demon_profiler_(BuildDemonProfiler(this)),
+      use_fast_local_search_(true),
       local_search_profiler_(BuildLocalSearchProfiler(this)) {
   Init();
 }
@@ -1373,8 +1410,9 @@ Solver::Solver(const std::string& name,
 Solver::Solver(const std::string& name)
     : name_(name),
       parameters_(DefaultSolverParameters()),
-      random_(ACMRandom::DeterministicSeed()),
+      random_(CpRandomSeed()),
       demon_profiler_(BuildDemonProfiler(this)),
+      use_fast_local_search_(true),
       local_search_profiler_(BuildLocalSearchProfiler(this)) {
   Init();
 }
@@ -1391,6 +1429,7 @@ void Solver::Init() {
   neighbors_ = 0;
   filtered_neighbors_ = 0;
   accepted_neighbors_ = 0;
+  optimization_direction_ = NOT_SET;
   timer_ = absl::make_unique<ClockTimer>();
   searches_.assign(1, new Search(this, 0));
   fail_stamp_ = GG_ULONGLONG(1);
@@ -1471,9 +1510,27 @@ std::string Solver::DebugString() const {
 
 int64 Solver::MemoryUsage() { return GetProcessMemoryUsage(); }
 
-int64 Solver::wall_time() const { return timer_->GetInMs(); }
+int64 Solver::wall_time() const {
+  return absl::ToInt64Milliseconds(timer_->GetDuration());
+}
+
+absl::Time Solver::Now() const {
+  return absl::FromUnixSeconds(0) + timer_->GetDuration();
+}
 
 int64 Solver::solutions() const { return TopLevelSearch()->solution_counter(); }
+
+int64 Solver::unchecked_solutions() const {
+  return TopLevelSearch()->unchecked_solution_counter();
+}
+
+void Solver::IncrementUncheckedSolutionCounter() {
+  TopLevelSearch()->IncrementUncheckedSolutionCounter();
+}
+
+bool Solver::IsUncheckedSolutionLimitReached() {
+  return TopLevelSearch()->IsUncheckedSolutionLimitReached();
+}
 
 void Solver::TopPeriodicCheck() { TopLevelSearch()->PeriodicCheck(); }
 
@@ -2403,7 +2460,7 @@ std::string Solver::GetName(const PropagationBaseObject* object) {
 void Solver::SetName(const PropagationBaseObject* object,
                      const std::string& name) {
   if (parameters_.store_names() &&
-      GetName(object).compare(name) != 0) {  // in particular if name.empty()
+      GetName(object) != name) {  // in particular if name.empty()
     propagation_object_names_[object] = name;
   }
 }
@@ -2812,6 +2869,7 @@ bool SearchMonitor::AcceptDelta(Assignment* delta, Assignment* deltadelta) {
   return true;
 }
 void SearchMonitor::AcceptNeighbor() {}
+void SearchMonitor::AcceptUncheckedNeighbor() {}
 void SearchMonitor::PeriodicCheck() {}
 void SearchMonitor::Accept(ModelVisitor* const visitor) const {}
 // A search monitors adds itself on the active search.
@@ -3149,6 +3207,13 @@ std::string Solver::SearchContext() const {
 
 std::string Solver::SearchContext(const Search* search) const {
   return search->search_context();
+}
+
+Assignment* Solver::GetOrCreateLocalSearchState() {
+  if (local_search_state_ == nullptr) {
+    local_search_state_ = absl::make_unique<Assignment>(this);
+  }
+  return local_search_state_.get();
 }
 
 // ----------------- Constraint class -------------------

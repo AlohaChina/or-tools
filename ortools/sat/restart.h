@@ -49,7 +49,7 @@ class RestartPolicy {
   // Returns the number of restarts since the last Reset().
   int NumRestarts() const { return num_restarts_; }
 
-  // Returns a std::string with the current restart statistics.
+  // Returns a string with the current restart statistics.
   std::string InfoString() const;
 
  private:
@@ -60,7 +60,7 @@ class RestartPolicy {
   int strategy_change_conflicts_;
 
   int strategy_counter_;
-  std::vector<int> strategies_;  // SatParameters::RestartAlgorithm
+  std::vector<SatParameters::RestartAlgorithm> strategies_;
 
   int luby_count_;
   int conflicts_until_next_restart_;

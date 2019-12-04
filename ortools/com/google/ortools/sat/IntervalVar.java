@@ -18,7 +18,7 @@ import com.google.ortools.sat.CpModelProto;
 import com.google.ortools.sat.IntervalConstraintProto;
 
 /** An interval variable. This class must be constructed from the CpModel class. */
-public class IntervalVar {
+public final class IntervalVar {
   IntervalVar(
       CpModelProto.Builder builder, int startIndex, int sizeIndex, int endIndex, String name) {
     this.modelBuilder = builder;
@@ -49,8 +49,14 @@ public class IntervalVar {
     return modelBuilder.getConstraints(constraintIndex).toString();
   }
 
-  int getIndex() {
+  /** Returns the index of the interval constraint in the model. */
+  public int getIndex() {
     return constraintIndex;
+  }
+
+  /** Returns the interval builder. */
+  public IntervalConstraintProto.Builder getBuilder() {
+    return intervalBuilder;
   }
 
   /** Returns the name passed in the constructor. */

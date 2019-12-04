@@ -42,11 +42,9 @@
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_split.h"
 #include "google/protobuf/text_format.h"
-#include "ortools/base/callback.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/file.h"
 #include "ortools/base/mathutil.h"
-#include "ortools/base/strtoint.h"
 #include "ortools/base/timer.h"
 #include "ortools/constraint_solver/routing.h"
 #include "ortools/constraint_solver/routing_enums.pb.h"
@@ -85,7 +83,8 @@ int64 Travel(const Coordinates* const coords,
   const int xd = coords->at(from.value()).first - coords->at(to.value()).first;
   const int yd =
       coords->at(from.value()).second - coords->at(to.value()).second;
-  return static_cast<int64>(kScalingFactor * sqrt(1.0L * xd * xd + yd * yd));
+  return static_cast<int64>(kScalingFactor *
+                            std::sqrt(1.0L * xd * xd + yd * yd));
 }
 
 // Returns the scaled service time at a given node, service_times holding the

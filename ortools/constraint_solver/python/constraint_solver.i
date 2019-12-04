@@ -42,10 +42,10 @@
 // std::function utilities.
 %include "ortools/util/python/functions.i"
 
-%import "ortools/util/python/vector.i"
+%include "ortools/util/python/vector.i"
 
 // We *do* need to use SWIGTYPE_... type names directly, because the
-// (recommended replacement) $descriptor macro fails, as of 2014-06, with
+// (recommended replacement) $descriptor macro fails, as of 2019-07, with
 // types such as operations_research::Solver.
 // The absence of whitespace before 'swiglint' is mandatory.
 //swiglint: disable swigtype-name
@@ -56,7 +56,7 @@
 namespace operations_research {
 class AssignmentProto;
 class ConstraintSolverParameters;
-class SearchLimitParameters;
+class RegularLimitParameters;
 }  // namespace operations_research
 
 %{
@@ -74,9 +74,6 @@ struct FailureProtect {
 #include "ortools/constraint_solver/search_limit.pb.h"
 #include "ortools/constraint_solver/solver_parameters.pb.h"
 %}
-
-typedef int64_t int64;
-typedef uint64_t uint64;
 
 // We need to fully support C++ inheritance, because it is heavily used by the
 // exposed C++ classes. Eg:
@@ -122,23 +119,6 @@ PY_CONVERT_HELPER_INTEXPR_OR_INTVAR(IntExpr);
 
 
 // Actual conversions. This also includes the conversion to std::vector<Class>.
-%define PY_CONVERT(Class)
-%{
-bool CanConvertTo ## Class(PyObject *py_obj) {
-  operations_research::Class* tmp;
-  return PyObjAs(py_obj, &tmp);
-}
-%}
-%typemap(in) operations_research::Class* const {
-  if (!PyObjAs($input, &$1)) SWIG_fail;
-}
-%typecheck(SWIG_TYPECHECK_POINTER) operations_research::Class* const {
-  $1 = CanConvertTo ## Class($input);
-  if ($1 == 0) PyErr_Clear();
-}
-PY_LIST_OUTPUT_TYPEMAP(operations_research::Class*, CanConvertTo ## Class,
-                       PyObjAs<operations_research::Class*>);
-%enddef
 PY_CONVERT(IntVar);
 PY_CONVERT(IntExpr);
 PY_CONVERT(Decision);
@@ -148,7 +128,6 @@ PY_CONVERT(IntervalVar);
 PY_CONVERT(SequenceVar);
 PY_CONVERT(LocalSearchOperator);
 PY_CONVERT(LocalSearchFilter);
-#undef PY_CONVERT
 
 // Support passing std::function<void(Solver*)> as argument.
 // See ../utils/python/functions.i, from which this was copied and adapted.
@@ -245,7 +224,7 @@ Constraint* PythonMethodName(int64 date) {
 #undef PRECEDENCE_CONSTRAINT
 #undef SCHEDULING_CONSTRAINT
 
-// Use DebugString() for the native std::string conversion in python, for objects
+// Use DebugString() for the native string conversion in python, for objects
 // that support it.
 %define PY_STRINGIFY_DEBUGSTRING(Class)
 %extend operations_research::Class {
@@ -358,11 +337,9 @@ PY_STRINGIFY_DEBUGSTRING(Decision);
   LocalSearchFilter* SumObjectiveFilter(
       const std::vector<IntVar*>& vars,
       Solver::IndexEvaluator2 values,
-      IntVar* const objective,
       Solver::LocalSearchFilterBound filter_enum) {
     return $self->MakeSumObjectiveFilter(vars,
                                          values,
-                                         objective,
                                          filter_enum);
   }
 }
@@ -690,7 +667,7 @@ PY_STRINGIFY_DEBUGSTRING(Decision);
     solver->clear_fail_intercept();
     // IMPORTANT: the type and message of the exception raised matter,
     // because they are caught by the python overrides of some CP classes.
-    // See the occurrences of the "PyExc_Exception" std::string below.
+    // See the occurrences of the "PyExc_Exception" string below.
     PyErr_SetString(PyExc_Exception, "CP Solver fail");
     SWIG_fail;
   }
@@ -755,7 +732,7 @@ namespace operations_research {
 %unignore Solver::SolveAndCommit;
 %unignore Solver::FinishCurrentSearch;
 %unignore Solver::RestartCurrentSearch;
-// TOOD(lperron): Support Action in python.
+// TODO(user): Support Action in python.
 // %unignore Solver::AddBacktrackAction;
 
 // Solver: Debug and performance counters.
@@ -922,7 +899,7 @@ namespace operations_research {
 %rename (ConstantRestart) Solver::MakeConstantRestart;
 
 // Solver: Search Limits.
-%unignore Solver::SearchLimitParameters;  // search_limit.proto
+%unignore Solver::RegularLimitParameters;  // search_limit.proto
 %rename (Limit) Solver::MakeLimit;
 %rename (TimeLimit) Solver::MakeTimeLimit;
 %rename (BranchesLimit) Solver::MakeBranchesLimit;
@@ -1776,7 +1753,6 @@ namespace operations_research {
 // - Reset()
 // - Clone()
 // - Copy()
-// - Var()
 // - Store()
 // - Restore()
 // - LoadFromProto()
@@ -1813,6 +1789,7 @@ namespace operations_research {
 %unignore IntervalVarElement::SetPerformedMax;
 %unignore IntervalVarElement::SetPerformedRange;
 %unignore IntervalVarElement::SetPerformedValue;
+%unignore IntervalVarElement::Var;
 
 // SequenceVarElement
 // Ignored:
@@ -1821,7 +1798,6 @@ namespace operations_research {
 // - Reset()
 // - Clone()
 // - Copy()
-// - Var()
 // - Store()
 // - Restore()
 // - LoadFromProto()
@@ -1837,6 +1813,7 @@ namespace operations_research {
 %unignore SequenceVarElement::SetForwardSequence;
 %unignore SequenceVarElement::SetBackwardSequence;
 %unignore SequenceVarElement::SetUnperformed;
+%unignore SequenceVarElement::Var;
 
 // AssignmentContainer<>
 // Ignored:
@@ -1879,8 +1856,8 @@ PY_PROTO_TYPEMAP(ortools.constraint_solver.solver_parameters_pb2,
                  ConstraintSolverParameters,
                  operations_research::ConstraintSolverParameters)
 PY_PROTO_TYPEMAP(ortools.constraint_solver.search_limit_pb2,
-                 SearchLimitParameters,
-                 operations_research::SearchLimitParameters)
+                 RegularLimitParameters,
+                 operations_research::RegularLimitParameters)
 
 %include "ortools/constraint_solver/constraint_solver.h"
 
@@ -1908,19 +1885,29 @@ namespace operations_research {
 %unignore Rev<bool>::SetValue;
 %template(RevBool) Rev<bool>;
 
-%rename (IntContainer) AssignmentContainer<IntVar, IntVarElement>;
-%rename (Element)
-    AssignmentContainer<IntVar, IntVarElement>::MutableElement(int);
-%unignore AssignmentContainer<IntVar, IntVarElement>::Size;
-%template (IntContainer) AssignmentContainer<IntVar, IntVarElement>;
-%rename (IntervalContainer)
-    AssignmentContainer<IntervalVar, IntervalVarElement>;
-%template (IntervalContainer)
-    AssignmentContainer<IntervalVar, IntervalVarElement>;
-%rename (SequenceContainer)
-    AssignmentContainer<SequenceVar, SequenceVarElement>;
-%template (SequenceContainer)
-    AssignmentContainer<SequenceVar, SequenceVarElement>;
+#define PARENTHIZE(X...) X
+%define RENAME_ASSIGNMENT_CONTAINER(TYPE, NEW_NAME)
+%rename (NEW_NAME) TYPE;
+%unignore TYPE::Contains;
+%rename (Element) TYPE::MutableElement(int);
+%unignore TYPE::Size;
+%unignore TYPE::Store;
+%unignore TYPE::Restore;
+%template (NEW_NAME) TYPE;
+%enddef
+
+RENAME_ASSIGNMENT_CONTAINER(
+    PARENTHIZE(AssignmentContainer<IntVar, IntVarElement>),
+    IntVarContainer)
+RENAME_ASSIGNMENT_CONTAINER(
+    PARENTHIZE(AssignmentContainer<IntervalVar, IntervalVarElement>),
+    IntervalVarContainer)
+RENAME_ASSIGNMENT_CONTAINER(
+    PARENTHIZE(AssignmentContainer<SequenceVar, SequenceVarElement>),
+    SequenceVarContainer)
+
+#undef RENAME_ASSIGNMENT_CONTAINER
+#undef PARENTHIZE
 
 }  // namespace operations_research
 

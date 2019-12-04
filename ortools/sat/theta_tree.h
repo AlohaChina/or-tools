@@ -91,11 +91,11 @@ namespace sat {
 
 // The minimal value of an envelope, for instance the envelope the empty set.
 template <typename IntegerType>
-inline const IntegerType IntegerTypeMinimumValue() {
+constexpr IntegerType IntegerTypeMinimumValue() {
   return std::numeric_limits<IntegerType>::min();
 }
 template <>
-inline const IntegerValue IntegerTypeMinimumValue() {
+constexpr IntegerValue IntegerTypeMinimumValue() {
   return kMinIntegerValue;
 }
 
@@ -171,7 +171,7 @@ class ThetaLambdaTree {
 
   // Getters.
   IntegerType EnergyMin(int event) const {
-    return tree_sum_of_energy_min_[GetLeafFromEvent(event)];
+    return tree_[GetLeafFromEvent(event)].sum_of_energy_min;
   }
 
  private:
@@ -203,11 +203,18 @@ class ThetaLambdaTree {
   int power_of_two_;
 
   // Envelopes and energies of nodes.
-  std::vector<IntegerType> tree_envelope_;
-  std::vector<IntegerType> tree_envelope_opt_;
-  std::vector<IntegerType> tree_sum_of_energy_min_;
-  std::vector<IntegerType> tree_max_of_energy_delta_;
+  struct TreeNode {
+    IntegerType envelope;
+    IntegerType envelope_opt;
+    IntegerType sum_of_energy_min;
+    IntegerType max_of_energy_delta;
+  };
+  std::vector<TreeNode> tree_;
 };
+
+// Explicit instantiations in theta_Tree.cc.
+extern template class ThetaLambdaTree<IntegerValue>;
+extern template class ThetaLambdaTree<int64>;
 
 }  // namespace sat
 }  // namespace operations_research

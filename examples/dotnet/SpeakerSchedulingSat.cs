@@ -121,12 +121,12 @@ class SpeakerScheduling
           }
         }
       }
-      model.Add(all_vars.ToArray().Sum() == 1);
+      model.Add(LinearExpr.Sum(all_vars) == 1);
     }
     // Force the schedule to be consistent.
     for (int slot = first_slot; slot <= last_slot; ++slot)
     {
-      model.Add(contributions_per_slot[slot].ToArray().Sum() <= 1);
+      model.Add(LinearExpr.Sum(contributions_per_slot[slot]) <= 1);
     }
 
     // Creates last_slot.
@@ -145,6 +145,7 @@ class SpeakerScheduling
 
     // Creates the solver and solve.
     CpSolver solver = new CpSolver();
+    solver.StringParameters = "num_search_workers:8";
     CpSolverStatus status = solver.Solve(model);
 
     if (status == CpSolverStatus.Optimal)

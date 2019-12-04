@@ -17,8 +17,8 @@
 #include <cmath>
 #include <string>
 #include <utility>
-#include "absl/container/flat_hash_map.h"
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "ortools/base/logging.h"
@@ -232,11 +232,12 @@ void LinearProgram::SetVariableName(ColIndex col, const std::string& name) {
 }
 
 void LinearProgram::SetVariableType(ColIndex col, VariableType type) {
-  if (type == VariableType::INTEGER) {
-    integer_variables_list_is_consistent_ &=
-        (variable_types_[col] == VariableType::INTEGER);
-  }
+  const bool var_was_integer = IsVariableInteger(col);
   variable_types_[col] = type;
+  const bool var_is_integer = IsVariableInteger(col);
+  if (var_is_integer != var_was_integer) {
+    integer_variables_list_is_consistent_ = false;
+  }
 }
 
 void LinearProgram::SetConstraintName(RowIndex row, const std::string& name) {
@@ -245,9 +246,14 @@ void LinearProgram::SetConstraintName(RowIndex row, const std::string& name) {
 
 void LinearProgram::SetVariableBounds(ColIndex col, Fractional lower_bound,
                                       Fractional upper_bound) {
-  DebugCheckBoundsValid(lower_bound, upper_bound);
+  if (dcheck_bounds_) DebugCheckBoundsValid(lower_bound, upper_bound);
+  const bool var_was_binary = IsVariableBinary(col);
   variable_lower_bounds_[col] = lower_bound;
   variable_upper_bounds_[col] = upper_bound;
+  const bool var_is_binary = IsVariableBinary(col);
+  if (var_is_binary != var_was_binary) {
+    integer_variables_list_is_consistent_ = false;
+  }
 }
 
 void LinearProgram::UpdateAllIntegerVariableLists() const {
@@ -290,7 +296,7 @@ bool LinearProgram::IsVariableInteger(ColIndex col) const {
 }
 
 bool LinearProgram::IsVariableBinary(ColIndex col) const {
-  // TODO(user, bdb): bounds of binary variables (and of integer ones) should
+  // TODO(user,user): bounds of binary variables (and of integer ones) should
   // be integer. Add a preprocessor for that.
   return IsVariableInteger(col) && (variable_lower_bounds_[col] < kEpsilon) &&
          (variable_lower_bounds_[col] > Fractional(-1)) &&
@@ -300,7 +306,7 @@ bool LinearProgram::IsVariableBinary(ColIndex col) const {
 
 void LinearProgram::SetConstraintBounds(RowIndex row, Fractional lower_bound,
                                         Fractional upper_bound) {
-  DebugCheckBoundsValid(lower_bound, upper_bound);
+  if (dcheck_bounds_) DebugCheckBoundsValid(lower_bound, upper_bound);
   ResizeRowsIfNeeded(row);
   constraint_lower_bounds_[row] = lower_bound;
   constraint_upper_bounds_[row] = upper_bound;
@@ -1155,7 +1161,7 @@ Fractional LinearProgram::ScaleBounds() {
                            &max_magnitude);
   UpdateMinAndMaxMagnitude(constraint_lower_bounds(), &min_magnitude,
                            &max_magnitude);
-  UpdateMinAndMaxMagnitude(constraint_lower_bounds(), &min_magnitude,
+  UpdateMinAndMaxMagnitude(constraint_upper_bounds(), &min_magnitude,
                            &max_magnitude);
   const Fractional bound_scaling_factor =
       ComputeDivisorSoThatRangeContainsOne(min_magnitude, max_magnitude);

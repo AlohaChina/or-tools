@@ -15,12 +15,12 @@
 
 syntax = "proto3";
 
+package operations_research.sat;
+
 option csharp_namespace = "Google.OrTools.Sat";
 option java_package = "com.google.ortools.sat";
 option java_multiple_files = true;
 option java_outer_classname = "CpModelProtobuf";
-
-package operations_research.sat;
 
 // An integer variable.
 //
@@ -57,6 +57,11 @@ message IntegerVariableProto {
   //  - max == domain.back();
   //  - for all i < n   :      min_i <= max_i
   //  - for all i < n-1 :  max_i + 1 < min_{i+1}.
+  //
+  // Note that we check at validation that a variable domain is small enough so
+  // that we don't run into integer overflow in our algorithms. Because of that,
+  // you cannot just have "unbounded" variable like [0, kint64max] and should
+  // try to specify tighter domains.
   repeated int64 domain = 2;
 }
 
@@ -114,12 +119,10 @@ message NoOverlapConstraintProto {
 }
 
 // The boxes defined by [start_x, end_x) * [start_y, end_y) cannot overlap.
-//
-// TODO(user): If one of the box dimension is zero, it is not clear what
-// happens. For now, only use with non-zero box dimensions.
 message NoOverlap2DConstraintProto {
   repeated int32 x_intervals = 1;
   repeated int32 y_intervals = 2;  // Same size as x_intervals.
+  bool boxes_with_null_area_can_overlap = 3;
 }
 
 // The sum of the demands of the intervals at each interval point cannot exceed
@@ -222,10 +225,11 @@ message InverseConstraintProto {
   repeated int32 f_inverse = 2;
 }
 
-// This constraint forces a sequence of variables to be accepted by an automata.
-message AutomataConstraintProto {
+// This constraint forces a sequence of variables to be accepted by an
+// automaton.
+message AutomatonConstraintProto {
   // A state is identified by a non-negative number. It is preferable to keep
-  // all the states dense in says [0, num_states). The automata starts at
+  // all the states dense in says [0, num_states). The automaton starts at
   // starting_state and must finish in any of the final states.
   int64 starting_state = 2;
   repeated int64 final_states = 3;
@@ -237,7 +241,7 @@ message AutomataConstraintProto {
   repeated int64 transition_head = 5;
   repeated int64 transition_label = 6;
 
-  // The sequence of variables. The automata is ran for vars_size() "steps" and
+  // The sequence of variables. The automaton is ran for vars_size() "steps" and
   // the value of vars[i] corresponds to the transition label at step i.
   repeated int32 vars = 7;
 }
@@ -265,7 +269,6 @@ message ConstraintProto {
 
   // The actual constraint with its arguments.
   oneof constraint {
-
     // The bool_or constraint forces at least one literal to be true.
     BoolArgumentProto bool_or = 3;
 
@@ -330,9 +333,9 @@ message ConstraintProto {
     // take.
     TableConstraintProto table = 16;
 
-    // The automata constraint forces a sequence of variables to be accepted
+    // The automaton constraint forces a sequence of variables to be accepted
     // by an automaton.
-    AutomataConstraintProto automata = 17;
+    AutomatonConstraintProto automaton = 17;
 
     // The inverse constraint forces two arrays to be inverses of each other:
     // the values of one are the indices of the other, and vice versa.
@@ -427,6 +430,7 @@ message DecisionStrategyProto {
     SELECT_MAX_VALUE = 1;
     SELECT_LOWER_HALF = 2;
     SELECT_UPPER_HALF = 3;
+    SELECT_MEDIAN_VALUE = 4;
   }
   DomainReductionStrategy domain_reduction_strategy = 3;
 
@@ -505,7 +509,9 @@ enum CpSolverStatus {
   // The problem has been proven infeasible.
   INFEASIBLE = 3;
 
-  // An optimal feasible solution has been found.
+  // An optimal feasible solution has been found. This is also used to indicate
+  // that all solutions where found if this was asked for a satisfiability
+  // problem.
   OPTIMAL = 4;
 }
 
@@ -513,6 +519,7 @@ enum CpSolverStatus {
 //
 // TODO(user): support returning multiple solutions. Look at the Stubby
 // streaming API as we probably wants to get them as they are found.
+// Next id: 23
 message CpSolverResponse {
   // The status of the solve.
   CpSolverStatus status = 1;
@@ -522,16 +529,6 @@ message CpSolverResponse {
   // with a CpModelProto::variables repeated field and list the values of all
   // the variables.
   repeated int64 solution = 2;
-
-  // Advanced usage.
-  //
-  // If the problem has some variables that are not fixed at the end of the
-  // search (because of a particular search strategy in the CpModelProto) then
-  // this will be used instead of filling the solution above. The two fields
-  // will then contains the lower and upper bounds of each variable as they were
-  // when the best "solution" was found.
-  repeated int64 solution_lower_bounds = 18;
-  repeated int64 solution_upper_bounds = 19;
 
   // Only make sense for an optimization problem. The objective value of the
   // returned solution if it is non-empty. If there is no solution, then for a
@@ -544,9 +541,35 @@ message CpSolverResponse {
   // maximization problem.
   double best_objective_bound = 4;
 
+  // Advanced usage.
+  //
+  // If the problem has some variables that are not fixed at the end of the
+  // search (because of a particular search strategy in the CpModelProto) then
+  // this will be used instead of filling the solution above. The two fields
+  // will then contains the lower and upper bounds of each variable as they were
+  // when the best "solution" was found.
+  repeated int64 solution_lower_bounds = 18;
+  repeated int64 solution_upper_bounds = 19;
+
+  // Advanced usage.
+  //
+  // If the option fill_tightened_domains_in_response is set, then this field
+  // will be a copy of the CpModelProto.variables where each domain has been
+  // reduced using the information the solver was able to derive. Note that this
+  // is only filled with the info derived during a normal search and we do not
+  // have any dedicated algorithm to improve it.
+  //
+  // If the problem is a feasibility problem, then these bounds will be valid
+  // for any feasible solution. If the problem is an optimization problem, then
+  // these bounds will only be valid for any OPTIMAL solutions, it can exclude
+  // sub-optimal feasible ones.
+  repeated IntegerVariableProto tightened_variables = 21;
+
   // This will be true iff the solver was asked to find all solutions to a
   // satisfiability problem (or all optimal solutions to an optimization
   // problem), and it was successful in doing so.
+  //
+  // TODO(user): Remove as we also use the OPTIMAL vs FEASIBLE status for that.
   bool all_solutions_were_found = 5;
 
   // Some statistics about the solve.
@@ -558,6 +581,7 @@ message CpSolverResponse {
   double wall_time = 15;
   double user_time = 16;
   double deterministic_time = 17;
+  double primal_integral = 22;
 
   // Additional information about how the solution was found.
   string solution_info = 20;

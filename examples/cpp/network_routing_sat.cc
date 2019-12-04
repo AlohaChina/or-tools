@@ -322,7 +322,7 @@ class NetworkRoutingDataBuilder {
 
   std::vector<std::vector<bool>> network_;
   std::vector<int> degrees_;
-  ACMRandom random_;
+  MTRandom random_;
 };
 
 // ---------- Solving the Problem ----------
@@ -398,7 +398,7 @@ class NetworkRoutingSolver {
     parameters.set_enumerate_all_solutions(true);
     model.Add(NewSatParameters(parameters));
 
-    SolveWithModel(cp_model, &model);
+    SolveCpModel(cp_model.Build(), &model);
   }
 
   // This method will fill the all_paths_ data structure. all_paths
@@ -413,7 +413,7 @@ class NetworkRoutingSolver {
            max_length <= min_path_length + extra_hops + 1; ++max_length) {
         ComputeAllPathsForOneDemandAndOnePathLength(demand_index, max_length,
                                                     max_paths);
-        if (all_paths_[demand_index].size() > max_paths) {
+        if (all_paths_[demand_index].size() >= max_paths) {
           break;
         }
       }
@@ -643,7 +643,7 @@ class NetworkRoutingSolver {
       }
       num_solutions++;
     }));
-    const CpSolverResponse response = SolveWithModel(cp_model, &model);
+    const CpSolverResponse response = SolveCpModel(cp_model.Build(), &model);
     return response.objective_value();
   }
 

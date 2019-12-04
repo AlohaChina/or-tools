@@ -72,8 +72,11 @@ class TaskSet {
     optimized_restart_ = 0;
   }
   void AddEntry(const Entry& e);
-  void NotifyEntryIsNowLastIfPresent(const Entry& e);
   void RemoveEntryWithIndex(int index);
+
+  // Advanced usage, if the entry is present, this assumes that its start_min is
+  // >= the end min without it, and update the datastructure accordingly.
+  void NotifyEntryIsNowLastIfPresent(const Entry& e);
 
   // Advanced usage. Instead of calling many AddEntry(), it is more efficient to
   // call AddUnsortedEntry() instead, but then Sort() MUST be called just after
@@ -102,18 +105,24 @@ class TaskSet {
   // task_to_ignore to the id of this task. This returns 0 if the set is empty
   // in which case critical_index will be left unchanged.
   IntegerValue ComputeEndMin(int task_to_ignore, int* critical_index) const;
+  IntegerValue ComputeEndMin() const;
+
+  // Warning, this is only valid if ComputeEndMin() was just called. It is the
+  // same index as if one called ComputeEndMin(-1, &critical_index), but saves
+  // another unneeded loop.
+  int GetCriticalIndex() const { return optimized_restart_; }
+
   const std::vector<Entry>& SortedTasks() const { return sorted_tasks_; }
 
  private:
   std::vector<Entry> sorted_tasks_;
   mutable int optimized_restart_ = 0;
-  DISALLOW_COPY_AND_ASSIGN(TaskSet);
 };
 
 // ============================================================================
 // Below are many of the known propagation techniques for the disjunctive, each
 // implemented in only one time direction and in its own propagator class. The
-// Disjunctive() model function above will instanciate the used ones (according
+// Disjunctive() model function above will instantiate the used ones (according
 // to the solver parameters) in both time directions.
 //
 // See Petr Vilim PhD "Global Constraints in Scheduling" for a description of
@@ -122,9 +131,8 @@ class TaskSet {
 
 class DisjunctiveOverloadChecker : public PropagatorInterface {
  public:
-  DisjunctiveOverloadChecker(bool time_direction,
-                             SchedulingConstraintHelper* helper)
-      : time_direction_(time_direction), helper_(helper), theta_tree_() {
+  explicit DisjunctiveOverloadChecker(SchedulingConstraintHelper* helper)
+      : helper_(helper) {
     // Resize this once and for all.
     task_to_event_.resize(helper_->NumTasks());
   }
@@ -132,13 +140,15 @@ class DisjunctiveOverloadChecker : public PropagatorInterface {
   int RegisterWith(GenericLiteralWatcher* watcher);
 
  private:
-  const bool time_direction_;
+  bool PropagateSubwindow(IntegerValue global_window_end);
+
   SchedulingConstraintHelper* helper_;
+
+  std::vector<TaskTime> window_;
+  std::vector<TaskTime> task_by_increasing_end_max_;
 
   ThetaLambdaTree<IntegerValue> theta_tree_;
   std::vector<int> task_to_event_;
-  std::vector<int> event_to_task_;
-  std::vector<IntegerValue> event_time_;
 };
 
 class DisjunctiveDetectablePrecedences : public PropagatorInterface {
@@ -152,9 +162,48 @@ class DisjunctiveDetectablePrecedences : public PropagatorInterface {
   int RegisterWith(GenericLiteralWatcher* watcher);
 
  private:
+  bool PropagateSubwindow(IntegerValue max_end_min);
+
+  std::vector<TaskTime> window_;
+  std::vector<TaskTime> task_by_increasing_start_max_;
+
+  std::vector<bool> processed_;
+  std::vector<int> to_propagate_;
+
   const bool time_direction_;
   SchedulingConstraintHelper* helper_;
   TaskSet task_set_;
+};
+
+// Singleton model class wich is just a SchedulingConstraintHelper will all
+// the intervals.
+class AllIntervalsHelper : public SchedulingConstraintHelper {
+ public:
+  explicit AllIntervalsHelper(Model* model)
+      : SchedulingConstraintHelper(
+            model->GetOrCreate<IntervalsRepository>()->AllIntervals(), model) {}
+};
+
+// This propagates the same things as DisjunctiveDetectablePrecedences, except
+// that it only sort the full set of intervals once and then work on a combined
+// set of disjunctives.
+template <bool time_direction>
+class CombinedDisjunctive : public PropagatorInterface {
+ public:
+  explicit CombinedDisjunctive(Model* model);
+
+  // After creation, this must be called for all the disjunctive constraints
+  // in the model.
+  void AddNoOverlap(const std::vector<IntervalVariable>& var);
+
+  bool Propagate() final;
+
+ private:
+  AllIntervalsHelper* helper_;
+  std::vector<std::vector<int>> task_to_disjunctives_;
+  std::vector<bool> task_is_added_;
+  std::vector<TaskSet> task_sets_;
+  std::vector<IntegerValue> end_mins_;
 };
 
 class DisjunctiveNotLast : public PropagatorInterface {
@@ -167,6 +216,11 @@ class DisjunctiveNotLast : public PropagatorInterface {
   int RegisterWith(GenericLiteralWatcher* watcher);
 
  private:
+  bool PropagateSubwindow();
+
+  std::vector<TaskTime> start_min_window_;
+  std::vector<TaskTime> start_max_window_;
+
   const bool time_direction_;
   SchedulingConstraintHelper* helper_;
   TaskSet task_set_;
@@ -181,15 +235,21 @@ class DisjunctiveEdgeFinding : public PropagatorInterface {
   int RegisterWith(GenericLiteralWatcher* watcher);
 
  private:
+  bool PropagateSubwindow(IntegerValue window_end_min);
+
   const bool time_direction_;
   SchedulingConstraintHelper* helper_;
 
+  // This only contains non-gray tasks.
+  std::vector<TaskTime> task_by_increasing_end_max_;
+
+  // All these member are indexed in the same way.
+  std::vector<TaskTime> window_;
   ThetaLambdaTree<IntegerValue> theta_tree_;
-  std::vector<int> non_gray_task_to_event_;
-  std::vector<int> event_to_task_;
-  std::vector<IntegerValue> event_time_;
   std::vector<IntegerValue> event_size_;
 
+  // Task indexed.
+  std::vector<int> non_gray_task_to_event_;
   std::vector<bool> is_gray_;
 };
 
@@ -207,18 +267,22 @@ class DisjunctivePrecedences : public PropagatorInterface {
         integer_trail_(integer_trail),
         precedences_(precedences),
         task_set_(helper->NumTasks()),
-        task_is_currently_present_(helper->NumTasks()) {}
+        task_to_arc_index_(helper->NumTasks()) {}
   bool Propagate() final;
   int RegisterWith(GenericLiteralWatcher* watcher);
 
  private:
+  bool PropagateSubwindow();
+
   const bool time_direction_;
   SchedulingConstraintHelper* helper_;
   IntegerTrail* integer_trail_;
   PrecedencesPropagator* precedences_;
 
+  std::vector<TaskTime> window_;
+  std::vector<IntegerVariable> index_to_end_vars_;
+
   TaskSet task_set_;
-  std::vector<bool> task_is_currently_present_;
   std::vector<int> task_to_arc_index_;
   std::vector<PrecedencesPropagator::IntegerPrecedences> before_;
 };

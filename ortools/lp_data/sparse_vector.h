@@ -48,8 +48,6 @@ namespace glop {
 
 template <typename IndexType>
 class SparseVectorEntry;
-template <typename EntryType>
-class SparseVectorIterator;
 
 // --------------------------------------------------------
 // SparseVector
@@ -81,8 +79,7 @@ class SparseVectorIterator;
 // TODO(user): un-expose this type to client; by getting rid of the
 // index-based APIs and leveraging iterator-based APIs; if possible.
 template <typename IndexType,
-          typename IteratorType =
-              SparseVectorIterator<SparseVectorEntry<IndexType>>>
+          typename IteratorType = VectorIterator<SparseVectorEntry<IndexType>>>
 class SparseVector {
  public:
   typedef IndexType Index;
@@ -241,17 +238,17 @@ class SparseVector {
   // WARNING: BOTH vectors (the current and the destination) MUST be "clean",
   // i.e. sorted and without duplicates.
   // Performs the operation accumulator_vector += multiplier * this, removing
-  // a given index which must be in both vectors, and pruning new entries that
-  // are zero with a relative precision of 2 * std::numeric_limits::epsilon().
+  // a given index which must be in both vectors, and pruning new entries whose
+  // absolute value are under the given drop_tolerance.
   void AddMultipleToSparseVectorAndDeleteCommonIndex(
       Fractional multiplier, Index removed_common_index,
-      SparseVector* accumulator_vector) const;
+      Fractional drop_tolerance, SparseVector* accumulator_vector) const;
 
   // Same as AddMultipleToSparseVectorAndDeleteCommonIndex() but instead of
   // deleting the common index, leave it unchanged.
   void AddMultipleToSparseVectorAndIgnoreCommonIndex(
       Fractional multiplier, Index removed_common_index,
-      SparseVector* accumulator_vector) const;
+      Fractional drop_tolerance, SparseVector* accumulator_vector) const;
 
   // Applies the index permutation to all entries: index = index_perm[index];
   void ApplyIndexPermutation(const IndexPermutation& index_perm);
@@ -396,7 +393,7 @@ class SparseVector {
   // and AddMultipleToSparseVectorAndIgnoreCommonIndex() which is shared.
   void AddMultipleToSparseVectorInternal(
       bool delete_common_index, Fractional multiplier, Index common_index,
-      SparseVector* accumulator_vector) const;
+      Fractional drop_tolerance, SparseVector* accumulator_vector) const;
 };
 
 // --------------------------------------------------------
@@ -445,37 +442,6 @@ class SparseVectorEntry {
   const Fractional* coefficient_;
 };
 
-// --------------------------------------------------------
-// SparseVectorIterator
-// --------------------------------------------------------
-
-// An iterator over the elements of a sparse data structure that stores the
-// elements in parallel arrays for indices and coefficients. The iterator is
-// built as a wrapper over a sparse vector entry class; the concrete entry class
-// is provided through the template argument EntryType and it must eiter be
-// derived from SparseVectorEntry or it must provide the same public and
-// protected interface.
-template <typename EntryType>
-class SparseVectorIterator : EntryType {
- public:
-  using Index = typename EntryType::Index;
-  using Entry = EntryType;
-
-  SparseVectorIterator(const Index* indices, const Fractional* coefficients,
-                       EntryIndex i)
-      : EntryType(indices, coefficients, i) {}
-
-  void operator++() { ++this->i_; }
-  bool operator!=(const SparseVectorIterator& other) const {
-    // This operator is intended for use in natural range iteration ONLY.
-    // Therefore, we prefer to use '<' so that a buggy range iteration which
-    // start point is *after* its end point stops immediately, instead of
-    // iterating 2^(number of bits of EntryIndex) times.
-    return this->i_ < other.i_;
-  }
-  const Entry& operator*() const { return *this; }
-};
-
 template <typename IndexType, typename IteratorType>
 IteratorType SparseVector<IndexType, IteratorType>::begin() const {
   return Iterator(this->index_, this->coefficient_, EntryIndex(0));
@@ -503,8 +469,8 @@ SparseVector<IndexType, IteratorType>::SparseVector(const SparseVector& other) {
 }
 
 template <typename IndexType, typename IteratorType>
-SparseVector<IndexType, IteratorType>& SparseVector<IndexType, IteratorType>::
-operator=(const SparseVector& other) {
+SparseVector<IndexType, IteratorType>&
+SparseVector<IndexType, IteratorType>::operator=(const SparseVector& other) {
   PopulateFromSparseVector(other);
   return *this;
 }
@@ -859,24 +825,24 @@ template <typename IndexType, typename IteratorType>
 void SparseVector<IndexType, IteratorType>::
     AddMultipleToSparseVectorAndDeleteCommonIndex(
         Fractional multiplier, Index removed_common_index,
-        SparseVector* accumulator_vector) const {
+        Fractional drop_tolerance, SparseVector* accumulator_vector) const {
   AddMultipleToSparseVectorInternal(true, multiplier, removed_common_index,
-                                    accumulator_vector);
+                                    drop_tolerance, accumulator_vector);
 }
 
 template <typename IndexType, typename IteratorType>
 void SparseVector<IndexType, IteratorType>::
     AddMultipleToSparseVectorAndIgnoreCommonIndex(
         Fractional multiplier, Index removed_common_index,
-        SparseVector* accumulator_vector) const {
+        Fractional drop_tolerance, SparseVector* accumulator_vector) const {
   AddMultipleToSparseVectorInternal(false, multiplier, removed_common_index,
-                                    accumulator_vector);
+                                    drop_tolerance, accumulator_vector);
 }
 
 template <typename IndexType, typename IteratorType>
 void SparseVector<IndexType, IteratorType>::AddMultipleToSparseVectorInternal(
     bool delete_common_index, Fractional multiplier, Index common_index,
-    SparseVector* accumulator_vector) const {
+    Fractional drop_tolerance, SparseVector* accumulator_vector) const {
   // DCHECK that the input is correct.
   DCHECK(IsCleanedUp());
   DCHECK(accumulator_vector->IsCleanedUp());
@@ -912,10 +878,10 @@ void SparseVector<IndexType, IteratorType>::AddMultipleToSparseVectorInternal(
         const Fractional a_coeff_mul = multiplier * a.GetCoefficient(ia);
         const Fractional b_coeff = b.GetCoefficient(ib);
         const Fractional sum = a_coeff_mul + b_coeff;
-        // We use the factor 2.0 because the error can be slightly greater than
-        // 1ulp, and we don't want to leave such near zero entries.
-        if (fabs(sum) > 2.0 * std::numeric_limits<Fractional>::epsilon() *
-                            std::max(fabs(a_coeff_mul), fabs(b_coeff))) {
+
+        // We do not want to leave near-zero entries.
+        // TODO(user): expose the tolerance used here.
+        if (std::abs(sum) > drop_tolerance) {
           c.MutableIndex(ic) = index_a;
           c.MutableCoefficient(ic) = sum;
           ++ic;

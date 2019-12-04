@@ -18,6 +18,7 @@
 
 #include "ortools/base/accurate_sum.h"
 #include "ortools/lp_data/lp_types.h"
+#include "ortools/lp_data/scattered_vector.h"
 #include "ortools/lp_data/sparse_column.h"
 
 namespace operations_research {
@@ -113,12 +114,13 @@ template <class DenseRowOrColumn>
 Fractional PreciseScalarProduct(const DenseRowOrColumn& u,
                                 const ScatteredColumn& v) {
   DCHECK_EQ(u.size().value(), v.values.size().value());
-  if (ShouldUseDenseIteration(v)) {
+  if (v.ShouldUseDenseIteration()) {
     return PreciseScalarProduct(u, v.values);
   }
   KahanSum sum;
-  for (const RowIndex row : v.non_zeros) {
-    sum.Add(u[typename DenseRowOrColumn::IndexType(row.value())] * v[row]);
+  for (const auto e : v) {
+    sum.Add(u[typename DenseRowOrColumn::IndexType(e.row().value())] *
+            e.coefficient());
   }
   return sum.Value();
 }
@@ -142,6 +144,7 @@ Fractional PartialScalarProduct(const DenseRowOrColumn& u,
 // The precise version uses KahanSum and are about two times slower.
 Fractional SquaredNorm(const SparseColumn& v);
 Fractional SquaredNorm(const DenseColumn& column);
+Fractional SquaredNorm(const ColumnView& v);
 Fractional PreciseSquaredNorm(const SparseColumn& v);
 Fractional PreciseSquaredNorm(const DenseColumn& column);
 Fractional PreciseSquaredNorm(const ScatteredColumn& v);
@@ -149,6 +152,7 @@ Fractional PreciseSquaredNorm(const ScatteredColumn& v);
 // Returns the maximum of the |coefficients| of 'v'.
 Fractional InfinityNorm(const DenseColumn& v);
 Fractional InfinityNorm(const SparseColumn& v);
+Fractional InfinityNorm(const ColumnView& v);
 
 // Returns the fraction of non-zero entries of the given row.
 //
@@ -169,17 +173,17 @@ const DenseColumn& Transpose(const DenseRow& row);
 // Returns the maximum of the |coefficients| of the given column restricted
 // to the rows_to_consider. Also returns the first RowIndex 'row' that attains
 // this maximum. If the maximum is 0.0, then row_index is left untouched.
-Fractional RestrictedInfinityNorm(const SparseColumn& column,
+Fractional RestrictedInfinityNorm(const ColumnView& column,
                                   const DenseBooleanColumn& rows_to_consider,
                                   RowIndex* row_index);
 
 // Sets to false the entry b[row] if column[row] is non null.
 // Note that if 'b' was true only on the non-zero position of column, this can
 // be used as a fast way to clear 'b'.
-void SetSupportToFalse(const SparseColumn& column, DenseBooleanColumn* b);
+void SetSupportToFalse(const ColumnView& column, DenseBooleanColumn* b);
 
 // Returns true iff for all 'row' we have '|column[row]| <= radius[row]'.
-bool IsDominated(const SparseColumn& column, const DenseColumn& radius);
+bool IsDominated(const ColumnView& column, const DenseColumn& radius);
 
 // This cast based implementation should be safe, as long as DenseRow and
 // DenseColumn are implemented by the same underlying type.

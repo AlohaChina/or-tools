@@ -12,9 +12,13 @@
 // limitations under the License.
 
 #include "ortools/lp_data/sparse.h"
+
 #include <algorithm>
 
 #include "absl/strings/str_format.h"
+#include "ortools/base/logging.h"
+#include "ortools/lp_data/lp_types.h"
+#include "ortools/lp_data/permutation.h"
 
 namespace operations_research {
 namespace glop {
@@ -211,7 +215,7 @@ void SparseMatrix::PopulateFromPermutedMatrix(
   const ColIndex num_cols = a.num_cols();
   Reset(num_cols, a.num_rows());
   for (ColIndex col(0); col < num_cols; ++col) {
-    for (const SparseColumn::Entry e : a.column(inverse_col_perm[col])) {
+    for (const auto e : a.column(inverse_col_perm[col])) {
       columns_[col].SetCoefficient(row_perm[e.row()], e.coefficient());
     }
   }
@@ -426,8 +430,8 @@ template void SparseMatrix::PopulateFromTranspose<SparseMatrix>(
 template void SparseMatrix::PopulateFromPermutedMatrix<SparseMatrix>(
     const SparseMatrix& a, const RowPermutation& row_perm,
     const ColumnPermutation& inverse_col_perm);
-template void SparseMatrix::PopulateFromPermutedMatrix<MatrixView>(
-    const MatrixView& a, const RowPermutation& row_perm,
+template void SparseMatrix::PopulateFromPermutedMatrix<CompactSparseMatrixView>(
+    const CompactSparseMatrixView& a, const RowPermutation& row_perm,
     const ColumnPermutation& inverse_col_perm);
 
 void CompactSparseMatrix::PopulateFromMatrixView(const MatrixView& input) {
@@ -517,12 +521,16 @@ void CompactSparseMatrix::Reset(RowIndex num_rows) {
   starts_.push_back(EntryIndex(0));
 }
 
-void TriangularMatrix::Reset(RowIndex num_rows) {
+void TriangularMatrix::Reset(RowIndex num_rows, ColIndex col_capacity) {
   CompactSparseMatrix::Reset(num_rows);
   first_non_identity_column_ = 0;
-  diagonal_coefficients_.clear();
   all_diagonal_coefficients_are_one_ = true;
-  pruned_ends_.clear();
+
+  pruned_ends_.resize(col_capacity);
+  diagonal_coefficients_.resize(col_capacity);
+  starts_.resize(col_capacity + 1);
+  // Non-zero entries in the first column always have an offset of 0.
+  starts_[ColIndex(0)] = 0;
 }
 
 ColIndex CompactSparseMatrix::AddDenseColumn(const DenseColumn& dense_column) {
@@ -590,34 +598,46 @@ void TriangularMatrix::Swap(TriangularMatrix* other) {
             other->all_diagonal_coefficients_are_one_);
 }
 
+EntryIndex CompactSparseMatrixView::num_entries() const {
+  return ComputeNumEntries(*this);
+}
+Fractional CompactSparseMatrixView::ComputeOneNorm() const {
+  return ComputeOneNormTemplate(*this);
+}
+Fractional CompactSparseMatrixView::ComputeInfinityNorm() const {
+  return ComputeInfinityNormTemplate(*this);
+}
+
 // Internal function used to finish adding one column to a triangular matrix.
 // This sets the diagonal coefficient to the given value, and prepares the
 // matrix for the next column addition.
 void TriangularMatrix::CloseCurrentColumn(Fractional diagonal_value) {
   DCHECK_NE(diagonal_value, 0.0);
+  // The vectors diagonal_coefficients, pruned_ends, and starts_ should have all
+  // been preallocated by a call to SetTotalNumberOfColumns().
+  DCHECK_LT(num_cols_, diagonal_coefficients_.size());
+  diagonal_coefficients_[num_cols_] = diagonal_value;
+
+  // TODO(user): This is currently not used by all matrices. It will be good
+  // to fill it only when needed.
+  DCHECK_LT(num_cols_, pruned_ends_.size());
+  pruned_ends_[num_cols_] = coefficients_.size();
   ++num_cols_;
-  starts_.push_back(coefficients_.size());
-  diagonal_coefficients_.push_back(diagonal_value);
-  DCHECK_EQ(num_cols_, diagonal_coefficients_.size());
-  DCHECK_EQ(num_cols_ + 1, starts_.size());
+  DCHECK_LT(num_cols_, starts_.size());
+  starts_[num_cols_] = coefficients_.size();
   if (first_non_identity_column_ == num_cols_ - 1 && coefficients_.empty() &&
       diagonal_value == 1.0) {
     first_non_identity_column_ = num_cols_;
   }
-  if (all_diagonal_coefficients_are_one_) {
-    all_diagonal_coefficients_are_one_ = (diagonal_value == 1.0);
-  }
-
-  // TODO(user): This is currently not used by all matrices. It will be good
-  // to fill it only when needed.
-  pruned_ends_.push_back(coefficients_.size());
+  all_diagonal_coefficients_are_one_ =
+      all_diagonal_coefficients_are_one_ && (diagonal_value == 1.0);
 }
 
 void TriangularMatrix::AddDiagonalOnlyColumn(Fractional diagonal_value) {
   CloseCurrentColumn(diagonal_value);
 }
 
-void TriangularMatrix::AddTriangularColumn(const SparseColumn& column,
+void TriangularMatrix::AddTriangularColumn(const ColumnView& column,
                                            RowIndex diagonal_row) {
   Fractional diagonal_value = 0.0;
   for (const SparseColumn::Entry e : column) {
@@ -662,9 +682,9 @@ void TriangularMatrix::AddTriangularColumnWithGivenDiagonalEntry(
 
 void TriangularMatrix::PopulateFromTriangularSparseMatrix(
     const SparseMatrix& input) {
-  Reset(input.num_rows());
+  Reset(input.num_rows(), input.num_cols());
   for (ColIndex col(0); col < input.num_cols(); ++col) {
-    AddTriangularColumn(input.column(col), ColToRowIndex(col));
+    AddTriangularColumn(ColumnView(input.column(col)), ColToRowIndex(col));
   }
   DCHECK(IsLowerTriangular() || IsUpperTriangular());
 }
@@ -771,8 +791,8 @@ void TriangularMatrix::UpperSolveInternal(DenseColumn* rhs) const {
     // It is faster to iterate this way (instead of i : Column(col)) because of
     // cache locality. Note that the floating-point computations are exactly the
     // same in both cases.
-    const EntryIndex last = starts_[col];
-    for (EntryIndex i(starts_[col + 1] - 1); i >= last; --i) {
+    const EntryIndex i_end = starts_[col];
+    for (EntryIndex i(starts_[col + 1] - 1); i >= i_end; --i) {
       (*rhs)[EntryRow(i)] -= coeff * EntryCoefficient(i);
     }
   }
@@ -796,6 +816,9 @@ void TriangularMatrix::TransposeUpperSolveInternal(DenseColumn* rhs) const {
 
     // Note that this is a bit faster than the simpler
     //     for (const EntryIndex i : Column(col)) {
+    // EntryIndex i is explicitly not modified in outer iterations, since
+    // the last entry in column col is stored contiguously just before the
+    // first entry in column col+1.
     const EntryIndex i_end = starts_[col + 1];
     for (; i < i_end; ++i) {
       sum -= EntryCoefficient(i) * (*rhs)[EntryRow(i)];
@@ -805,18 +828,16 @@ void TriangularMatrix::TransposeUpperSolveInternal(DenseColumn* rhs) const {
   }
 }
 
-void TriangularMatrix::TransposeLowerSolve(DenseColumn* rhs,
-                                           RowIndex* last_non_zero_row) const {
+void TriangularMatrix::TransposeLowerSolve(DenseColumn* rhs) const {
   if (all_diagonal_coefficients_are_one_) {
-    TransposeLowerSolveInternal<true>(rhs, last_non_zero_row);
+    TransposeLowerSolveInternal<true>(rhs);
   } else {
-    TransposeLowerSolveInternal<false>(rhs, last_non_zero_row);
+    TransposeLowerSolveInternal<false>(rhs);
   }
 }
 
 template <bool diagonal_of_ones>
-void TriangularMatrix::TransposeLowerSolveInternal(
-    DenseColumn* rhs, RowIndex* last_non_zero_row) const {
+void TriangularMatrix::TransposeLowerSolveInternal(DenseColumn* rhs) const {
   RETURN_IF_NULL(rhs);
   const ColIndex end = first_non_identity_column_;
 
@@ -824,9 +845,6 @@ void TriangularMatrix::TransposeLowerSolveInternal(
   ColIndex col = num_cols_ - 1;
   while (col >= end && (*rhs)[ColToRowIndex(col)] == 0.0) {
     --col;
-  }
-  if (last_non_zero_row != nullptr) {
-    *last_non_zero_row = ColToRowIndex(col);
   }
 
   EntryIndex i = starts_[col + 1] - 1;
@@ -836,6 +854,9 @@ void TriangularMatrix::TransposeLowerSolveInternal(
     // Note that this is a bit faster than the simpler
     //     for (const EntryIndex i : Column(col)) {
     // mainly because we iterate in a good direction for the cache.
+    // EntryIndex i is explicitly not modified in outer iterations, since
+    // the last entry in column col is stored contiguously just before the
+    // first entry in column col+1.
     const EntryIndex i_end = starts_[col];
     for (; i >= i_end; --i) {
       sum -= EntryCoefficient(i) * (*rhs)[EntryRow(i)];
@@ -845,16 +866,26 @@ void TriangularMatrix::TransposeLowerSolveInternal(
   }
 }
 
-// TODO(user): exploit all_diagonal_coefficients_are_one_ when true in
-// all the hyper-sparse functions.
 void TriangularMatrix::HyperSparseSolve(DenseColumn* rhs,
                                         RowIndexVector* non_zero_rows) const {
+  if (all_diagonal_coefficients_are_one_) {
+    HyperSparseSolveInternal<true>(rhs, non_zero_rows);
+  } else {
+    HyperSparseSolveInternal<false>(rhs, non_zero_rows);
+  }
+}
+
+template <bool diagonal_of_ones>
+void TriangularMatrix::HyperSparseSolveInternal(
+    DenseColumn* rhs, RowIndexVector* non_zero_rows) const {
   RETURN_IF_NULL(rhs);
   int new_size = 0;
   for (const RowIndex row : *non_zero_rows) {
     if ((*rhs)[row] == 0.0) continue;
     const ColIndex row_as_col = RowToColIndex(row);
-    const Fractional coeff = (*rhs)[row] / diagonal_coefficients_[row_as_col];
+    const Fractional coeff =
+        diagonal_of_ones ? (*rhs)[row]
+                         : (*rhs)[row] / diagonal_coefficients_[row_as_col];
     (*rhs)[row] = coeff;
     for (const EntryIndex i : Column(row_as_col)) {
       (*rhs)[EntryRow(i)] -= coeff * EntryCoefficient(i);
@@ -867,12 +898,24 @@ void TriangularMatrix::HyperSparseSolve(DenseColumn* rhs,
 
 void TriangularMatrix::HyperSparseSolveWithReversedNonZeros(
     DenseColumn* rhs, RowIndexVector* non_zero_rows) const {
+  if (all_diagonal_coefficients_are_one_) {
+    HyperSparseSolveWithReversedNonZerosInternal<true>(rhs, non_zero_rows);
+  } else {
+    HyperSparseSolveWithReversedNonZerosInternal<false>(rhs, non_zero_rows);
+  }
+}
+
+template <bool diagonal_of_ones>
+void TriangularMatrix::HyperSparseSolveWithReversedNonZerosInternal(
+    DenseColumn* rhs, RowIndexVector* non_zero_rows) const {
   RETURN_IF_NULL(rhs);
   int new_start = non_zero_rows->size();
   for (const RowIndex row : Reverse(*non_zero_rows)) {
     if ((*rhs)[row] == 0.0) continue;
     const ColIndex row_as_col = RowToColIndex(row);
-    const Fractional coeff = (*rhs)[row] / diagonal_coefficients_[row_as_col];
+    const Fractional coeff =
+        diagonal_of_ones ? (*rhs)[row]
+                         : (*rhs)[row] / diagonal_coefficients_[row_as_col];
     (*rhs)[row] = coeff;
     for (const EntryIndex i : Column(row_as_col)) {
       (*rhs)[EntryRow(i)] -= coeff * EntryCoefficient(i);
@@ -886,6 +929,16 @@ void TriangularMatrix::HyperSparseSolveWithReversedNonZeros(
 
 void TriangularMatrix::TransposeHyperSparseSolve(
     DenseColumn* rhs, RowIndexVector* non_zero_rows) const {
+  if (all_diagonal_coefficients_are_one_) {
+    TransposeHyperSparseSolveInternal<true>(rhs, non_zero_rows);
+  } else {
+    TransposeHyperSparseSolveInternal<false>(rhs, non_zero_rows);
+  }
+}
+
+template <bool diagonal_of_ones>
+void TriangularMatrix::TransposeHyperSparseSolveInternal(
+    DenseColumn* rhs, RowIndexVector* non_zero_rows) const {
   RETURN_IF_NULL(rhs);
   int new_size = 0;
   for (const RowIndex row : *non_zero_rows) {
@@ -894,7 +947,8 @@ void TriangularMatrix::TransposeHyperSparseSolve(
     for (const EntryIndex i : Column(row_as_col)) {
       sum -= EntryCoefficient(i) * (*rhs)[EntryRow(i)];
     }
-    (*rhs)[row] = sum / diagonal_coefficients_[row_as_col];
+    (*rhs)[row] =
+        diagonal_of_ones ? sum : sum / diagonal_coefficients_[row_as_col];
     if (sum != 0.0) {
       (*non_zero_rows)[new_size] = row;
       ++new_size;
@@ -904,6 +958,18 @@ void TriangularMatrix::TransposeHyperSparseSolve(
 }
 
 void TriangularMatrix::TransposeHyperSparseSolveWithReversedNonZeros(
+    DenseColumn* rhs, RowIndexVector* non_zero_rows) const {
+  if (all_diagonal_coefficients_are_one_) {
+    TransposeHyperSparseSolveWithReversedNonZerosInternal<true>(rhs,
+                                                                non_zero_rows);
+  } else {
+    TransposeHyperSparseSolveWithReversedNonZerosInternal<false>(rhs,
+                                                                 non_zero_rows);
+  }
+}
+
+template <bool diagonal_of_ones>
+void TriangularMatrix::TransposeHyperSparseSolveWithReversedNonZerosInternal(
     DenseColumn* rhs, RowIndexVector* non_zero_rows) const {
   RETURN_IF_NULL(rhs);
   int new_start = non_zero_rows->size();
@@ -918,7 +984,8 @@ void TriangularMatrix::TransposeHyperSparseSolveWithReversedNonZeros(
     for (; i >= i_end; --i) {
       sum -= EntryCoefficient(i) * (*rhs)[EntryRow(i)];
     }
-    (*rhs)[row] = sum / diagonal_coefficients_[row_as_col];
+    (*rhs)[row] =
+        diagonal_of_ones ? sum : sum / diagonal_coefficients_[row_as_col];
     if (sum != 0.0) {
       --new_start;
       (*non_zero_rows)[new_start] = row;
@@ -968,7 +1035,7 @@ void TriangularMatrix::PermutedLowerSolve(
   DCHECK(lower->CheckNoDuplicates());
 }
 
-void TriangularMatrix::PermutedLowerSparseSolve(const SparseColumn& rhs,
+void TriangularMatrix::PermutedLowerSparseSolve(const ColumnView& rhs,
                                                 const RowPermutation& row_perm,
                                                 SparseColumn* lower_column,
                                                 SparseColumn* upper_column) {
@@ -983,7 +1050,7 @@ void TriangularMatrix::PermutedLowerSparseSolve(const SparseColumn& rhs,
 
   // Copy rhs into initially_all_zero_scratchpad_.
   initially_all_zero_scratchpad_.resize(num_rows_, 0.0);
-  for (SparseColumn::Entry e : rhs) {
+  for (const auto e : rhs) {
     initially_all_zero_scratchpad_[e.row()] = e.coefficient();
   }
 
@@ -1007,9 +1074,8 @@ void TriangularMatrix::PermutedLowerSparseSolve(const SparseColumn& rhs,
     DCHECK_GE(row_as_col, 0);
     upper_column->SetCoefficient(permuted_row, pivot);
     DCHECK_EQ(diagonal_coefficients_[row_as_col], 1.0);
-    for (const EntryIndex i : Column(row_as_col)) {
-      initially_all_zero_scratchpad_[EntryRow(i)] -=
-          EntryCoefficient(i) * pivot;
+    for (const auto e : column(row_as_col)) {
+      initially_all_zero_scratchpad_[e.row()] -= e.coefficient() * pivot;
     }
   }
 
@@ -1048,7 +1114,7 @@ void TriangularMatrix::PermutedLowerSparseSolve(const SparseColumn& rhs,
 // will be given by upper_column_rows_ and it will be populated in reverse
 // order.
 void TriangularMatrix::PermutedComputeRowsToConsider(
-    const SparseColumn& rhs, const RowPermutation& row_perm,
+    const ColumnView& rhs, const RowPermutation& row_perm,
     RowIndexVector* lower_column_rows, RowIndexVector* upper_column_rows) {
   stored_.resize(num_rows_, false);
   marked_.resize(num_rows_, false);
@@ -1070,7 +1136,7 @@ void TriangularMatrix::PermutedComputeRowsToConsider(
   // A few notes:
   // - By construction, if the matrix can be permuted into a lower triangular
   //   form, there is no cycle. This code does nothing to test for cycles, but
-  //   there is a DCHECK() to detect them during debuging.
+  //   there is a DCHECK() to detect them during debugging.
   // - This version uses sentinels (kInvalidRow) on nodes_to_explore_ to know
   //   when a node has been explored (i.e. when the recursive dfs goes back in
   //   the call stack). This is faster than an alternate implementation that
@@ -1239,6 +1305,15 @@ void TriangularMatrix::ComputeRowsToConsiderWithDfs(
 
 void TriangularMatrix::ComputeRowsToConsiderInSortedOrder(
     RowIndexVector* non_zero_rows) const {
+  static const Fractional kDefaultSparsityRatio = 0.025;
+  static const Fractional kDefaultNumOpsRatio = 0.05;
+  ComputeRowsToConsiderInSortedOrder(non_zero_rows, kDefaultSparsityRatio,
+                                     kDefaultNumOpsRatio);
+}
+
+void TriangularMatrix::ComputeRowsToConsiderInSortedOrder(
+    RowIndexVector* non_zero_rows, Fractional sparsity_ratio,
+    Fractional num_ops_ratio) const {
   if (non_zero_rows->empty()) return;
 
   // TODO(user): Investigate the best thresholds.

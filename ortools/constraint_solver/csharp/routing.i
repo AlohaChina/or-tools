@@ -15,7 +15,6 @@
 %include "ortools/constraint_solver/csharp/constraint_solver.i"
 %include "ortools/constraint_solver/csharp/routing_types.i"
 %include "ortools/constraint_solver/csharp/routing_index_manager.i"
-%include "ortools/util/csharp/functions.i"
 
 // We need to forward-declare the proto here, so that PROTO_INPUT involving it
 // works correctly. The order matters very much: this declaration needs to be
@@ -36,49 +35,115 @@ class RoutingSearchParameters;
 
 %module(directors="1") operations_research;
 
-%rename (RoutingModelStatus) operations_research::RoutingModel::Status;
+// RoutingModel methods.
+DEFINE_INDEX_TYPE_TYPEDEF(
+    operations_research::RoutingCostClassIndex,
+    operations_research::RoutingModel::CostClassIndex);
+DEFINE_INDEX_TYPE_TYPEDEF(
+    operations_research::RoutingDimensionIndex,
+    operations_research::RoutingModel::DimensionIndex);
+DEFINE_INDEX_TYPE_TYPEDEF(
+    operations_research::RoutingDisjunctionIndex,
+    operations_research::RoutingModel::DisjunctionIndex);
+DEFINE_INDEX_TYPE_TYPEDEF(
+    operations_research::RoutingVehicleClassIndex,
+    operations_research::RoutingModel::VehicleClassIndex);
 
-%ignore operations_research::RoutingModel::AddVectorDimension(
-    const int64* values,
+namespace operations_research {
+
+// RoutingModel
+%unignore RoutingModel;
+%typemap(cscode) RoutingModel %{
+  // Keep reference to delegate to avoid GC to collect them early.
+  private List<LongToLong> unaryTransitCallbacks;
+  private LongToLong StoreLongToLong(LongToLong c) {
+    if (unaryTransitCallbacks == null)
+      unaryTransitCallbacks = new List<LongToLong>();
+    unaryTransitCallbacks.Add(c);
+    return c;
+  }
+
+  private List<LongLongToLong> transitCallbacks;
+  private LongLongToLong StoreLongLongToLong(LongLongToLong c) {
+    if (transitCallbacks == null)
+      transitCallbacks = new List<LongLongToLong>();
+    transitCallbacks.Add(c);
+    return c;
+  }
+
+  private List<VoidToVoid> solutionCallbacks;
+  private VoidToVoid StoreVoidToVoid(VoidToVoid c) {
+    if (solutionCallbacks == null)
+      solutionCallbacks = new List<VoidToVoid>();
+    solutionCallbacks.Add(c);
+    return c;
+  }
+%}
+// Ignored:
+%ignore RoutingModel::AddDimensionDependentDimensionWithVehicleCapacity;
+%ignore RoutingModel::AddHardTypeIncompatibility;
+%ignore RoutingModel::AddMatrixDimension(
+    std::vector<std::vector<int64> > values,
     int64 capacity,
+    bool fix_start_cumul_to_zero,
     const std::string& name);
+%ignore RoutingModel::AddSameVehicleRequiredTypeAlternatives;
+%ignore RoutingModel::AddTemporalRequiredTypeAlternatives;
+%ignore RoutingModel::AddTemporalTypeIncompatibility;
+%ignore RoutingModel::CloseVisitTypes;
+%ignore RoutingModel::GetAllDimensionNames;
+%ignore RoutingModel::GetDeliveryIndexPairs;
+%ignore RoutingModel::GetDimensions;
+%ignore RoutingModel::GetDimensionsWithSoftAndSpanCosts;
+%ignore RoutingModel::GetDimensionsWithSoftOrSpanCosts;
+%ignore RoutingModel::GetHardTypeIncompatibilitiesOfType;
+%ignore RoutingModel::GetPerfectBinaryDisjunctions;
+%ignore RoutingModel::GetPickupIndexPairs;
+%ignore RoutingModel::GetSameVehicleRequiredTypeAlternativesOfType;
+%ignore RoutingModel::GetTemporalRequiredTypeAlternativesOfType;
+%ignore RoutingModel::GetTemporalTypeIncompatibilitiesOfType;
+%ignore RoutingModel::HasHardTypeIncompatibilities;
+%ignore RoutingModel::HasSameVehicleTypeRequirements;
+%ignore RoutingModel::HasTemporalTypeIncompatibilities;
+%ignore RoutingModel::HasTemporalTypeRequirements;
+%ignore RoutingModel::HasTypeRegulations;
+%ignore RoutingModel::MakeStateDependentTransit;
+%ignore RoutingModel::RegisterStateDependentTransitCallback;
+%ignore RoutingModel::StateDependentTransitCallback;
+%ignore RoutingModel::SolveWithParameters(
+    const RoutingSearchParameters& search_parameters,
+    std::vector<const Assignment*>* solutions);
+%ignore RoutingModel::SolveFromAssignmentWithParameters(
+      const Assignment* assignment,
+      const RoutingSearchParameters& search_parameters,
+      std::vector<const Assignment*>* solutions);
+%ignore RoutingModel::TransitCallback;
+%ignore RoutingModel::UnaryTransitCallbackOrNull;
 
-%ignore operations_research::RoutingModel::AddMatrixDimension(
-    const int64* const* values,
-    int64 capacity,
-    const std::string& name);
-
-%ignore operations_research::RoutingModel::RegisterStateDependentTransitCallback;
-%ignore operations_research::RoutingModel::StateDependentTransitCallback;
-%ignore operations_research::RoutingModel::MakeStateDependentTransit;
-%ignore operations_research::RoutingModel::AddDimensionDependentDimensionWithVehicleCapacity;
-
-%ignore operations_research::RoutingModel::RegisterTransitCallback(
-    operations_research::TransitCallback2);
-%ignore operations_research::RoutingModel::RegisterUnaryTransitCallback(
-    operations_research::TransitCallback1);
-
-%extend operations_research::RoutingModel {
-  int RegisterTransitCallback(swig_util::IntIntToLong* callback) {
-    return $self->RegisterTransitCallback([callback](int i, int j) {
-        return callback->Run(i, j);
-      });
+// RoutingDimension
+%unignore RoutingDimension;
+%typemap(cscode) RoutingDimension %{
+  // Keep reference to delegate to avoid GC to collect them early.
+  private List<IntIntToLong> limitCallbacks;
+  private IntIntToLong StoreIntIntToLong(IntIntToLong limit) {
+    if (limitCallbacks == null)
+      limitCallbacks = new List<IntIntToLong>();
+    limitCallbacks.Add(limit);
+    return limit;
   }
-  int RegisterUnaryTransitCallback(swig_util::IntToLong* callback) {
-    return $self->RegisterUnaryTransitCallback([callback](int i) {
-        return callback->Run(i);
-      });
-  }
-  void AddVectorDimension(const std::vector<int64>& values,
-                          int64 capacity,
-                          bool fix_start_cumul_to_zero,
-                          const std::string& name) {
-    DCHECK_EQ(values.size(), self->nodes());
-    self->AddVectorDimension(values.data(), capacity,
-                             fix_start_cumul_to_zero, name);
-  }
-}
 
+  private List<LongLongToLong> groupDelayCallbacks;
+  private LongLongToLong StoreLongLongToLong(LongLongToLong groupDelay) {
+    if (groupDelayCallbacks == null)
+      groupDelayCallbacks = new List<LongLongToLong>();
+    groupDelayCallbacks.Add(groupDelay);
+    return groupDelay;
+  }
+%}
+
+}  // namespace operations_research
+
+%rename("GetStatus") operations_research::RoutingModel::status;
 %rename("%(camelcase)s", %$isfunction) "";
 
 // Protobuf support
@@ -93,6 +158,7 @@ PROTO2_RETURN(operations_research::RoutingSearchParameters,
 PROTO2_RETURN(operations_research::RoutingModelParameters,
               Google.OrTools.ConstraintSolver.RoutingModelParameters)
 
-
+// TODO(user): Replace with %ignoreall/%unignoreall
+//swiglint: disable include-h-allglobals
 %include "ortools/constraint_solver/routing_parameters.h"
 %include "ortools/constraint_solver/routing.h"

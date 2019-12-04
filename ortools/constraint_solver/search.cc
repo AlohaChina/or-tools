@@ -33,7 +33,7 @@
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
 #include "ortools/base/map_util.h"
-#include "ortools/base/random.h"
+#include "ortools/base/mathutil.h"
 #include "ortools/base/stl_util.h"
 #include "ortools/base/timer.h"
 #include "ortools/constraint_solver/constraint_solver.h"
@@ -53,7 +53,7 @@ namespace operations_research {
 // ---------- Search Log ---------
 
 SearchLog::SearchLog(Solver* const s, OptimizeVar* const obj, IntVar* const var,
-                     double scaling_factor,
+                     double scaling_factor, double offset,
                      std::function<std::string()> display_callback, int period)
     : SearchMonitor(s),
       period_(period),
@@ -61,6 +61,7 @@ SearchLog::SearchLog(Solver* const s, OptimizeVar* const obj, IntVar* const var,
       var_(var),
       obj_(obj),
       scaling_factor_(scaling_factor),
+      offset_(offset),
       display_callback_(std::move(display_callback)),
       nsol_(0),
       tick_(0),
@@ -106,29 +107,34 @@ bool SearchLog::AtSolution() {
   int64 current = 0;
   bool objective_updated = false;
   const auto scaled_str = [this](int64 value) {
-    if (scaling_factor_ != 1.0) {
-      return absl::StrFormat("%d (%.8lf)", value, value / scaling_factor_);
+    if (scaling_factor_ != 1.0 || offset_ != 0.0) {
+      return absl::StrFormat("%d (%.8lf)", value,
+                             scaling_factor_ * (value + offset_));
     } else {
       return absl::StrCat(value);
     }
   };
-  if (obj_ != nullptr) {
+  if (obj_ != nullptr && obj_->Var()->Bound()) {
     current = obj_->Var()->Value();
     obj_str = obj_->Print();
     objective_updated = true;
-  } else if (var_ != nullptr) {
+  } else if (var_ != nullptr && var_->Bound()) {
     current = var_->Value();
+    absl::StrAppend(&obj_str, scaled_str(current), ", ");
+    objective_updated = true;
+  } else {
+    current = solver()->GetOrCreateLocalSearchState()->ObjectiveMin();
     absl::StrAppend(&obj_str, scaled_str(current), ", ");
     objective_updated = true;
   }
   if (objective_updated) {
-    if (current >= objective_min_) {
+    if (current > objective_min_) {
       absl::StrAppend(&obj_str,
                       "objective minimum = ", scaled_str(objective_min_), ", ");
     } else {
       objective_min_ = current;
     }
-    if (current <= objective_max_) {
+    if (current < objective_max_) {
       absl::StrAppend(&obj_str,
                       "objective maximum = ", scaled_str(objective_max_), ", ");
     } else {
@@ -163,6 +169,8 @@ bool SearchLog::AtSolution() {
   }
   return false;
 }
+
+void SearchLog::AcceptUncheckedNeighbor() { AtSolution(); }
 
 void SearchLog::BeginFail() { Maintain(); }
 
@@ -268,43 +276,43 @@ std::string SearchLog::MemoryUsage() {
 
 SearchMonitor* Solver::MakeSearchLog(int branch_period) {
   return RevAlloc(
-      new SearchLog(this, nullptr, nullptr, 1.0, nullptr, branch_period));
+      new SearchLog(this, nullptr, nullptr, 1.0, 0.0, nullptr, branch_period));
 }
 
 SearchMonitor* Solver::MakeSearchLog(int branch_period, IntVar* const var) {
   return RevAlloc(
-      new SearchLog(this, nullptr, var, 1.0, nullptr, branch_period));
+      new SearchLog(this, nullptr, var, 1.0, 0.0, nullptr, branch_period));
 }
 
 SearchMonitor* Solver::MakeSearchLog(
     int branch_period, std::function<std::string()> display_callback) {
-  return RevAlloc(new SearchLog(this, nullptr, nullptr, 1.0,
+  return RevAlloc(new SearchLog(this, nullptr, nullptr, 1.0, 0.0,
                                 std::move(display_callback), branch_period));
 }
 
 SearchMonitor* Solver::MakeSearchLog(
     int branch_period, IntVar* const var,
     std::function<std::string()> display_callback) {
-  return RevAlloc(new SearchLog(this, nullptr, var, 1.0,
+  return RevAlloc(new SearchLog(this, nullptr, var, 1.0, 0.0,
                                 std::move(display_callback), branch_period));
 }
 
 SearchMonitor* Solver::MakeSearchLog(int branch_period,
                                      OptimizeVar* const opt_var) {
   return RevAlloc(
-      new SearchLog(this, opt_var, nullptr, 1.0, nullptr, branch_period));
+      new SearchLog(this, opt_var, nullptr, 1.0, 0.0, nullptr, branch_period));
 }
 
 SearchMonitor* Solver::MakeSearchLog(
     int branch_period, OptimizeVar* const opt_var,
     std::function<std::string()> display_callback) {
-  return RevAlloc(new SearchLog(this, opt_var, nullptr, 1.0,
+  return RevAlloc(new SearchLog(this, opt_var, nullptr, 1.0, 0.0,
                                 std::move(display_callback), branch_period));
 }
 
 SearchMonitor* Solver::MakeSearchLog(SearchLogParameters parameters) {
   return RevAlloc(new SearchLog(this, parameters.objective, parameters.variable,
-                                parameters.scaling_factor,
+                                parameters.scaling_factor, parameters.offset,
                                 std::move(parameters.display_callback),
                                 parameters.branch_period));
 }
@@ -1529,7 +1537,8 @@ AssignOneVariableValue::AssignOneVariableValue(IntVar* const v, int64 val)
     : var_(v), value_(val) {}
 
 std::string AssignOneVariableValue::DebugString() const {
-  return absl::StrFormat("[%s == %d]", var_->DebugString(), value_);
+  return absl::StrFormat("[%s == %d] or [%s != %d]", var_->DebugString(),
+                         value_, var_->DebugString(), value_);
 }
 
 void AssignOneVariableValue::Apply(Solver* const s) { var_->SetValue(value_); }
@@ -1567,7 +1576,7 @@ AssignOneVariableValueOrFail::AssignOneVariableValueOrFail(IntVar* const v,
     : var_(v), value_(value) {}
 
 std::string AssignOneVariableValueOrFail::DebugString() const {
-  return absl::StrFormat("[%s == %d]", var_->DebugString(), value_);
+  return absl::StrFormat("[%s == %d] or fail", var_->DebugString(), value_);
 }
 
 void AssignOneVariableValueOrFail::Apply(Solver* const s) {
@@ -1580,6 +1589,35 @@ void AssignOneVariableValueOrFail::Refute(Solver* const s) { s->Fail(); }
 Decision* Solver::MakeAssignVariableValueOrFail(IntVar* const var,
                                                 int64 value) {
   return RevAlloc(new AssignOneVariableValueOrFail(var, value));
+}
+
+// ----- AssignOneVariableValueOrDoNothing decision -----
+
+namespace {
+class AssignOneVariableValueDoNothing : public Decision {
+ public:
+  AssignOneVariableValueDoNothing(IntVar* const v, int64 value)
+      : var_(v), value_(value) {}
+  ~AssignOneVariableValueDoNothing() override {}
+  void Apply(Solver* const s) override { var_->SetValue(value_); }
+  void Refute(Solver* const s) override {}
+  std::string DebugString() const override {
+    return absl::StrFormat("[%s == %d] or []", var_->DebugString(), value_);
+  }
+  void Accept(DecisionVisitor* const visitor) const override {
+    visitor->VisitSetVariableValue(var_, value_);
+  }
+
+ private:
+  IntVar* const var_;
+  const int64 value_;
+};
+
+}  // namespace
+
+Decision* Solver::MakeAssignVariableValueOrDoNothing(IntVar* const var,
+                                                     int64 value) {
+  return RevAlloc(new AssignOneVariableValueDoNothing(var, value));
 }
 
 // ----- AssignOneVariableValue decision -----
@@ -2548,6 +2586,11 @@ NBestValueSolutionCollector::NBestValueSolutionCollector(Solver* const solver,
 
 void NBestValueSolutionCollector::EnterSearch() {
   SolutionCollector::EnterSearch();
+  // TODO(user): Remove this when fast local search works with
+  // multiple solutions collected.
+  if (solution_count_ > 1) {
+    solver()->SetUseFastLocalSearch(false);
+  }
   Clear();
 }
 
@@ -2671,7 +2714,15 @@ OptimizeVar::OptimizeVar(Solver* const s, bool maximize, IntVar* const a,
       best_(kint64max),
       maximize_(maximize),
       found_initial_solution_(false) {
-  CHECK_GT(step, 0);
+  CHECK_GT(step_, 0);
+  // TODO(user): Store optimization direction in Solver. Besides making the
+  // code simpler it would also having two monitors optimizing in opposite
+  // directions.
+  if (maximize) {
+    s->set_optimization_direction(Solver::MAXIMIZATION);
+  } else {
+    s->set_optimization_direction(Solver::MINIMIZATION);
+  }
 }
 
 OptimizeVar::~OptimizeVar() {}
@@ -2725,6 +2776,40 @@ bool OptimizeVar::AtSolution() {
     best_ = val;
   }
   found_initial_solution_ = true;
+  return true;
+}
+
+bool OptimizeVar::AcceptDelta(Assignment* delta, Assignment* deltadelta) {
+  if (delta != nullptr) {
+    const bool delta_has_objective = delta->HasObjective();
+    if (!delta_has_objective) {
+      delta->AddObjective(var_);
+    }
+    if (delta->Objective() == var_) {
+      const Assignment* const local_search_state =
+          solver()->GetOrCreateLocalSearchState();
+      if (maximize_) {
+        const int64 delta_min_objective =
+            delta_has_objective ? delta->ObjectiveMin() : kint64min;
+        const int64 min_objective =
+            local_search_state->HasObjective()
+                ? CapAdd(local_search_state->ObjectiveMin(), step_)
+                : kint64min;
+        delta->SetObjectiveMin(
+            std::max({var_->Min(), min_objective, delta_min_objective}));
+
+      } else {
+        const int64 delta_max_objective =
+            delta_has_objective ? delta->ObjectiveMax() : kint64max;
+        const int64 max_objective =
+            local_search_state->HasObjective()
+                ? CapSub(local_search_state->ObjectiveMax(), step_)
+                : kint64max;
+        delta->SetObjectiveMax(
+            std::min({var_->Max(), max_objective, delta_max_objective}));
+      }
+    }
+  }
   return true;
 }
 
@@ -2852,6 +2937,7 @@ class Metaheuristic : public SearchMonitor {
   bool AtSolution() override;
   void EnterSearch() override;
   void RefuteDecision(Decision* const d) override;
+  bool AcceptDelta(Assignment* delta, Assignment* deltadelta) override;
 
  protected:
   IntVar* const objective_;
@@ -2881,6 +2967,9 @@ bool Metaheuristic::AtSolution() {
 }
 
 void Metaheuristic::EnterSearch() {
+  // TODO(user): Remove this when fast local search works with
+  // metaheuristics.
+  solver()->SetUseFastLocalSearch(false);
   if (maximize_) {
     best_ = objective_->Min();
     current_ = kint64min;
@@ -2898,6 +2987,24 @@ void Metaheuristic::RefuteDecision(Decision* d) {
   } else if (objective_->Min() > best_ - step_) {
     solver()->Fail();
   }
+}
+
+bool Metaheuristic::AcceptDelta(Assignment* delta, Assignment* deltadelta) {
+  if (delta != nullptr) {
+    if (!delta->HasObjective()) {
+      delta->AddObjective(objective_);
+    }
+    if (delta->Objective() == objective_) {
+      if (maximize_) {
+        delta->SetObjectiveMin(
+            std::max(objective_->Min(), delta->ObjectiveMin()));
+      } else {
+        delta->SetObjectiveMax(
+            std::min(objective_->Max(), delta->ObjectiveMax()));
+      }
+    }
+  }
+  return true;
 }
 
 // ---------- Tabu Search ----------
@@ -3160,11 +3267,11 @@ class SimulatedAnnealing : public Metaheuristic {
   std::string DebugString() const override { return "Simulated Annealing"; }
 
  private:
-  float Temperature() const;
+  double Temperature() const;
 
   const int64 temperature0_;
   int64 iteration_;
-  ACMRandom rand_;
+  std::mt19937 rand_;
   bool found_initial_solution_;
 
   DISALLOW_COPY_AND_ASSIGN(SimulatedAnnealing);
@@ -3176,7 +3283,7 @@ SimulatedAnnealing::SimulatedAnnealing(Solver* const s, bool maximize,
     : Metaheuristic(s, maximize, objective, step),
       temperature0_(initial_temperature),
       iteration_(0),
-      rand_(654),
+      rand_(CpRandomSeed()),
       found_initial_solution_(false) {}
 
 void SimulatedAnnealing::EnterSearch() {
@@ -3189,11 +3296,13 @@ void SimulatedAnnealing::ApplyDecision(Decision* const d) {
   if (d == s->balancing_decision()) {
     return;
   }
+  const double rand_double = absl::Uniform<double>(rand_, 0.0, 1.0);
 #if defined(_MSC_VER) || defined(__ANDROID__)
-  const int64 energy_bound = Temperature() * log(rand_.RndFloat()) / log(2.0L);
+  const double rand_log2_double = log(rand_double) / log(2.0L);
 #else
-  const int64 energy_bound = Temperature() * log2(rand_.RndFloat());
+  const double rand_log2_double = log2(rand_double);
 #endif
+  const int64 energy_bound = Temperature() * rand_log2_double;
   if (maximize_) {
     const int64 bound =
         (current_ > kint64min) ? current_ + step_ + energy_bound : current_;
@@ -3229,7 +3338,7 @@ void SimulatedAnnealing::AcceptNeighbor() {
   }
 }
 
-float SimulatedAnnealing::Temperature() const {
+double SimulatedAnnealing::Temperature() const {
   if (iteration_ > 0) {
     return (1.0 * temperature0_) / iteration_;  // Cauchy annealing
   } else {
@@ -3491,7 +3600,10 @@ void GuidedLocalSearch::EnterSearch() {
 // GLS filtering; compute the penalized value corresponding to the delta and
 // modify objective bound accordingly.
 bool GuidedLocalSearch::AcceptDelta(Assignment* delta, Assignment* deltadelta) {
-  if ((delta != nullptr || deltadelta != nullptr) && penalties_->HasValues()) {
+  if (delta != nullptr || deltadelta != nullptr) {
+    if (!penalties_->HasValues()) {
+      return Metaheuristic::AcceptDelta(delta, deltadelta);
+    }
     int64 penalty = 0;
     if (!deltadelta->Empty()) {
       if (!incremental_) {
@@ -3520,11 +3632,13 @@ bool GuidedLocalSearch::AcceptDelta(Assignment* delta, Assignment* deltadelta) {
     if (delta->Objective() == objective_) {
       if (maximize_) {
         delta->SetObjectiveMin(
-            std::max(std::min(current_ + step_ - penalty, best_ + step_),
+            std::max(std::min(CapSub(CapAdd(current_, step_), penalty),
+                              CapAdd(best_, step_)),
                      delta->ObjectiveMin()));
       } else {
         delta->SetObjectiveMax(
-            std::min(std::max(current_ - step_ - penalty, best_ - step_),
+            std::min(std::max(CapSub(CapSub(current_, step_), penalty),
+                              CapSub(best_, step_)),
                      delta->ObjectiveMax()));
       }
     }
@@ -3544,10 +3658,10 @@ int64 GuidedLocalSearch::Evaluate(const Assignment* delta,
     IntVar* var = new_element.Var();
     int64 index = -1;
     if (gtl::FindCopy(indices_, var, &index)) {
-      penalty -= out_values[index];
+      penalty = CapSub(penalty, out_values[index]);
       int64 new_penalty = 0;
       if (EvaluateElementValue(container, index, &i, &new_penalty)) {
-        penalty += new_penalty;
+        penalty = CapAdd(penalty, new_penalty);
         if (cache_delta_values) {
           delta_cache_[index] = new_penalty;
         }
@@ -3825,80 +3939,16 @@ void SearchLimit::TopPeriodicCheck() {
   }
 }
 
-namespace {
 // ----- Regular Limit -----
-
-// Usual limit based on wall_time, number of explored branches and
-// number of failures in the search tree
-class RegularLimit : public SearchLimit {
- public:
-  RegularLimit(Solver* const s, int64 time, int64 branches, int64 failures,
-               int64 solutions, bool smart_time_check, bool cumulative);
-  ~RegularLimit() override;
-  void Copy(const SearchLimit* const limit) override;
-  SearchLimit* MakeClone() const override;
-  bool Check() override;
-  void Init() override;
-  void ExitSearch() override;
-  void UpdateLimits(int64 time, int64 branches, int64 failures,
-                    int64 solutions);
-  int64 wall_time() { return wall_time_; }
-  int ProgressPercent() override;
-  std::string DebugString() const override;
-
-  void Accept(ModelVisitor* const visitor) const override {
-    visitor->BeginVisitExtension(ModelVisitor::kSearchLimitExtension);
-    visitor->VisitIntegerArgument(ModelVisitor::kTimeLimitArgument, wall_time_);
-    visitor->VisitIntegerArgument(ModelVisitor::kBranchesLimitArgument,
-                                  branches_);
-    visitor->VisitIntegerArgument(ModelVisitor::kFailuresLimitArgument,
-                                  failures_);
-    visitor->VisitIntegerArgument(ModelVisitor::kSolutionLimitArgument,
-                                  solutions_);
-    visitor->VisitIntegerArgument(ModelVisitor::kSmartTimeCheckArgument,
-                                  smart_time_check_);
-    visitor->VisitIntegerArgument(ModelVisitor::kCumulativeArgument,
-                                  cumulative_);
-    visitor->EndVisitExtension(ModelVisitor::kObjectiveExtension);
-  }
-
- private:
-  bool CheckTime();
-  int64 TimeDelta();
-  static int64 GetPercent(int64 value, int64 offset, int64 total) {
-    return (total > 0 && total < kint64max) ? 100 * (value - offset) / total
-                                            : -1;
-  }
-
-  int64 wall_time_;
-  int64 wall_time_offset_;
-  int64 last_time_delta_;
-  int64 check_count_;
-  int64 next_check_;
-  bool smart_time_check_;
-  int64 branches_;
-  int64 branches_offset_;
-  int64 failures_;
-  int64 failures_offset_;
-  int64 solutions_;
-  int64 solutions_offset_;
-  // If cumulative if false, then the limit applies to each search
-  // independently. If it's true, the limit applies globally to all search for
-  // which this monitor is used.
-  // When cumulative is true, the offset fields have two different meanings
-  // depending on context:
-  // - within a search, it's an offset to be subtracted from the current value
-  // - outside of search, it's the amount consumed in previous searches
-  bool cumulative_;
-};
 
 RegularLimit::RegularLimit(Solver* const s, int64 time, int64 branches,
                            int64 failures, int64 solutions,
                            bool smart_time_check, bool cumulative)
     : SearchLimit(s),
-      wall_time_(time),
-      wall_time_offset_(0),
-      last_time_delta_(-1),
+      duration_limit_(time == kint64max ? absl::InfiniteDuration()
+                                        : absl::Milliseconds(time)),
+      solver_time_at_limit_start_(s->Now()),
+      last_time_elapsed_(absl::ZeroDuration()),
       check_count_(0),
       next_check_(0),
       smart_time_check_(smart_time_check),
@@ -3915,7 +3965,7 @@ RegularLimit::~RegularLimit() {}
 void RegularLimit::Copy(const SearchLimit* const limit) {
   const RegularLimit* const regular =
       reinterpret_cast<const RegularLimit* const>(limit);
-  wall_time_ = regular->wall_time_;
+  duration_limit_ = regular->duration_limit_;
   branches_ = regular->branches_;
   failures_ = regular->failures_;
   solutions_ = regular->solutions_;
@@ -3923,9 +3973,11 @@ void RegularLimit::Copy(const SearchLimit* const limit) {
   cumulative_ = regular->cumulative_;
 }
 
-SearchLimit* RegularLimit::MakeClone() const {
+SearchLimit* RegularLimit::MakeClone() const { return MakeIdenticalClone(); }
+
+RegularLimit* RegularLimit::MakeIdenticalClone() const {
   Solver* const s = solver();
-  return s->MakeLimit(wall_time_, branches_, failures_, solutions_,
+  return s->MakeLimit(wall_time(), branches_, failures_, solutions_,
                       smart_time_check_);
 }
 
@@ -3944,8 +3996,8 @@ int RegularLimit::ProgressPercent() {
                       GetPercent(s->failures(), failures_offset_, failures_));
   progress = std::max(
       progress, GetPercent(s->solutions(), solutions_offset_, solutions_));
-  if (wall_time_ < kint64max) {
-    progress = std::max(progress, (100 * TimeDelta()) / wall_time_);
+  if (duration_limit() != absl::InfiniteDuration()) {
+    progress = std::max(progress, (100 * TimeElapsed()) / duration_limit());
   }
   return progress;
 }
@@ -3954,8 +4006,8 @@ void RegularLimit::Init() {
   Solver* const s = solver();
   branches_offset_ = s->branches();
   failures_offset_ = s->failures();
-  wall_time_offset_ = s->wall_time();
-  last_time_delta_ = -1;
+  solver_time_at_limit_start_ = s->Now();
+  last_time_elapsed_ = absl::ZeroDuration();
   solutions_offset_ = s->solutions();
   check_count_ = 0;
   next_check_ = 0;
@@ -3967,90 +4019,113 @@ void RegularLimit::ExitSearch() {
     Solver* const s = solver();
     branches_ -= s->branches() - branches_offset_;
     failures_ -= s->failures() - failures_offset_;
-    wall_time_ -= s->wall_time() - wall_time_offset_;
+    duration_limit_ -= s->Now() - solver_time_at_limit_start_;
     solutions_ -= s->solutions() - solutions_offset_;
   }
 }
 
 void RegularLimit::UpdateLimits(int64 time, int64 branches, int64 failures,
                                 int64 solutions) {
-  wall_time_ = time;
+  duration_limit_ =
+      time == kint64max ? absl::InfiniteDuration() : absl::Milliseconds(time);
   branches_ = branches;
   failures_ = failures;
   solutions_ = solutions;
 }
 
-std::string RegularLimit::DebugString() const {
-  return absl::StrFormat(
-      "RegularLimit(crossed = %i, wall_time = %d, "
-      "branches = %d, failures = %d, solutions = %d cumulative = %s",
-      crossed(), wall_time_, branches_, failures_, solutions_,
-      (cumulative_ ? "true" : "false"));
+bool RegularLimit::IsUncheckedSolutionLimitReached() {
+  Solver* const s = solver();
+  return s->solutions() + s->unchecked_solutions() - solutions_offset_ >=
+         solutions_;
 }
 
-bool RegularLimit::CheckTime() { return TimeDelta() >= wall_time_; }
+std::string RegularLimit::DebugString() const {
+  return absl::StrFormat(
+      "RegularLimit(crossed = %i, duration_limit = %s, "
+      "branches = %d, failures = %d, solutions = %d cumulative = %s",
+      crossed(), absl::FormatDuration(duration_limit()), branches_, failures_,
+      solutions_, (cumulative_ ? "true" : "false"));
+}
 
-int64 RegularLimit::TimeDelta() {
+void RegularLimit::Accept(ModelVisitor* const visitor) const {
+  visitor->BeginVisitExtension(ModelVisitor::kSearchLimitExtension);
+  visitor->VisitIntegerArgument(ModelVisitor::kTimeLimitArgument, wall_time());
+  visitor->VisitIntegerArgument(ModelVisitor::kBranchesLimitArgument,
+                                branches_);
+  visitor->VisitIntegerArgument(ModelVisitor::kFailuresLimitArgument,
+                                failures_);
+  visitor->VisitIntegerArgument(ModelVisitor::kSolutionLimitArgument,
+                                solutions_);
+  visitor->VisitIntegerArgument(ModelVisitor::kSmartTimeCheckArgument,
+                                smart_time_check_);
+  visitor->VisitIntegerArgument(ModelVisitor::kCumulativeArgument, cumulative_);
+  visitor->EndVisitExtension(ModelVisitor::kObjectiveExtension);
+}
+
+bool RegularLimit::CheckTime() { return TimeElapsed() >= duration_limit(); }
+
+absl::Duration RegularLimit::TimeElapsed() {
   const int64 kMaxSkip = 100;
   const int64 kCheckWarmupIterations = 100;
   ++check_count_;
-  if (wall_time_ != kint64max && next_check_ <= check_count_) {
+  if (duration_limit() != absl::InfiniteDuration() &&
+      next_check_ <= check_count_) {
     Solver* const s = solver();
-    int64 time_delta = s->wall_time() - wall_time_offset_;
+    absl::Duration elapsed = s->Now() - solver_time_at_limit_start_;
     if (smart_time_check_ && check_count_ > kCheckWarmupIterations &&
-        time_delta > 0) {
-      // TODO(user): Fix potential overflow.
-      int64 approximate_calls = (wall_time_ * check_count_) / time_delta;
-      next_check_ = check_count_ + std::min(kMaxSkip, approximate_calls);
+        elapsed > absl::ZeroDuration()) {
+      const int64 estimated_check_count_at_limit = MathUtil::FastInt64Round(
+          check_count_ * absl::FDivDuration(duration_limit_, elapsed));
+      next_check_ =
+          std::min(check_count_ + kMaxSkip, estimated_check_count_at_limit);
     }
-    last_time_delta_ = time_delta;
+    last_time_elapsed_ = elapsed;
   }
-  return last_time_delta_;
+  return last_time_elapsed_;
 }
-}  // namespace
 
-SearchLimit* Solver::MakeTimeLimit(int64 time_in_ms) {
+RegularLimit* Solver::MakeTimeLimit(int64 time_in_ms) {
   return MakeLimit(time_in_ms, kint64max, kint64max, kint64max);
 }
 
-SearchLimit* Solver::MakeBranchesLimit(int64 branches) {
+RegularLimit* Solver::MakeBranchesLimit(int64 branches) {
   return MakeLimit(kint64max, branches, kint64max, kint64max);
 }
 
-SearchLimit* Solver::MakeFailuresLimit(int64 failures) {
+RegularLimit* Solver::MakeFailuresLimit(int64 failures) {
   return MakeLimit(kint64max, kint64max, failures, kint64max);
 }
 
-SearchLimit* Solver::MakeSolutionsLimit(int64 solutions) {
+RegularLimit* Solver::MakeSolutionsLimit(int64 solutions) {
   return MakeLimit(kint64max, kint64max, kint64max, solutions);
 }
 
-SearchLimit* Solver::MakeLimit(int64 time, int64 branches, int64 failures,
-                               int64 solutions) {
+RegularLimit* Solver::MakeLimit(int64 time, int64 branches, int64 failures,
+                                int64 solutions) {
   return MakeLimit(time, branches, failures, solutions, false);
 }
 
-SearchLimit* Solver::MakeLimit(int64 time, int64 branches, int64 failures,
-                               int64 solutions, bool smart_time_check) {
+RegularLimit* Solver::MakeLimit(int64 time, int64 branches, int64 failures,
+                                int64 solutions, bool smart_time_check) {
   return MakeLimit(time, branches, failures, solutions, smart_time_check,
                    false);
 }
 
-SearchLimit* Solver::MakeLimit(int64 time, int64 branches, int64 failures,
-                               int64 solutions, bool smart_time_check,
-                               bool cumulative) {
+RegularLimit* Solver::MakeLimit(int64 time, int64 branches, int64 failures,
+                                int64 solutions, bool smart_time_check,
+                                bool cumulative) {
   return RevAlloc(new RegularLimit(this, time, branches, failures, solutions,
                                    smart_time_check, cumulative));
 }
 
-SearchLimit* Solver::MakeLimit(const SearchLimitParameters& proto) {
+RegularLimit* Solver::MakeLimit(const RegularLimitParameters& proto) {
   return MakeLimit(proto.time(), proto.branches(), proto.failures(),
                    proto.solutions(), proto.smart_time_check(),
                    proto.cumulative());
 }
 
-SearchLimitParameters Solver::MakeDefaultSearchLimitParameters() const {
-  SearchLimitParameters proto;
+RegularLimitParameters Solver::MakeDefaultRegularLimitParameters() const {
+  RegularLimitParameters proto;
   proto.set_time(kint64max);
   proto.set_branches(kint64max);
   proto.set_failures(kint64max);
@@ -4126,16 +4201,6 @@ class ORLimit : public SearchLimit {
 SearchLimit* Solver::MakeLimit(SearchLimit* const limit_1,
                                SearchLimit* const limit_2) {
   return RevAlloc(new ORLimit(limit_1, limit_2));
-}
-
-void Solver::UpdateLimits(int64 time, int64 branches, int64 failures,
-                          int64 solutions, SearchLimit* limit) {
-  reinterpret_cast<RegularLimit*>(limit)->UpdateLimits(time, branches, failures,
-                                                       solutions);
-}
-
-int64 Solver::GetTime(SearchLimit* limit) {
-  return reinterpret_cast<RegularLimit*>(limit)->wall_time();
 }
 
 namespace {

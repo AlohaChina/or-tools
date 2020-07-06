@@ -189,7 +189,9 @@ class LinearProgrammingConstraint : public PropagatorInterface,
   // Add a "MIR" cut obtained by first taking the linear combination of the
   // row of the matrix according to "integer_multipliers" and then trying
   // some integer rounding heuristic.
-  void AddCutFromConstraints(
+  //
+  // Return true if a new cut was added to the cut manager.
+  bool AddCutFromConstraints(
       const std::string& name,
       const std::vector<std::pair<glop::RowIndex, IntegerValue>>&
           integer_multipliers);
@@ -253,9 +255,9 @@ class LinearProgrammingConstraint : public PropagatorInterface,
 
   // Converts a dense represenation of a linear constraint to a sparse one
   // expressed in terms of IntegerVariable.
-  LinearConstraint ConvertToLinearConstraint(
+  void ConvertToLinearConstraint(
       const gtl::ITIVector<glop::ColIndex, IntegerValue>& dense_vector,
-      IntegerValue upper_bound);
+      IntegerValue upper_bound, LinearConstraint* result);
 
   // Compute the implied lower bound of the given linear expression using the
   // current variable bound. Return kMinIntegerValue in case of overflow.
@@ -291,9 +293,9 @@ class LinearProgrammingConstraint : public PropagatorInterface,
   // The variable should be a positive reference.
   glop::ColIndex GetOrCreateMirrorVariable(IntegerVariable positive_variable);
 
-  // Returns a "score" (higher is better) for the given LP variable using
-  // the average reduced costs as a signal.
-  double GetCostFromAverageReducedCosts(int position);
+  // This must be called on an OPTIMAL LP and will update the data for
+  // LPReducedCostAverageDecision().
+  void UpdateAverageReducedCosts();
 
   // Callback underlying LPReducedCostAverageBranching().
   LiteralIndex LPReducedCostAverageDecision();
@@ -338,6 +340,16 @@ class LinearProgrammingConstraint : public PropagatorInterface,
   // For the scaling.
   glop::LpScalingHelper scaler_;
 
+  // Temporary data for cuts.
+  IntegerRoundingCutHelper integer_rounding_cut_helper_;
+  LinearConstraint cut_;
+  gtl::ITIVector<glop::ColIndex, IntegerValue> tmp_dense_vector_;
+  std::vector<double> tmp_lp_values_;
+  std::vector<IntegerValue> tmp_var_lbs_;
+  std::vector<IntegerValue> tmp_var_ubs_;
+  std::vector<glop::RowIndex> tmp_slack_rows_;
+  std::vector<IntegerValue> tmp_slack_bounds_;
+
   // Structures used for mirroring IntegerVariables inside the underlying LP
   // solver: an integer variable var is mirrored by mirror_lp_variable_[var].
   // Note that these indices are dense in [0, mirror_lp_variable_.size()] so
@@ -358,6 +370,7 @@ class LinearProgrammingConstraint : public PropagatorInterface,
   Trail* trail_;
   SearchHeuristicsVector* model_heuristics_;
   IntegerEncoder* integer_encoder_;
+  ModelRandomGenerator* random_;
 
   // Used while deriving cuts.
   ImpliedBoundsProcessor implied_bounds_processor_;
@@ -412,6 +425,13 @@ class LinearProgrammingConstraint : public PropagatorInterface,
   std::vector<double> sum_cost_down_;
   std::vector<int> num_cost_up_;
   std::vector<int> num_cost_down_;
+  std::vector<double> rc_scores_;
+
+  // All the entries before rev_rc_start_ in the sorted positions correspond
+  // to fixed variables and can be ignored.
+  int rev_rc_start_ = 0;
+  RevRepository<int> rc_rev_int_repository_;
+  std::vector<std::pair<double, int>> positions_by_decreasing_rc_score_;
 
   // Defined as average number of nonbasic variables with zero reduced costs.
   IncrementalAverage average_degeneracy_;

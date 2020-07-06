@@ -22,18 +22,19 @@ command -v cmake
 command -v cmake | xargs echo "cmake: " | tee -a build.log
 command -v make
 command -v make | xargs echo "make: " | tee -a build.log
+
 command -v swig
 command -v swig | xargs echo "swig: " | tee -a build.log
+
 # python
-command -v python3.6
-command -v python3.6 | xargs echo "python3.6: " | tee -a build.log
-python3.6 -c "import distutils.util as u; print(u.get_platform())" | tee -a build.log
-command -v python3.7
-command -v python3.7 | xargs echo "python3.7: " | tee -a build.log
-python3.7 -c "import distutils.util as u; print(u.get_platform())" | tee -a build.log
-command -v python3.8
-command -v python3.8 | xargs echo "python3.8: " | tee -a build.log
-python3.8 -c "import distutils.util as u; print(u.get_platform())" | tee -a build.log
+PY=(3.6 3.7 3.8)
+for i in "${PY[@]}"; do
+  command -v "python$i"
+  command -v "python$i" | xargs echo "python$i: " | tee -a build.log
+  "python$i" -c "import distutils.util as u; print(u.get_platform())" | tee -a build.log
+  "python$i" -m pip install --user wheel six virtualenv
+done
+
 # java
 echo "JAVA_HOME: ${JAVA_HOME}" | tee -a build.log
 command -v java
@@ -43,6 +44,7 @@ command -v javac | xargs echo "javac: " | tee -a build.log
 command -v jar
 command -v jar | xargs echo "jar: " | tee -a build.log
 java -version 2>&1 | head -n 1 | grep 1.8
+
 # C#
 command -v dotnet
 command -v dotnet | xargs echo "dotnet: " | tee -a build.log
@@ -100,64 +102,24 @@ make python_examples_archive UNIX_PYTHON_VER=3.7
 echo "DONE" | tee -a build.log
 
 ##################
-##  Python 3.6  ##
+##  Python 3.X  ##
 ##################
-echo -n "Cleaning Python..." | tee -a build.log
-make clean_python UNIX_PYTHON_VER=3.6
-echo "DONE" | tee -a build.log
+for i in "${PY[@]}"; do
+  echo -n "Cleaning Python..." | tee -a build.log
+  make clean_python UNIX_PYTHON_VER="$i"
+  echo "DONE" | tee -a build.log
 
-echo -n "Build Python 3.6..." | tee -a build.log
-make python -l 4 UNIX_PYTHON_VER=3.6
-echo "DONE" | tee -a build.log
-#make test_python UNIX_PYTHON_VER=3.6
-#echo "make test_python3.6: DONE" | tee -a build.log
-echo -n "Build Python 3.6 wheel archive..." | tee -a build.log
-make python_package UNIX_PYTHON_VER=3.6
-echo "DONE" | tee -a build.log
-echo -n "Test Python 3.6 wheel archive..." | tee -a build.log
-make test_python_package UNIX_PYTHON_VER=3.6
-echo "DONE" | tee -a build.log
+  echo -n "Build Python $i..." | tee -a build.log
+  make python -l 4 UNIX_PYTHON_VER="$i"
+  echo "DONE" | tee -a build.log
+  #make test_python UNIX_PYTHON_VER=$i
+  #echo "make test_python$i: DONE" | tee -a build.log
+  echo -n "Build Python $i wheel archive..." | tee -a build.log
+  make package_python UNIX_PYTHON_VER="$i"
+  echo "DONE" | tee -a build.log
+  echo -n "Test Python $i wheel archive..." | tee -a build.log
+  make test_package_python UNIX_PYTHON_VER="$i"
+  echo "DONE" | tee -a build.log
 
-cp temp_python3.6/ortools/dist/*.whl .
-
-##################
-##  Python 3.7  ##
-##################
-echo -n "Cleaning Python..." | tee -a build.log
-make clean_python UNIX_PYTHON_VER=3.7
-echo "DONE" | tee -a build.log
-
-echo -n "Build Python 3.7..." | tee -a build.log
-make python -l 4 UNIX_PYTHON_VER=3.7
-echo "DONE" | tee -a build.log
-#make test_python UNIX_PYTHON_VER=3.7
-#echo "make test_python3.7: DONE" | tee -a build.log
-echo -n "Build Python 3.7 wheel archive..." | tee -a build.log
-make python_package UNIX_PYTHON_VER=3.7
-echo "DONE" | tee -a build.log
-echo -n "Test Python 3.7 wheel archive..." | tee -a build.log
-make test_python_package UNIX_PYTHON_VER=3.7
-echo "DONE" | tee -a build.log
-
-cp temp_python3.7/ortools/dist/*.whl .
-
-##################
-##  Python 3.8  ##
-##################
-echo -n "Cleaning Python..." | tee -a build.log
-make clean_python UNIX_PYTHON_VER=3.8
-echo "DONE" | tee -a build.log
-
-echo -n "Build Python 3.8..." | tee -a build.log
-make python -l 4 UNIX_PYTHON_VER=3.8
-echo "DONE" | tee -a build.log
-#make test_python UNIX_PYTHON_VER=3.8
-#echo "make test_python3.8: DONE" | tee -a build.log
-echo -n "Build Python 3.8 wheel archive..." | tee -a build.log
-make python_package UNIX_PYTHON_VER=3.8
-echo "DONE" | tee -a build.log
-echo -n "Test Python 3.8 wheel archive..." | tee -a build.log
-make test_python_package UNIX_PYTHON_VER=3.8
-echo "DONE" | tee -a build.log
-
-cp temp_python3.8/ortools/dist/*.whl .
+  cp "temp_python$i"/ortools/dist/*.whl .
+done

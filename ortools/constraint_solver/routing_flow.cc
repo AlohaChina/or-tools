@@ -131,7 +131,8 @@ struct FlowArc {
 };
 }  // namespace
 
-bool RoutingModel::SolveMatchingModel(Assignment* assignment) {
+bool RoutingModel::SolveMatchingModel(
+    Assignment* assignment, const RoutingSearchParameters& parameters) {
   VLOG(2) << "Solving with flow";
   assignment->Clear();
 
@@ -143,7 +144,8 @@ bool RoutingModel::SolveMatchingModel(Assignment* assignment) {
   std::vector<LocalDimensionCumulOptimizer> optimizers;
   optimizers.reserve(dimensions.size());
   for (RoutingDimension* dimension : dimensions) {
-    optimizers.emplace_back(dimension);
+    optimizers.emplace_back(dimension,
+                            parameters.continuous_scheduling_solver());
   }
 
   int num_flow_nodes = 0;
@@ -255,14 +257,17 @@ bool RoutingModel::SolveMatchingModel(Assignment* assignment) {
                 CapAdd(GetArcCostForVehicle(start, pickup, vehicle),
                        CapAdd(GetArcCostForVehicle(pickup, delivery, vehicle),
                               GetArcCostForVehicle(delivery, end, vehicle)));
-            const std::unordered_map<int64, int64> nexts = {
+            const absl::flat_hash_map<int64, int64> nexts = {
                 {start, pickup}, {pickup, delivery}, {delivery, end}};
             for (LocalDimensionCumulOptimizer& optimizer : optimizers) {
               int64 cumul_cost_value = 0;
+              // TODO(user): if the result is RELAXED_OPTIMAL_ONLY, do a
+              // second pass with an MP solver.
               if (optimizer.ComputeRouteCumulCostWithoutFixedTransits(
                       vehicle,
                       [&nexts](int64 node) { return nexts.find(node)->second; },
-                      &cumul_cost_value)) {
+                      &cumul_cost_value) !=
+                  DimensionSchedulingStatus::INFEASIBLE) {
                 cost = CapAdd(cost, cumul_cost_value);
               } else {
                 add_arc = false;
@@ -275,14 +280,17 @@ bool RoutingModel::SolveMatchingModel(Assignment* assignment) {
             add_arc = true;
             cost = CapAdd(GetArcCostForVehicle(start, node, vehicle),
                           GetArcCostForVehicle(node, end, vehicle));
-            const std::unordered_map<int64, int64> nexts = {{start, node},
-                                                            {node, end}};
+            const absl::flat_hash_map<int64, int64> nexts = {{start, node},
+                                                             {node, end}};
             for (LocalDimensionCumulOptimizer& optimizer : optimizers) {
               int64 cumul_cost_value = 0;
+              // TODO(user): if the result is RELAXED_OPTIMAL_ONLY, do a
+              // second pass with an MP solver.
               if (optimizer.ComputeRouteCumulCostWithoutFixedTransits(
                       vehicle,
                       [&nexts](int64 node) { return nexts.find(node)->second; },
-                      &cumul_cost_value)) {
+                      &cumul_cost_value) !=
+                  DimensionSchedulingStatus::INFEASIBLE) {
                 cost = CapAdd(cost, cumul_cost_value);
               } else {
                 add_arc = false;

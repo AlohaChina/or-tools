@@ -15,7 +15,6 @@
 
 %include "enumsimple.swg"
 %include "exception.i"
-%include "stdint.i"
 
 %include "ortools/base/base.i"
 %include "ortools/util/java/tuple_set.i"
@@ -472,6 +471,7 @@ namespace operations_research {
 %rename (intVarContainer) Assignment::IntVarContainer;
 %rename (intervalVarContainer) Assignment::IntervalVarContainer;
 %rename (load) Assignment::Load;
+%ignore Assignment::Load(const AssignmentProto&);
 %rename (mutableIntVarContainer) Assignment::MutableIntVarContainer;
 %rename (mutableIntervalVarContainer) Assignment::MutableIntervalVarContainer;
 %rename (mutableSequenceVarContainer) Assignment::MutableSequenceVarContainer;
@@ -488,6 +488,7 @@ namespace operations_research {
 %rename (performedValue) Assignment::PerformedValue;
 %rename (restore) Assignment::Restore;
 %rename (save) Assignment::Save;
+%ignore Assignment::Save(AssignmentProto* const) const;
 %rename (size) Assignment::Size;
 %rename (sequenceVarContainer) Assignment::SequenceVarContainer;
 %rename (setBackwardSequence) Assignment::SetBackwardSequence;
@@ -784,6 +785,7 @@ import java.lang.Runnable;
 %ignore Solver::SetBranchSelector;
 %ignore Solver::MakeApplyBranchSelector;
 %ignore Solver::MakeAtMost;
+%ignore Solver::Now;
 %ignore Solver::demon_profiler;
 %ignore Solver::set_fail_intercept;
 %unignore Solver::Solver;
@@ -1244,6 +1246,11 @@ import java.util.function.LongBinaryOperator;
 %rename (copy) SearchLimit::Copy;
 %rename (init) SearchLimit::Init;
 %rename (makeClone) SearchLimit::MakeClone;
+
+// RegularLimit
+%unignore RegularLimit;
+%ignore RegularLimit::duration_limit;
+%ignore RegularLimit::AbsoluteSolverDeadline;
 
 // SearchLog
 %unignore SearchLog;

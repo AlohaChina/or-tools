@@ -284,8 +284,7 @@ class LinearExpr(object):
             cp_model_helper.AssertIsInt64(arg)
             if arg == INT_MIN:
                 raise ArithmeticError('< INT_MIN is not supported')
-            return BoundedLinearExpression(
-                self, [INT_MIN, cp_model_helper.CapInt64(arg - 1)])
+            return BoundedLinearExpression(self, [INT_MIN, arg - 1])
         else:
             return BoundedLinearExpression(self - arg, [INT_MIN, -1])
 
@@ -294,8 +293,7 @@ class LinearExpr(object):
             cp_model_helper.AssertIsInt64(arg)
             if arg == INT_MAX:
                 raise ArithmeticError('> INT_MAX is not supported')
-            return BoundedLinearExpression(
-                self, [cp_model_helper.CapInt64(arg + 1), INT_MAX])
+            return BoundedLinearExpression(self, [arg + 1, INT_MAX])
         else:
             return BoundedLinearExpression(self - arg, [1, INT_MAX])
 
@@ -309,11 +307,8 @@ class LinearExpr(object):
             elif arg == INT_MIN:
                 return BoundedLinearExpression(self, [INT_MIN + 1, INT_MAX])
             else:
-                return BoundedLinearExpression(self, [
-                    INT_MIN,
-                    cp_model_helper.CapInt64(arg - 1),
-                    cp_model_helper.CapInt64(arg + 1), INT_MAX
-                ])
+                return BoundedLinearExpression(
+                    self, [INT_MIN, arg - 1, arg + 1, INT_MAX])
         else:
             return BoundedLinearExpression(self - arg,
                                            [INT_MIN, -1, 1, INT_MAX])
@@ -816,6 +811,9 @@ class CpModel(object):
 
         if not variables:
             raise ValueError('AddElement expects a non-empty variables array')
+
+        if isinstance(index, numbers.Integral):
+            return self.Add(list(variables)[index] == target)
 
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
@@ -1526,6 +1524,10 @@ def EvaluateLinearExpr(expression, solution):
     """Evaluate a linear expression against a solution."""
     if isinstance(expression, numbers.Integral):
         return expression
+    if not isinstance(expression, LinearExpr):
+        raise TypeError('Cannot interpret %s as a linear expression.' %
+                        expression)
+
     value = 0
     to_process = [(expression, 1)]
     while to_process:
@@ -1644,8 +1646,10 @@ class CpSolver(object):
         """Returns the best lower (upper) bound found when min(max)imizing."""
         return self.__solution.best_objective_bound
 
-    def StatusName(self, status):
+    def StatusName(self, status=None):
         """Returns the name of the status returned by Solve()."""
+        if status is None:
+            status = self.__solution.status
         return cp_model_pb2.CpSolverStatus.Name(status)
 
     def NumBooleans(self):
@@ -1748,6 +1752,10 @@ class CpSolverSolutionCallback(pywrapsat.SolutionCallback):
             raise RuntimeError('Solve() has not be called.')
         if isinstance(expression, numbers.Integral):
             return expression
+        if not isinstance(expression, LinearExpr):
+            raise TypeError('Cannot interpret %s as a linear expression.' %
+                            expression)
+
         value = 0
         to_process = [(expression, 1)]
         while to_process:

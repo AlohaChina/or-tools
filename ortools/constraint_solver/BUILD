@@ -1,5 +1,7 @@
 # Home of constraint solver constraint_solver
 
+load("@rules_cc//cc:defs.bzl", "cc_proto_library")
+
 package(
     default_visibility = ["//visibility:public"],
 )
@@ -155,7 +157,7 @@ cc_library(
         "//ortools/util:vector_map",
         "//ortools/base:random",
 #        "//util/regexp/re2",
-        "//ortools/base:status",
+        "@com_google_absl//absl/status",
 #        "//util/textprogressbar",
         "//ortools/base:timer",
 #        "//util/zippy",

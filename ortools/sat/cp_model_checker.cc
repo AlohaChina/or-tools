@@ -49,6 +49,7 @@ bool DomainInProtoIsValid(const ProtoWithDomain& proto) {
   if (proto.domain().size() % 2) return false;
   std::vector<ClosedInterval> domain;
   for (int i = 0; i < proto.domain_size(); i += 2) {
+    if (proto.domain(i) > proto.domain(i + 1)) return false;
     domain.push_back({proto.domain(i), proto.domain(i + 1)});
   }
   return IntervalsAreSortedAndNonAdjacent(domain);
@@ -175,11 +176,21 @@ bool PossibleIntegerOverflow(const CpModelProto& model,
 std::string ValidateIntervalConstraint(const CpModelProto& model,
                                        const ConstraintProto& ct) {
   const IntervalConstraintProto& arg = ct.interval();
-  const IntegerVariableProto& size_var_proto = model.variables(arg.size());
-  if (size_var_proto.domain(0) < 0) {
-    return absl::StrCat(
-        "Negative value in interval size domain: ", ProtobufDebugString(ct),
-        "size var: ", ProtobufDebugString(size_var_proto));
+  if (arg.size() < 0) {
+    const IntegerVariableProto& size_var_proto =
+        model.variables(NegatedRef(arg.size()));
+    if (size_var_proto.domain(size_var_proto.domain_size() - 1) > 0) {
+      return absl::StrCat(
+          "Negative value in interval size domain: ", ProtobufDebugString(ct),
+          "negation of size var: ", ProtobufDebugString(size_var_proto));
+    }
+  } else {
+    const IntegerVariableProto& size_var_proto = model.variables(arg.size());
+    if (size_var_proto.domain(0) < 0) {
+      return absl::StrCat(
+          "Negative value in interval size domain: ", ProtobufDebugString(ct),
+          "size var: ", ProtobufDebugString(size_var_proto));
+    }
   }
   return "";
 }
@@ -190,6 +201,19 @@ std::string ValidateLinearConstraint(const CpModelProto& model,
   if (PossibleIntegerOverflow(model, arg)) {
     return "Possible integer overflow in constraint: " +
            ProtobufDebugString(ct);
+  }
+  return "";
+}
+
+std::string ValidateLinearExpression(const CpModelProto& model,
+                                     const LinearExpressionProto& expr) {
+  if (expr.coeffs_size() != expr.vars_size()) {
+    return absl::StrCat("coeffs_size() != vars_size() in linear expression: ",
+                        ProtobufShortDebugString(expr));
+  }
+  if (PossibleIntegerOverflow(model, expr)) {
+    return absl::StrCat("Possible overflow in linear expression: ",
+                        ProtobufShortDebugString(expr));
   }
   return "";
 }
@@ -267,7 +291,6 @@ std::string ValidateCircuitCoveringConstraint(const ConstraintProto& ct) {
 
 std::string ValidateIntModConstraint(const CpModelProto& model,
                                      const ConstraintProto& ct) {
-  LOG(INFO) << "Validate " << ct.DebugString();
   if (ct.int_mod().vars().size() != 2) {
     return absl::StrCat("An int_mod constraint should have exactly 2 terms: ",
                         ProtobufShortDebugString(ct));
@@ -387,6 +410,29 @@ std::string ValidateCpModel(const CpModelProto& model) {
         }
         RETURN_IF_NOT_EMPTY(ValidateLinearConstraint(model, ct));
         break;
+      case ConstraintProto::ConstraintCase::kLinMax: {
+        const std::string target_error =
+            ValidateLinearExpression(model, ct.lin_min().target());
+        if (!target_error.empty()) return target_error;
+        for (int i = 0; i < ct.lin_max().exprs_size(); ++i) {
+          const std::string expr_error =
+              ValidateLinearExpression(model, ct.lin_max().exprs(i));
+          if (!expr_error.empty()) return expr_error;
+        }
+        break;
+      }
+      case ConstraintProto::ConstraintCase::kLinMin: {
+        const std::string target_error =
+            ValidateLinearExpression(model, ct.lin_min().target());
+        if (!target_error.empty()) return target_error;
+        for (int i = 0; i < ct.lin_min().exprs_size(); ++i) {
+          const std::string expr_error =
+              ValidateLinearExpression(model, ct.lin_min().exprs(i));
+          if (!expr_error.empty()) return expr_error;
+        }
+        break;
+      }
+
       case ConstraintProto::ConstraintCase::kInterval:
         support_enforcement = true;
         RETURN_IF_NOT_EMPTY(ValidateIntervalConstraint(model, ct));
@@ -441,6 +487,12 @@ std::string ValidateCpModel(const CpModelProto& model) {
   }
   RETURN_IF_NOT_EMPTY(ValidateSearchStrategies(model));
   RETURN_IF_NOT_EMPTY(ValidateSolutionHint(model));
+  for (const int ref : model.assumptions()) {
+    if (!LiteralReferenceIsValid(model, ref)) {
+      return absl::StrCat("Invalid literal reference ", ref,
+                          " in the 'assumptions' field.");
+    }
+  }
   return "";
 }
 
@@ -524,6 +576,25 @@ class ConstraintChecker {
     return max == actual_max;
   }
 
+  int64 LinearExpressionValue(const LinearExpressionProto& expr) {
+    int64 sum = expr.offset();
+    const int num_variables = expr.vars_size();
+    for (int i = 0; i < num_variables; ++i) {
+      sum += Value(expr.vars(i)) * expr.coeffs(i);
+    }
+    return sum;
+  }
+
+  bool LinMaxConstraintIsFeasible(const ConstraintProto& ct) {
+    const int64 max = LinearExpressionValue(ct.lin_max().target());
+    int64 actual_max = kint64min;
+    for (int i = 0; i < ct.lin_max().exprs_size(); ++i) {
+      const int64 expr_value = LinearExpressionValue(ct.lin_max().exprs(i));
+      actual_max = std::max(actual_max, expr_value);
+    }
+    return max == actual_max;
+  }
+
   bool IntProdConstraintIsFeasible(const ConstraintProto& ct) {
     const int64 prod = Value(ct.int_prod().target());
     int64 actual_prod = 1;
@@ -548,6 +619,16 @@ class ConstraintChecker {
     int64 actual_min = kint64max;
     for (int i = 0; i < ct.int_min().vars_size(); ++i) {
       actual_min = std::min(actual_min, Value(ct.int_min().vars(i)));
+    }
+    return min == actual_min;
+  }
+
+  bool LinMinConstraintIsFeasible(const ConstraintProto& ct) {
+    const int64 min = LinearExpressionValue(ct.lin_min().target());
+    int64 actual_min = kint64max;
+    for (int i = 0; i < ct.lin_min().exprs_size(); ++i) {
+      const int64 expr_value = LinearExpressionValue(ct.lin_min().exprs(i));
+      actual_min = std::min(actual_min, expr_value);
     }
     return min == actual_min;
   }
@@ -895,7 +976,9 @@ class ConstraintChecker {
 }  // namespace
 
 bool SolutionIsFeasible(const CpModelProto& model,
-                        const std::vector<int64>& variable_values) {
+                        const std::vector<int64>& variable_values,
+                        const CpModelProto* mapping_proto,
+                        const std::vector<int>* postsolve_mapping) {
   if (variable_values.size() != model.variables_size()) {
     VLOG(1) << "Wrong number of variables in the solution vector";
     return false;
@@ -949,8 +1032,14 @@ bool SolutionIsFeasible(const CpModelProto& model,
       case ConstraintProto::ConstraintCase::kIntMin:
         is_feasible = checker.IntMinConstraintIsFeasible(ct);
         break;
+      case ConstraintProto::ConstraintCase::kLinMin:
+        is_feasible = checker.LinMinConstraintIsFeasible(ct);
+        break;
       case ConstraintProto::ConstraintCase::kIntMax:
         is_feasible = checker.IntMaxConstraintIsFeasible(ct);
+        break;
+      case ConstraintProto::ConstraintCase::kLinMax:
+        is_feasible = checker.LinMaxConstraintIsFeasible(ct);
         break;
       case ConstraintProto::ConstraintCase::kAllDiff:
         is_feasible = checker.AllDiffConstraintIsFeasible(ct);
@@ -1000,6 +1089,18 @@ bool SolutionIsFeasible(const CpModelProto& model,
     if (!is_feasible) {
       VLOG(1) << "Failing constraint #" << c << " : "
               << ProtobufShortDebugString(model.constraints(c));
+      if (mapping_proto != nullptr && postsolve_mapping != nullptr) {
+        std::vector<bool> fixed(mapping_proto->variables().size(), false);
+        for (const int var : *postsolve_mapping) fixed[var] = true;
+        for (const int var : UsedVariables(model.constraints(c))) {
+          VLOG(1) << "var: " << var << " value: " << variable_values[var]
+                  << " was_fixed: " << fixed[var] << " initial_domain: "
+                  << ReadDomainFromProto(model.variables(var))
+                  << " postsolved_domain: "
+                  << ReadDomainFromProto(mapping_proto->variables(var));
+        }
+      }
+
       return false;
     }
   }

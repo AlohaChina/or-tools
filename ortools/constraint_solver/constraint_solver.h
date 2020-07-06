@@ -807,8 +807,8 @@ class Solver {
   ///
   /// - the most common use case is modeling: the given constraint is really
   /// part of the problem that the user is trying to solve. In this use case,
-  /// AddConstraint is called outside of search (i.e., with <tt>state() ==
-  /// OUTSIDE_SEARCH</tt>). Most users should only use AddConstraint in this
+  /// AddConstraint is called outside of search (i.e., with @code state() ==
+  /// OUTSIDE_SEARCH @endcode). Most users should only use AddConstraint in this
   /// way. In this case, the constraint will belong to the model forever: it
   /// cannot not be removed by backtracking.
   ///
@@ -957,7 +957,7 @@ class Solver {
   void AddBacktrackAction(Action a, bool fast);
 #endif  /// !defined(SWIG)
 
-  /// misc debug std::string.
+  /// misc debug string.
   std::string DebugString() const;
 
   /// Current memory usage in bytes
@@ -2229,7 +2229,7 @@ class Solver {
   RegularLimitParameters MakeDefaultRegularLimitParameters() const;
 
   /// Creates a search limit that is reached when either of the underlying limit
-  /// is reached. That is, the returned limit is more std::stringent than both
+  /// is reached. That is, the returned limit is more stringent than both
   /// argument limits.
   SearchLimit* MakeLimit(SearchLimit* const limit_1,
                          SearchLimit* const limit_2);
@@ -3099,8 +3099,8 @@ inline int64 Zero() { return 0; }
 inline int64 One() { return 1; }
 
 /// A BaseObject is the root of all reversibly allocated objects.
-/// A DebugString method and the associated << operator are implemented
-/// as a convenience.
+/// A DebugString method and the associated @code operator<< @endcode
+/// are implemented as a convenience.
 class BaseObject {
  public:
   BaseObject() {}
@@ -4232,8 +4232,9 @@ class SearchLimit : public SearchMonitor {
 /// number of failures in the search tree
 class RegularLimit : public SearchLimit {
  public:
-  RegularLimit(Solver* const s, int64 time, int64 branches, int64 failures,
-               int64 solutions, bool smart_time_check, bool cumulative);
+  RegularLimit(Solver* const s, absl::Duration time, int64 branches,
+               int64 failures, int64 solutions, bool smart_time_check,
+               bool cumulative);
   ~RegularLimit() override;
   void Copy(const SearchLimit* const limit) override;
   SearchLimit* MakeClone() const override;

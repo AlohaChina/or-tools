@@ -25,6 +25,7 @@
 // API to be exposed here.
 //
 // TODO(user): test all the APIs that are currently marked as 'untested'.
+//swiglint: disable full-signature
 
 %include "stdint.i"
 
@@ -151,7 +152,13 @@ typedef uint64_t uint64;
 
 %include "ortools/graph/assignment.h"
 
+%unignoreall
 
+// ############ shortestpaths.h ############
+
+%ignoreall
+
+%unignore operations_research;
 %unignore operations_research::DijkstraShortestPath;
 %unignore operations_research::BellmanFordShortestPath;
 %unignore operations_research::AStarShortestPath;

@@ -8,6 +8,7 @@ cc_library(
         "//ortools/base",
         "//ortools/base:hash",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -125,13 +126,12 @@ cc_library(
         ":dynamic_permutation",
         ":sparse_permutation",
         "//ortools/base",
-        "//ortools/base:canonical_errors",
-        "//ortools/base:status",
-        "@com_google_absl//absl/strings",
         "//ortools/graph",
         "//ortools/graph:iterators",
         "//ortools/graph:util",
         "//ortools/util:stats",
         "//ortools/util:time_limit",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
     ],
 )

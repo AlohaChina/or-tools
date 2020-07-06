@@ -147,7 +147,7 @@
 ///    for (int64 node = routing.Start(route_number);
 ///         !routing.IsEnd(node);
 ///         node = solution->Value(routing.NextVar(node))) {
-///      LOG(INFO) << routing.IndexToNode(node);
+///      LOG(INFO) << manager.IndexToNode(node);
 ///    }
 ///
 ///
@@ -531,6 +531,10 @@ class RoutingModel {
   GetLocalDimensionCumulOptimizers() const {
     return local_dimension_optimizers_;
   }
+  const std::vector<std::unique_ptr<LocalDimensionCumulOptimizer> >&
+  GetLocalDimensionCumulMPOptimizers() const {
+    return local_dimension_mp_optimizers_;
+  }
   // clang-format on
 
   /// Returns the global/local dimension cumul optimizer for a given dimension,
@@ -538,6 +542,8 @@ class RoutingModel {
   GlobalDimensionCumulOptimizer* GetMutableGlobalCumulOptimizer(
       const RoutingDimension& dimension) const;
   LocalDimensionCumulOptimizer* GetMutableLocalCumulOptimizer(
+      const RoutingDimension& dimension) const;
+  LocalDimensionCumulOptimizer* GetMutableLocalCumulMPOptimizer(
       const RoutingDimension& dimension) const;
 
   /// Returns true if a dimension exists for a given dimension name.
@@ -707,21 +713,35 @@ class RoutingModel {
   /// Set the node visit types and incompatibilities/requirements between the
   /// types (see below).
   ///
-  /// NOTE: The visit type of a node must be positive, and all nodes belonging
-  /// to the same pickup/delivery pair must have the same type (or no type at
-  /// all).
-  ///
   /// NOTE: Before adding any incompatibilities and/or requirements on types:
   ///       1) All corresponding node types must have been set.
   ///       2) CloseVisitTypes() must be called so all containers are resized
   ///          accordingly.
   ///
-  /// NOTE: These incompatibilities and requirements are only handled when each
-  /// node index appears in at most one pickup/delivery pair, i.e. when the same
-  /// node isn't a pickup and/or delivery in multiple pickup/delivery pairs.
+  /// The following enum is used to describe how a node with a given type 'T'
+  /// impacts the number of types 'T' on the route when visited, and thus
+  /// determines how temporal incompatibilities and requirements take effect.
+  enum VisitTypePolicy {
+    /// When visited, the number of types 'T' on the vehicle increases by one.
+    TYPE_ADDED_TO_VEHICLE,
+    /// When visited, one instance of type 'T' previously added to the route
+    /// (TYPE_ADDED_TO_VEHICLE), if any, is removed from the vehicle.
+    /// If the type was not previously added to the route or all added instances
+    /// have already been removed, this visit has no effect on the types.
+    ADDED_TYPE_REMOVED_FROM_VEHICLE,
+    /// With the following policy, the visit enforces that type 'T' is
+    /// considered on the route from its start until this node is visited.
+    TYPE_ON_VEHICLE_UP_TO_VISIT,
+    /// The visit doesn't have an impact on the number of types 'T' on the
+    /// route, as it's (virtually) added and removed directly.
+    /// This policy can be used for visits which are part of an incompatibility
+    /// or requirement set without affecting the type count on the route.
+    TYPE_SIMULTANEOUSLY_ADDED_AND_REMOVED
+  };
   // TODO(user): Support multiple visit types per node?
-  void SetVisitType(int64 index, int type);
+  void SetVisitType(int64 index, int type, VisitTypePolicy type_policy);
   int GetVisitType(int64 index) const;
+  VisitTypePolicy GetVisitTypePolicy(int64 index) const;
   /// This function should be called once all node visit types have been set and
   /// prior to adding any incompatibilities/requirements.
   // TODO(user): Reconsider the logic and potentially remove the need to
@@ -759,18 +779,30 @@ class RoutingModel {
   /// route.
   void AddSameVehicleRequiredTypeAlternatives(
       int dependent_type, absl::flat_hash_set<int> required_type_alternatives);
-  /// If type_D temporally depends on type_R, any non-delivery node_D of type_D
-  /// requires at least one non-delivered node of type_R on its vehicle at the
-  /// time node_D is visited.
-  void AddTemporalRequiredTypeAlternatives(
+  /// If type_D depends on type_R when adding type_D, any node_D of type_D and
+  /// VisitTypePolicy TYPE_ADDED_TO_VEHICLE or
+  /// TYPE_SIMULTANEOUSLY_ADDED_AND_REMOVED requires at least one type_R on its
+  /// vehicle at the time node_D is visited.
+  void AddRequiredTypeAlternativesWhenAddingType(
+      int dependent_type, absl::flat_hash_set<int> required_type_alternatives);
+  /// The following requirements apply when visiting dependent nodes that remove
+  /// their type from the route, i.e. type_R must be on the vehicle when type_D
+  /// of VisitTypePolicy ADDED_TYPE_REMOVED_FROM_VEHICLE,
+  /// TYPE_ON_VEHICLE_UP_TO_VISIT or TYPE_SIMULTANEOUSLY_ADDED_AND_REMOVED is
+  /// visited.
+  void AddRequiredTypeAlternativesWhenRemovingType(
       int dependent_type, absl::flat_hash_set<int> required_type_alternatives);
   // clang-format off
-  /// Returns the sets of same-vehicle/temporal requirement alternatives for the
-  /// given type.
+  /// Returns the set of same-vehicle requirement alternatives for the given
+  /// type.
   const std::vector<absl::flat_hash_set<int> >&
       GetSameVehicleRequiredTypeAlternativesOfType(int type) const;
+  /// Returns the set of requirement alternatives when adding the given type.
   const std::vector<absl::flat_hash_set<int> >&
-      GetTemporalRequiredTypeAlternativesOfType(int type) const;
+      GetRequiredTypeAlternativesWhenAddingType(int type) const;
+  /// Returns the set of requirement alternatives when removing the given type.
+  const std::vector<absl::flat_hash_set<int> >&
+      GetRequiredTypeAlternativesWhenRemovingType(int type) const;
   // clang-format on
   /// Returns true iff any same-route (resp. temporal) type requirements have
   /// been added to the model.
@@ -1392,7 +1424,7 @@ class RoutingModel {
   /// On the other hand, when transits on a route can be negative, no assumption
   /// can be made on the cumuls of nodes wrt the start cumuls, and the offset is
   /// therefore set to 0.
-  void StoreDimensionCumulOptimizers();
+  void StoreDimensionCumulOptimizers(const RoutingSearchParameters& parameters);
 
   void ComputeCostClasses(const RoutingSearchParameters& parameters);
   void ComputeVehicleClasses();
@@ -1448,7 +1480,8 @@ class RoutingModel {
   }
 
   /// Solve matching problem with min-cost flow and store result in assignment.
-  bool SolveMatchingModel(Assignment* assignment);
+  bool SolveMatchingModel(Assignment* assignment,
+                          const RoutingSearchParameters& parameters);
 #ifndef SWIG
   /// Append an assignment to a vector of assignments if it is feasible.
   bool AppendAssignmentIfFeasible(
@@ -1484,8 +1517,10 @@ class RoutingModel {
   void CreateNeighborhoodOperators(const RoutingSearchParameters& parameters);
   LocalSearchOperator* GetNeighborhoodOperators(
       const RoutingSearchParameters& search_parameters) const;
-  const std::vector<LocalSearchFilter*>& GetOrCreateLocalSearchFilters();
-  const std::vector<LocalSearchFilter*>& GetOrCreateFeasibilityFilters();
+  const std::vector<LocalSearchFilter*>& GetOrCreateLocalSearchFilters(
+      const RoutingSearchParameters& parameters);
+  const std::vector<LocalSearchFilter*>& GetOrCreateFeasibilityFilters(
+      const RoutingSearchParameters& parameters);
   DecisionBuilder* CreateSolutionFinalizer(SearchLimit* lns_limit);
   DecisionBuilder* CreateFinalizerForMinimizedAndMaximizedVariables();
   void CreateFirstSolutionDecisionBuilders(
@@ -1547,6 +1582,8 @@ class RoutingModel {
   gtl::ITIVector<DimensionIndex, int> global_optimizer_index_;
   std::vector<std::unique_ptr<LocalDimensionCumulOptimizer> >
       local_dimension_optimizers_;
+  std::vector<std::unique_ptr<LocalDimensionCumulOptimizer> >
+      local_dimension_mp_optimizers_;
   // clang-format off
   gtl::ITIVector<DimensionIndex, int> local_optimizer_index_;
   std::string primary_constrained_dimension_;
@@ -1588,7 +1625,7 @@ class RoutingModel {
   std::vector<ValuedNodes<int64> > same_vehicle_costs_;
   /// Allowed vehicles
 #ifndef SWIG
-  std::vector<std::unordered_set<int>> allowed_vehicles_;
+  std::vector<absl::flat_hash_set<int>> allowed_vehicles_;
 #endif  // SWIG
   /// Pickup and delivery
   IndexPairs pickup_delivery_pairs_;
@@ -1611,6 +1648,8 @@ class RoutingModel {
   // Node visit types
   // Variable index to visit type index.
   std::vector<int> index_to_visit_type_;
+  // Variable index to VisitTypePolicy.
+  std::vector<VisitTypePolicy> index_to_type_policy_;
   // clang-format off
   std::vector<absl::flat_hash_set<int> >
       hard_incompatible_types_per_type_index_;
@@ -1623,9 +1662,12 @@ class RoutingModel {
       same_vehicle_required_type_alternatives_per_type_index_;
   bool has_same_vehicle_type_requirements_;
   std::vector<std::vector<absl::flat_hash_set<int> > >
-      temporal_required_type_alternatives_per_type_index_;
+      required_type_alternatives_when_adding_type_index_;
+  std::vector<std::vector<absl::flat_hash_set<int> > >
+      required_type_alternatives_when_removing_type_index_;
   bool has_temporal_type_requirements_;
-  absl::flat_hash_set<int> trivially_infeasible_visit_types_;
+  absl::flat_hash_map</*type*/int, absl::flat_hash_set<VisitTypePolicy> >
+      trivially_infeasible_visit_types_to_policies_;
   // clang-format on
   int num_visit_types_;
   // Two indices are equivalent if they correspond to the same node (as given
@@ -1916,29 +1958,54 @@ class TypeRegulationsChecker {
                     const std::function<int64(int64)>& next_accessor);
 
  protected:
-  enum PickupDeliveryStatus { PICKUP, DELIVERY, NONE };
-  struct NodeCount {
-    int non_pickup_delivery = 0;
-    int pickup = 0;
-    int delivery = 0;
+#ifndef SWIG
+  using VisitTypePolicy = RoutingModel::VisitTypePolicy;
+#endif  // SWIG
+
+  struct TypePolicyOccurrence {
+    /// Number of TYPE_ADDED_TO_VEHICLE and
+    /// TYPE_SIMULTANEOUSLY_ADDED_AND_REMOVED node type policies seen on the
+    /// route.
+    int num_type_added_to_vehicle = 0;
+    /// Number of ADDED_TYPE_REMOVED_FROM_VEHICLE (effectively removing a type
+    /// from the route) and TYPE_SIMULTANEOUSLY_ADDED_AND_REMOVED node type
+    /// policies seen on the route.
+    /// This number is always <= num_type_added_to_vehicle, as a type is only
+    /// actually removed if it was on the route before.
+    int num_type_removed_from_vehicle = 0;
+    /// Position of the last node of policy TYPE_ON_VEHICLE_UP_TO_VISIT visited
+    /// on the route.
+    /// If positive, the type is considered on the vehicle from the start of the
+    /// route until this position.
+    int position_of_last_type_on_vehicle_up_to_visit = -1;
   };
 
-  /// Returns the number of pickups and fixed nodes from
-  /// counts_of_type_["type"].
-  int GetNonDeliveryCount(int type) const;
-  /// Same as above, but substracting the number of deliveries of "type".
-  int GetNonDeliveredCount(int type) const;
+  /// Returns true iff any occurrence of the given type was seen on the route,
+  /// i.e. iff the added count for this type is positive, or if a node of this
+  /// type and policy TYPE_ON_VEHICLE_UP_TO_VISIT is visited on the route (see
+  /// TypePolicyOccurrence.last_type_on_vehicle_up_to_visit).
+  bool TypeOccursOnRoute(int type) const;
+  /// Returns true iff there's at least one instance of the given type on the
+  /// route when scanning the route at the given position 'pos'.
+  /// This is the case iff we have at least one added but non-removed instance
+  /// of the type, or if
+  /// occurrences_of_type_[type].last_type_on_vehicle_up_to_visit is greater
+  /// than 'pos'.
+  bool TypeCurrentlyOnRoute(int type, int pos) const;
 
+  void InitializeCheck(int vehicle,
+                       const std::function<int64(int64)>& next_accessor);
+  virtual void OnInitializeCheck() {}
   virtual bool HasRegulationsToCheck() const = 0;
-  virtual void InitializeCheck() {}
-  virtual bool CheckTypeRegulations(int type) = 0;
+  virtual bool CheckTypeRegulations(int type, VisitTypePolicy policy,
+                                    int pos) = 0;
   virtual bool FinalizeCheck() const { return true; }
 
   const RoutingModel& model_;
 
  private:
-  std::vector<PickupDeliveryStatus> pickup_delivery_status_of_node_;
-  std::vector<NodeCount> counts_of_type_;
+  std::vector<TypePolicyOccurrence> occurrences_of_type_;
+  std::vector<int64> current_route_visits_;
 };
 
 /// Checker for type incompatibilities.
@@ -1950,7 +2017,7 @@ class TypeIncompatibilityChecker : public TypeRegulationsChecker {
 
  private:
   bool HasRegulationsToCheck() const override;
-  bool CheckTypeRegulations(int type) override;
+  bool CheckTypeRegulations(int type, VisitTypePolicy policy, int pos) override;
   /// NOTE(user): As temporal incompatibilities are always verified with
   /// this checker, we only store 1 boolean indicating whether or not hard
   /// incompatibilities are also verified.
@@ -1966,10 +2033,17 @@ class TypeRequirementChecker : public TypeRegulationsChecker {
 
  private:
   bool HasRegulationsToCheck() const override;
-  void InitializeCheck() override {
+  void OnInitializeCheck() override {
     types_with_same_vehicle_requirements_on_route_.clear();
   }
-  bool CheckTypeRegulations(int type) override;
+  // clang-format off
+  /// Verifies that for each set in required_type_alternatives, at least one of
+  /// the required types is on the route at position 'pos'.
+  bool CheckRequiredTypesCurrentlyOnRoute(
+      const std::vector<absl::flat_hash_set<int> >& required_type_alternatives,
+      int pos);
+  // clang-format on
+  bool CheckTypeRegulations(int type, VisitTypePolicy policy, int pos) override;
   bool FinalizeCheck() const override;
 
   absl::flat_hash_set<int> types_with_same_vehicle_requirements_on_route_;
@@ -1982,18 +2056,39 @@ class TypeRequirementChecker : public TypeRegulationsChecker {
 /// Two nodes with hard incompatible types cannot be served by the same vehicle
 /// at all, while with a temporal incompatibility they can't be on the same
 /// route at the same time.
+/// The VisitTypePolicy of a node determines how visiting it impacts the type
+/// count on the route.
 ///
-/// For example, for three temporally incompatible types T1 T2 and T3, two
-/// pickup/delivery pairs p1/d1 and p2/d2 of type T1 and T2 respectively, and a
-/// non-pickup/delivery node n of type T3, the configuration
-/// p1 --> d1 --> n --> p2 --> d2 is acceptable, whereas any configurations
-/// with p1 --> p2 --> d1 --> ..., or p1 --> n --> d1 --> ... is not feasible.
+/// For example, for
+/// - three temporally incompatible types T1 T2 and T3
+/// - 2 pairs of nodes a1/r1 and a2/r2 of type T1 and T2 respectively, with
+///     - a1 and a2 of VisitTypePolicy TYPE_ADDED_TO_VEHICLE
+///     - r1 and r2 of policy ADDED_TYPE_REMOVED_FROM_VEHICLE
+/// - 3 nodes A, UV and AR of type T3, respectively with type policies
+///   TYPE_ADDED_TO_VEHICLE, TYPE_ON_VEHICLE_UP_TO_VISIT and
+///   TYPE_SIMULTANEOUSLY_ADDED_AND_REMOVED
+/// the configurations
+/// UV --> a1 --> r1 --> a2 --> r2,   a1 --> r1 --> a2 --> r2 --> A and
+/// a1 --> r1 --> AR --> a2 --> r2 are acceptable, whereas the configurations
+/// a1 --> a2 --> r1 --> ..., or A --> a1 --> r1 --> ..., or
+/// a1 --> r1 --> UV --> ... are not feasible.
 ///
 /// It also verifies same-vehicle and temporal type requirements.
-/// In the above example, if T1 is a requirement for T2:
-/// - For a same-vehicle requirement, p1/d1 must be on the same vehicle as
-///   p2/d2.
-/// - For a temporal requirement, p2 must be visited between p1 and d1.
+/// A node of type T_d with a same-vehicle requirement for type T_r needs to be
+/// served by the same vehicle as a node of type T_r.
+/// Temporal requirements, on the other hand, can take effect either when the
+/// dependent type is being added to the route or when it's removed from it,
+/// which is determined by the dependent node's VisitTypePolicy.
+/// In the above example:
+/// - If T3 is required on the same vehicle as T1, A, AR or UV must be on the
+///   same vehicle as a1.
+/// - If T2 is required when adding T1, a2 must be visited *before* a1, and if
+///   r2 is also visited on the route, it must be *after* a1, i.e. T2 must be on
+///   the vehicle when a1 is visited:
+///   ... --> a2 --> ... --> a1 --> ... --> r2 --> ...
+/// - If T3 is required when removing T1, T3 needs to be on the vehicle when
+///   r1 is visited:
+///   ... --> A --> ... --> r1 --> ...   OR   ... --> r1 --> ... --> UV --> ...
 class TypeRegulationsConstraint : public Constraint {
  public:
   explicit TypeRegulationsConstraint(const RoutingModel& model);
@@ -2097,6 +2192,10 @@ class RoutingDimension {
   const std::vector<SortedDisjointIntervalList>& forbidden_intervals() const {
     return forbidden_intervals_;
   }
+  /// Returns allowed intervals for a given node in a given interval.
+  SortedDisjointIntervalList GetAllowedIntervalsInRange(int64 index,
+                                                        int64 min_value,
+                                                        int64 max_value) const;
   /// Returns the smallest value outside the forbidden intervals of node 'index'
   /// that is greater than or equal to a given 'min_value'.
   int64 GetFirstPossibleGreaterOrEqualValueForNode(int64 index,
@@ -2834,7 +2933,7 @@ class GlobalCheapestInsertionFilteredHeuristic
   /// newly modified route arcs: after the node insertion position and after the
   /// node position.
   void InsertNodesOnRoutes(const std::vector<int>& nodes,
-                           const std::vector<int>& vehicles);
+                           const absl::flat_hash_set<int>& vehicles);
 
   /// Inserts non-inserted individual nodes on routes by constructing routes
   /// sequentially.
@@ -2847,8 +2946,8 @@ class GlobalCheapestInsertionFilteredHeuristic
   /// (i.e. Value(start) != end) or not.
   /// Updates the three passed vectors accordingly.
   void DetectUsedVehicles(std::vector<bool>* is_vehicle_used,
-                          std::vector<int>* used_vehicles,
-                          std::vector<int>* unused_vehicles);
+                          std::vector<int>* unused_vehicles,
+                          absl::flat_hash_set<int>* used_vehicles);
 
   /// Inserts the (farthest_seeds_ratio_ * model()->vehicles()) nodes farthest
   /// from the start/ends of the available vehicle routes as seeds on their
@@ -2920,14 +3019,14 @@ class GlobalCheapestInsertionFilteredHeuristic
   void InitializePositions(const std::vector<int>& nodes,
                            AdjustablePriorityQueue<NodeEntry>* priority_queue,
                            std::vector<NodeEntries>* position_to_node_entries,
-                           const std::vector<int>& vehicles);
+                           const absl::flat_hash_set<int>& vehicles);
   /// Adds insertion entries performing 'node', and updates 'priority_queue' and
   /// position_to_node_entries accordingly.
   /// Based on gci_params_.use_neighbors_ratio_for_initialization, either all
   /// contained nodes are considered as insertion positions, or only the
   /// closest neighbors of 'node'.
   void InitializeInsertionEntriesPerformingNode(
-      int64 node, int64 penalty, const std::vector<int>& vehicles,
+      int64 node, int64 penalty, const absl::flat_hash_set<int>& vehicles,
       AdjustablePriorityQueue<NodeEntry>* priority_queue,
       std::vector<NodeEntries>* position_to_node_entries);
   /// Updates all node entries inserting a node after node "insert_after" and
@@ -2941,6 +3040,10 @@ class GlobalCheapestInsertionFilteredHeuristic
   void DeleteNodeEntry(NodeEntry* entry,
                        AdjustablePriorityQueue<NodeEntry>* priority_queue,
                        std::vector<NodeEntries>* node_entries);
+
+  /// Computes the neighborhood of all nodes for every cost class, if needed and
+  /// not done already.
+  void ComputeNeighborhoods();
 
   /// Marks neighbor_index as visited in
   /// node_index_to_[pickup|delivery|single]_neighbors_by_cost_class_
@@ -3416,8 +3519,7 @@ class BasePathFilter : public IntVarLocalSearchFilter {
   virtual bool AcceptPath(int64 path_start, int64 chain_start,
                           int64 chain_end) = 0;
   virtual bool FinalizeAcceptPath(const Assignment* delta, int64 objective_min,
-                                  int64 objective_max,
-                                  bool all_paths_accepted) {
+                                  int64 objective_max) {
     return true;
   }
   /// Detects path starts, used to track which node belongs to which path.
@@ -3481,10 +3583,12 @@ IntVarLocalSearchFilter* MakeTypeRegulationsFilter(
     const RoutingModel& routing_model);
 void AppendDimensionCumulFilters(
     const std::vector<RoutingDimension*>& dimensions,
-    bool filter_objective_cost, std::vector<LocalSearchFilter*>* filters);
-IntVarLocalSearchFilter* MakePathCumulFilter(const RoutingDimension& dimension,
-                                             bool propagate_own_objective_value,
-                                             bool filter_objective_cost);
+    const RoutingSearchParameters& parameters, bool filter_objective_cost,
+    std::vector<LocalSearchFilter*>* filters);
+IntVarLocalSearchFilter* MakePathCumulFilter(
+    const RoutingDimension& dimension,
+    const RoutingSearchParameters& parameters,
+    bool propagate_own_objective_value, bool filter_objective_cost);
 IntVarLocalSearchFilter* MakeCumulBoundsPropagatorFilter(
     const RoutingDimension& dimension);
 IntVarLocalSearchFilter* MakeGlobalLPCumulFilter(

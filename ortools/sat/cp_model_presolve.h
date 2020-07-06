@@ -36,7 +36,8 @@ namespace sat {
 //
 // The image of the mapping should be dense in [0, new_num_variables), this is
 // also CHECKed.
-void ApplyVariableMapping(const std::vector<int>& mapping, CpModelProto* proto);
+void ApplyVariableMapping(const std::vector<int>& mapping,
+                          const PresolveContext& context);
 
 // Presolves the initial content of presolved_model.
 //
@@ -74,7 +75,7 @@ class CpModelPresolver {
   bool PresolveOneConstraint(int c);
 
   // Public for testing only.
-  void SyncDomainAndRemoveEmptyConstraints();
+  void RemoveEmptyConstraints();
 
  private:
   void PresolveToFixPoint();
@@ -106,6 +107,9 @@ class CpModelPresolver {
   bool PresolveIntProd(ConstraintProto* ct);
   bool PresolveIntMin(ConstraintProto* ct);
   bool PresolveIntMax(ConstraintProto* ct);
+  bool PresolveLinMin(ConstraintProto* ct);
+  bool PresolveLinMax(ConstraintProto* ct);
+  bool PresolveIntAbs(ConstraintProto* ct);
   bool PresolveBoolXor(ConstraintProto* ct);
   bool PresolveAtMostOne(ConstraintProto* ct);
   bool PresolveBoolAnd(ConstraintProto* ct);
@@ -151,12 +155,15 @@ class CpModelPresolver {
 
   void MergeNoOverlapConstraints();
 
-  void RemoveUnusedEquivalentVariables();
+  // Boths function are responsible for dealing with affine relations.
+  // The second one returns false on UNSAT.
+  void EncodeAllAffineRelations();
+  bool PresolveAffineRelationIfAny(int var);
 
   bool IntervalsCanIntersect(const IntervalConstraintProto& interval1,
                              const IntervalConstraintProto& interval2);
 
-  bool ExploitEquivalenceRelations(ConstraintProto* ct);
+  bool ExploitEquivalenceRelations(int c, ConstraintProto* ct);
 
   ABSL_MUST_USE_RESULT bool RemoveConstraint(ConstraintProto* ct);
   ABSL_MUST_USE_RESULT bool MarkConstraintAsFalse(ConstraintProto* ct);
@@ -180,7 +187,7 @@ bool PresolveCpModel(const PresolveOptions& options, PresolveContext* context,
 // Visible here for testing. This is meant to be called at the end of the
 // presolve where constraints have been canonicalized.
 //
-// TODO(user): Ignore names? canonicalize constraint futher by sorting
+// TODO(user): Ignore names? canonicalize constraint further by sorting
 // enforcement literal list for instance...
 std::vector<int> FindDuplicateConstraints(const CpModelProto& model_proto);
 

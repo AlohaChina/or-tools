@@ -1,4 +1,8 @@
+load("@rules_cc//cc:defs.bzl", "cc_proto_library")
+
 package(default_visibility = ["//visibility:public"])
+
+exports_files(["model_exporter_swig_helper.h"])
 
 config_setting(
     name = "with_glpk",
@@ -8,6 +12,11 @@ config_setting(
 config_setting(
     name = "with_cplex",
     values = {"define": "USE_CPLEX="},
+)
+
+config_setting(
+    name = "with_xpress",
+    values = {"define": "USE_XPRESS="},
 )
 
 config_setting(
@@ -57,6 +66,7 @@ cc_library(
     srcs = [
         "linear_expr.cc",
         "linear_solver.cc",
+        "linear_solver_callback.cc",
         "model_exporter.cc",
         "model_validator.cc",
         "glop_interface.cc",
@@ -65,7 +75,7 @@ cc_library(
         "sat_interface.cc",
         "sat_proto_solver.cc",
         "sat_solver_utils.cc",
-        ] + select({
+    ] + select({
         ":with_cbc": ["cbc_interface.cc"],
         "//conditions:default": [],
     }) + select({
@@ -73,6 +83,9 @@ cc_library(
         "//conditions:default": [],
     }) + select({
         ":with_cplex": ["cplex_interface.cc"],
+        "//conditions:default": [],
+    }) + select({
+        ":with_xpress": ["xpress_interface.cc"],
         "//conditions:default": [],
     }) + select({
         ":with_glpk": ["glpk_interface.cc"],
@@ -86,6 +99,7 @@ cc_library(
         "glop_utils.h",
         "linear_expr.h",
         "linear_solver.h",
+        "linear_solver_callback.h",
         "model_exporter.h",
         "model_validator.h",
         "sat_proto_solver.h",
@@ -95,12 +109,11 @@ cc_library(
         ":linear_solver_cc_proto",
         "//ortools/base",
         "//ortools/base:accurate_sum",
-        "//ortools/base:canonical_errors",
         "//ortools/base:hash",
         "//ortools/base:map_util",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:optional",
-        "//ortools/base:status",
+        "@com_google_absl//absl/status",
         "//ortools/base:status_macros",
         "//ortools/base:stl_util",
         "@com_google_absl//absl/strings",

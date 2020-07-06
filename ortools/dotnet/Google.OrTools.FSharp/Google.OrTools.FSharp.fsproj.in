@@ -10,6 +10,8 @@
     <!-- Pack Option -->
     <Title>Google.OrTools.FSharp v@PROJECT_VERSION@</Title>
     <PackageId>Google.OrTools.FSharp</PackageId>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
 
     <!-- Signing -->
     <AssemblyKeyFileAttribute>../../../bin/or-tools.snk</AssemblyKeyFileAttribute>
@@ -37,7 +39,7 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <RestoreSources>../../../packages;$(RestoreSources);https://api.nuget.org/v3/index.json</RestoreSources>
+    <RestoreSources>@DOTNET_PACKAGES_DIR@;$(RestoreSources);https://api.nuget.org/v3/index.json</RestoreSources>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Google.OrTools" Version="@PROJECT_VERSION@" />

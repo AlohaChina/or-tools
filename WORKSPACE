@@ -15,19 +15,19 @@ git_repository(
 
 git_repository(
     name = "bazel_skylib",
-    commit = "3721d32",  # release 0.8.0
+    commit = "e59b620",  # release 1.0.2
     remote = "https://github.com/bazelbuild/bazel-skylib.git",
 )
 
 git_repository(
     name = "com_google_protobuf",
-    commit = "6d4e7fd",  # release v3.10.0
+    commit = "678da4f",  # release v3.12.2
     remote = "https://github.com/protocolbuffers/protobuf.git",
 )
 
 git_repository(
     name = "com_google_protobuf_cc",
-    commit = "6d4e7fd",  # release v3.10.0
+    commit = "678da4f",  # release v3.12.2
     remote = "https://github.com/protocolbuffers/protobuf.git",
 )
 
@@ -37,7 +37,7 @@ protobuf_deps()
 
 git_repository(
     name = "com_google_absl",
-    commit = "8ba96a8",
+    commit = "c51510d", # release 20200225.2
     remote = "https://github.com/abseil/abseil-cpp.git",
 )
 

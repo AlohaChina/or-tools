@@ -93,6 +93,8 @@ RoutingSearchParameters DefaultRoutingSearchParameters() {
       "use_depth_first_search: false "
       "use_cp: BOOL_TRUE "
       "use_cp_sat: BOOL_FALSE "
+      "continuous_scheduling_solver: GLOP "
+      "mixed_integer_scheduling_solver: CP_SAT "
       "optimization_step: 0.0 "
       "number_of_solutions_to_collect: 1 "
       // No "time_limit" by default.
@@ -118,7 +120,7 @@ namespace {
 bool IsValidNonNegativeDuration(const google::protobuf::Duration& d) {
   const auto status_or_duration = util_time::DecodeGoogleApiProto(d);
   return status_or_duration.ok() &&
-         status_or_duration.ValueOrDie() >= absl::ZeroDuration();
+         status_or_duration.value() >= absl::ZeroDuration();
 }
 }  // namespace
 
@@ -265,6 +267,22 @@ std::string FindErrorInRoutingSearchParameters(
   const double offset = search_parameters.log_cost_offset();
   if (std::isnan(offset) || std::isinf(offset)) {
     return StrCat("Invalid value for log_cost_offset: ", offset);
+  }
+  const RoutingSearchParameters::SchedulingSolver continuous_scheduling_solver =
+      search_parameters.continuous_scheduling_solver();
+  if (continuous_scheduling_solver == RoutingSearchParameters::UNSET ||
+      continuous_scheduling_solver == RoutingSearchParameters::CP_SAT) {
+    return StrCat("Invalid value for continuous_scheduling_solver: ",
+                  RoutingSearchParameters::SchedulingSolver_Name(
+                      continuous_scheduling_solver));
+  }
+  const RoutingSearchParameters::SchedulingSolver
+      mixed_integer_scheduling_solver =
+          search_parameters.mixed_integer_scheduling_solver();
+  if (mixed_integer_scheduling_solver == RoutingSearchParameters::UNSET) {
+    return StrCat("Invalid value for mixed_integer_scheduling_solver: ",
+                  RoutingSearchParameters::SchedulingSolver_Name(
+                      mixed_integer_scheduling_solver));
   }
 
   return "";  // = Valid (No error).

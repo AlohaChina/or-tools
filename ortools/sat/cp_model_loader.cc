@@ -19,6 +19,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
@@ -30,6 +31,7 @@
 #include "ortools/sat/all_different.h"
 #include "ortools/sat/circuit.h"
 #include "ortools/sat/cp_constraints.h"
+#include "ortools/sat/cp_model.pb.h"
 #include "ortools/sat/cp_model_utils.h"
 #include "ortools/sat/cumulative.h"
 #include "ortools/sat/diffn.h"
@@ -1051,15 +1053,24 @@ void LoadEquivalenceNeqAC(const std::vector<Literal> enforcement_literal,
 }  // namespace
 
 void LoadLinearConstraint(const ConstraintProto& ct, Model* m) {
+  auto* mapping = m->GetOrCreate<CpModelMapping>();
+
   if (ct.linear().vars().empty()) {
     const Domain rhs = ReadDomainFromProto(ct.linear());
     if (rhs.Contains(0)) return;
-    VLOG(1) << "Trivially UNSAT constraint: " << ct.DebugString();
-    m->GetOrCreate<SatSolver>()->NotifyThatModelIsUnsat();
+    if (HasEnforcementLiteral(ct)) {
+      std::vector<Literal> clause;
+      for (const int ref : ct.enforcement_literal()) {
+        clause.push_back(mapping->Literal(ref).Negated());
+      }
+      m->Add(ClauseConstraint(clause));
+    } else {
+      VLOG(1) << "Trivially UNSAT constraint: " << ct.DebugString();
+      m->GetOrCreate<SatSolver>()->NotifyThatModelIsUnsat();
+    }
     return;
   }
 
-  auto* mapping = m->GetOrCreate<CpModelMapping>();
   auto* integer_trail = m->GetOrCreate<IntegerTrail>();
   const std::vector<IntegerVariable> vars =
       mapping->Integers(ct.linear().vars());
@@ -1249,6 +1260,31 @@ void LoadIntMinConstraint(const ConstraintProto& ct, Model* m) {
   m->Add(IsEqualToMinOf(min, vars));
 }
 
+LinearExpression GetExprFromProto(const LinearExpressionProto& expr_proto,
+                                  const CpModelMapping& mapping) {
+  LinearExpression expr;
+  expr.vars = mapping.Integers(expr_proto.vars());
+  for (int j = 0; j < expr_proto.coeffs_size(); ++j) {
+    expr.coeffs.push_back(IntegerValue(expr_proto.coeffs(j)));
+  }
+  expr.offset = IntegerValue(expr_proto.offset());
+  return CanonicalizeExpr(expr);
+}
+
+void LoadLinMaxConstraint(const ConstraintProto& ct, Model* m) {
+  auto* mapping = m->GetOrCreate<CpModelMapping>();
+  const LinearExpression max =
+      GetExprFromProto(ct.lin_max().target(), *mapping);
+  std::vector<LinearExpression> negated_exprs;
+  negated_exprs.reserve(ct.lin_max().exprs_size());
+  for (int i = 0; i < ct.lin_max().exprs_size(); ++i) {
+    negated_exprs.push_back(
+        NegationOf(GetExprFromProto(ct.lin_max().exprs(i), *mapping)));
+  }
+  // TODO(user): Consider replacing the min propagator by max.
+  m->Add(IsEqualToMinOf(NegationOf(max), negated_exprs));
+}
+
 void LoadIntMaxConstraint(const ConstraintProto& ct, Model* m) {
   auto* mapping = m->GetOrCreate<CpModelMapping>();
   const IntegerVariable max = mapping->Integer(ct.int_max().target());
@@ -1278,9 +1314,12 @@ void LoadCumulativeConstraint(const ConstraintProto& ct, Model* m) {
   auto* mapping = m->GetOrCreate<CpModelMapping>();
   const std::vector<IntervalVariable> intervals =
       mapping->Intervals(ct.cumulative().intervals());
-  const IntegerVariable capacity = mapping->Integer(ct.cumulative().capacity());
-  const std::vector<IntegerVariable> demands =
-      mapping->Integers(ct.cumulative().demands());
+  const AffineExpression capacity(mapping->Integer(ct.cumulative().capacity()));
+  std::vector<AffineExpression> demands;
+  for (const IntegerVariable var :
+       mapping->Integers(ct.cumulative().demands())) {
+    demands.push_back(AffineExpression(var));
+  }
   m->Add(Cumulative(intervals, demands, capacity));
 }
 
@@ -1737,6 +1776,9 @@ bool LoadConstraint(const ConstraintProto& ct, Model* m) {
       return true;
     case ConstraintProto::ConstraintProto::kIntMin:
       LoadIntMinConstraint(ct, m);
+      return true;
+    case ConstraintProto::ConstraintProto::kLinMax:
+      LoadLinMaxConstraint(ct, m);
       return true;
     case ConstraintProto::ConstraintProto::kIntMax:
       LoadIntMaxConstraint(ct, m);

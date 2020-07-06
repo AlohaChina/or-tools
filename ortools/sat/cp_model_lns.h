@@ -16,6 +16,7 @@
 
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
 #include "ortools/base/integral_types.h"
@@ -42,6 +43,16 @@ struct Neighborhood {
   // Relaxed model. Any feasible solution to this "local" model should be a
   // feasible solution to the base model too.
   CpModelProto cp_model;
+
+  // Neighborhood Id. Used to identify the neighborhood by a generator.
+  // Currently only used by WeightedRandomRelaxationNeighborhoodGenerator.
+  // TODO(user): Make sure that the id is unique for each generated
+  // neighborhood for each generator.
+  int64 id = 0;
+
+  // Used for identifying the source of the neighborhood if it is generated
+  // using solution repositories.
+  std::string source_info = "";
 };
 
 // Contains pre-computed information about a given CpModelProto that is meant
@@ -95,6 +106,7 @@ class NeighborhoodGeneratorHelper : public SubSolver {
   const std::vector<int>& ActiveVariables() const { return active_variables_; }
 
   // Constraints <-> Variables graph.
+  // Note that only non-constant variable are listed here.
   const std::vector<std::vector<int>>& ConstraintToVar() const {
     return constraint_to_var_;
   }
@@ -114,7 +126,7 @@ class NeighborhoodGeneratorHelper : public SubSolver {
   const CpModelProto& ModelProto() const { return model_proto_; }
   const SatParameters& Parameters() const { return parameters_; }
 
-  // This mutex must be aquired before calling any of the function that access
+  // This mutex must be acquired before calling any of the function that access
   // data that can be updated by Synchronize().
   //
   // TODO(user): Refactor the class to be thread-safe instead, it should be
@@ -139,6 +151,7 @@ class NeighborhoodGeneratorHelper : public SubSolver {
   SharedTimeLimit* shared_time_limit_;
   SharedBoundsManager* shared_bounds_;
   SharedResponseManager* shared_response_;
+  SharedRelaxationSolutionRepository* shared_relaxation_solutions_;
 
   // This proto will only contain the field variables() with an updated version
   // of the domains compared to model_proto_.variables(). We do it like this to
@@ -181,14 +194,13 @@ class NeighborhoodGenerator {
   // will be dynamically adjusted depending on whether or not we can solve the
   // subproblem in a given time limit.
   //
-  // The given initial_solution should contains a feasible solution to the
+  // The given initial_solution should contain a feasible solution to the
   // initial CpModelProto given to this class. Any solution to the returned
   // CPModelProto should also be valid solution to the same initial model.
   //
   // This function should be thread-safe.
   virtual Neighborhood Generate(const CpSolverResponse& initial_solution,
-                                double difficulty,
-                                random_engine_t* random) const = 0;
+                                double difficulty, random_engine_t* random) = 0;
 
   // Returns true if the neighborhood generator can generate a neighborhood.
   virtual bool ReadyToGenerate() const;
@@ -209,6 +221,10 @@ class NeighborhoodGenerator {
 
   // Adds solve data about one "solved" neighborhood.
   struct SolveData {
+    // Neighborhood Id. Used to identify the neighborhood by a generator.
+    // Currently only used by WeightedRandomRelaxationNeighborhoodGenerator.
+    int64 neighborhood_id = 0;
+
     // The status of the sub-solve.
     CpSolverStatus status = CpSolverStatus::UNKNOWN;
 
@@ -234,14 +250,22 @@ class NeighborhoodGenerator {
     IntegerValue base_objective = IntegerValue(0);
     IntegerValue new_objective = IntegerValue(0);
 
+    // Bounds data is only used by relaxation neighborhoods.
+    IntegerValue initial_best_objective_bound = IntegerValue(0);
+    IntegerValue new_objective_bound = IntegerValue(0);
+
     // This is just used to construct a deterministic order for the updates.
     bool operator<(const SolveData& o) const {
       return std::tie(status, difficulty, deterministic_limit,
                       deterministic_time, initial_best_objective,
-                      base_objective, new_objective) <
+                      base_objective, new_objective,
+                      initial_best_objective_bound, new_objective_bound,
+                      neighborhood_id) <
              std::tie(o.status, o.difficulty, o.deterministic_limit,
                       o.deterministic_time, o.initial_best_objective,
-                      base_objective, new_objective);
+                      o.base_objective, o.new_objective,
+                      o.initial_best_objective_bound, o.new_objective_bound,
+                      o.neighborhood_id);
     }
   };
   void AddSolveData(SolveData data) {
@@ -287,11 +311,16 @@ class NeighborhoodGenerator {
   }
 
  protected:
+  // Triggered with each call to Synchronize() for each recently added
+  // SolveData. This is meant to be used for processing feedbacks by specific
+  // neighborhood generators to adjust the neighborhood generation process.
+  virtual void AdditionalProcessingOnSynchronize(const SolveData& solve_data) {}
+
   const std::string name_;
   const NeighborhoodGeneratorHelper& helper_;
+  mutable absl::Mutex mutex_;
 
  private:
-  mutable absl::Mutex mutex_;
   std::vector<SolveData> solve_data_;
 
   // Current parameters to be used when generating/solving a neighborhood with
@@ -315,7 +344,7 @@ class SimpleNeighborhoodGenerator : public NeighborhoodGenerator {
       NeighborhoodGeneratorHelper const* helper, const std::string& name)
       : NeighborhoodGenerator(name, helper) {}
   Neighborhood Generate(const CpSolverResponse& initial_solution,
-                        double difficulty, random_engine_t* random) const final;
+                        double difficulty, random_engine_t* random) final;
 };
 
 // Pick a random subset of variables that are constructed by a BFS in the
@@ -328,7 +357,7 @@ class VariableGraphNeighborhoodGenerator : public NeighborhoodGenerator {
       NeighborhoodGeneratorHelper const* helper, const std::string& name)
       : NeighborhoodGenerator(name, helper) {}
   Neighborhood Generate(const CpSolverResponse& initial_solution,
-                        double difficulty, random_engine_t* random) const final;
+                        double difficulty, random_engine_t* random) final;
 };
 
 // Pick a random subset of constraint and relax all of their variables. We are a
@@ -341,7 +370,7 @@ class ConstraintGraphNeighborhoodGenerator : public NeighborhoodGenerator {
       NeighborhoodGeneratorHelper const* helper, const std::string& name)
       : NeighborhoodGenerator(name, helper) {}
   Neighborhood Generate(const CpSolverResponse& initial_solution,
-                        double difficulty, random_engine_t* random) const final;
+                        double difficulty, random_engine_t* random) final;
 };
 
 // Helper method for the scheduling neighborhood generators. Returns the model
@@ -364,7 +393,7 @@ class SchedulingNeighborhoodGenerator : public NeighborhoodGenerator {
       : NeighborhoodGenerator(name, helper) {}
 
   Neighborhood Generate(const CpSolverResponse& initial_solution,
-                        double difficulty, random_engine_t* random) const final;
+                        double difficulty, random_engine_t* random) final;
 };
 
 // Similar to SchedulingNeighborhoodGenerator except the set of intervals that
@@ -376,48 +405,107 @@ class SchedulingTimeWindowNeighborhoodGenerator : public NeighborhoodGenerator {
       : NeighborhoodGenerator(name, helper) {}
 
   Neighborhood Generate(const CpSolverResponse& initial_solution,
-                        double difficulty, random_engine_t* random) const final;
+                        double difficulty, random_engine_t* random) final;
 };
 
-// Generates a neighborhood by fixing the variables who have same solution value
-// as their linear relaxation. This was published in "Exploring relaxation
-// induced neighborhoods to improve MIP solutions" 2004 by E. Danna et.
+// Generates a neighborhood by fixing the variables to solutions reported in
+// various repositories. This is inspired from RINS published in "Exploring
+// relaxation induced neighborhoods to improve MIP solutions" 2004 by E. Danna
+// et.
 //
-// If no solution is available, this generates a neighborhood using only the
-// linear relaxation values. This was published in "RENS – The Relaxation
-// Enforced Neighborhood" 2009 by Timo Berthold.
+// If incomplete_solutions is provided, this generates a neighborhood by fixing
+// the variable values to a solution in the SharedIncompleteSolutionManager and
+// ignores the other repositories.
 //
-// NOTE: The neighborhoods are generated outside of this generator and are
-// managed by SharedRINSNeighborhoodManager.
+// Otherwise, if response_manager is not provided, this generates a neighborhood
+// using only the linear/general relaxation values. The domain of the variables
+// are reduced to the integer values around their lp solution/relaxation
+// solution values. This was published in "RENS – The Relaxation Enforced
+// Neighborhood" 2009 by Timo Berthold.
 class RelaxationInducedNeighborhoodGenerator : public NeighborhoodGenerator {
  public:
   explicit RelaxationInducedNeighborhoodGenerator(
-      NeighborhoodGeneratorHelper const* helper, Model* model,
+      NeighborhoodGeneratorHelper const* helper,
+      const SharedResponseManager* response_manager,
+      const SharedRelaxationSolutionRepository* relaxation_solutions,
+      const SharedLPSolutionRepository* lp_solutions,
+      SharedIncompleteSolutionManager* incomplete_solutions,
       const std::string& name)
-      : NeighborhoodGenerator(name, helper), model_(model) {}
+      : NeighborhoodGenerator(name, helper),
+        response_manager_(response_manager),
+        relaxation_solutions_(relaxation_solutions),
+        lp_solutions_(lp_solutions),
+        incomplete_solutions_(incomplete_solutions) {
+    CHECK(lp_solutions_ != nullptr || relaxation_solutions_ != nullptr ||
+          incomplete_solutions != nullptr);
+  }
 
+  // Both initial solution and difficulty values are ignored.
   Neighborhood Generate(const CpSolverResponse& initial_solution,
-                        double difficulty, random_engine_t* random) const final;
+                        double difficulty, random_engine_t* random) final;
 
-  // Returns true if SharedRINSNeighborhoodManager has unexplored neighborhoods.
+  // Returns true if the required solutions are available.
   bool ReadyToGenerate() const override;
 
-  const Model* model_;
+ private:
+  const SharedResponseManager* response_manager_;
+  const SharedRelaxationSolutionRepository* relaxation_solutions_;
+  const SharedLPSolutionRepository* lp_solutions_;
+  SharedIncompleteSolutionManager* incomplete_solutions_;
 };
 
-// Generates a relaxation of the original model by randomly removing some
-// constraints. The number of constraints removed is in sync with the difficulty
-// passed to the generator.
-class RandomRelaxationNeighborhoodGenerator : public NeighborhoodGenerator {
+// Generates a relaxation of the original model by removing a consecutive span
+// of constraints starting at a random index. The number of constraints removed
+// is in sync with the difficulty passed to the generator.
+class ConsecutiveConstraintsRelaxationNeighborhoodGenerator
+    : public NeighborhoodGenerator {
  public:
-  explicit RandomRelaxationNeighborhoodGenerator(
+  explicit ConsecutiveConstraintsRelaxationNeighborhoodGenerator(
       NeighborhoodGeneratorHelper const* helper, const std::string& name)
       : NeighborhoodGenerator(name, helper) {}
   Neighborhood Generate(const CpSolverResponse& initial_solution,
-                        double difficulty, random_engine_t* random) const final;
+                        double difficulty, random_engine_t* random) final;
 
   bool IsRelaxationGenerator() const override { return true; }
   bool ReadyToGenerate() const override { return true; }
+};
+
+// Generates a relaxation of the original model by removing some constraints
+// randomly with a given weight for each constraint that controls the
+// probability of constraint getting removed. The number of constraints removed
+// is in sync with the difficulty passed to the generator. Higher weighted
+// constraints are more likely to get removed.
+class WeightedRandomRelaxationNeighborhoodGenerator
+    : public NeighborhoodGenerator {
+ public:
+  WeightedRandomRelaxationNeighborhoodGenerator(
+      NeighborhoodGeneratorHelper const* helper, const std::string& name);
+
+  // Generates the neighborhood as described above. Also stores the removed
+  // constraints indices for adjusting the weights.
+  Neighborhood Generate(const CpSolverResponse& initial_solution,
+                        double difficulty, random_engine_t* random) final;
+
+  bool IsRelaxationGenerator() const override { return true; }
+  bool ReadyToGenerate() const override { return true; }
+
+ private:
+  // Adjusts the weights of the constraints removed to get the neighborhood
+  // based on the solve_data.
+  void AdditionalProcessingOnSynchronize(const SolveData& solve_data) override
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+
+  // Higher weighted constraints are more likely to get removed.
+  std::vector<double> constraint_weights_;
+  int num_removable_constraints_ = 0;
+
+  // Indices of the removed constraints per generated neighborhood.
+  absl::flat_hash_map<int64, std::vector<int>> removed_constraints_
+      ABSL_GUARDED_BY(mutex_);
+
+  // TODO(user): Move this to parent class if other generators start using
+  // feedbacks.
+  int64 next_available_id_ ABSL_GUARDED_BY(mutex_) = 0;
 };
 
 }  // namespace sat

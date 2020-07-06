@@ -1,3 +1,5 @@
+load("@rules_cc//cc:defs.bzl", "cc_proto_library")
+
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
@@ -64,10 +66,10 @@ cc_library(
     srcs = ["graph_export.cc"],
     hdrs = ["graph_export.h"],
     deps = [
-        "@com_google_absl//absl/strings:str_format",
         "//ortools/base",
         "//ortools/base:file",
-        "//ortools/base:status",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -178,11 +180,11 @@ cc_library(
     deps = [
         ":running_stat",
         "//ortools/base",
+        "//ortools/base:sysinfo",
+        "//ortools/base:timer",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
-        "//ortools/base:sysinfo",
-        "//ortools/base:timer",
     ],
 )
 

@@ -19,6 +19,7 @@
 #include "absl/container/flat_hash_set.h"
 #include "ortools/base/adjustable_priority_queue.h"
 #include "ortools/base/integral_types.h"
+#include "ortools/graph/shortestpaths.h"
 
 namespace operations_research {
 namespace {
@@ -47,7 +48,7 @@ class Element {
 template <class S>
 class DijkstraSP {
  public:
-  static const int64 kInfinity = kint64max / 2;
+  static constexpr int64 kInfinity = kint64max / 2;
 
   DijkstraSP(int node_count, int start_node,
              std::function<int64(int, int)> graph, int64 disconnected_distance)

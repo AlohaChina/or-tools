@@ -164,10 +164,15 @@ void SolveJobShopExample() {
       machine_intervals << "Machine " << machine << ": ";
       for (const auto s : collector->ForwardSequence(0, seq)) {
         IntervalVar* t = seq->Interval(s);
-        machine_intervals << "[" << std::setw(2)
-                          << collector->Value(0, t->StartExpr()->Var()) << ", "
-                          << std::setw(2)
-                          << collector->Value(0, t->EndExpr()->Var()) << "] ";
+        machine_intervals << "[(" << std::setw(2)
+                          << collector->solution(0)->Min(t->StartExpr()->Var())
+                          << ", "
+                          << collector->solution(0)->Max(t->StartExpr()->Var())
+                          << "),(" << std::setw(2)
+                          << collector->solution(0)->Min(t->EndExpr()->Var())
+                          << ", "
+                          << collector->solution(0)->Max(t->EndExpr()->Var())
+                          << ")]";
       }
       machine_intervals_list.push_back(machine_intervals.str());
     }
@@ -183,7 +188,7 @@ void SolveJobShopExample() {
 
 int main(int argc, char** argv) {
   google::InitGoogleLogging(argv[0]);
-  FLAGS_logtostderr = 1;
+  absl::SetFlag(&FLAGS_logtostderr, 1);
   operations_research::SolveJobShopExample();
   return EXIT_SUCCESS;
 }

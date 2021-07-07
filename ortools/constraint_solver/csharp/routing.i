@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,6 +12,9 @@
 // limitations under the License.
 
 // TODO(user): Refactor this file to adhere to the SWIG style guide.
+%include "std_pair.i"
+%template(IntBoolPair) std::pair<int, bool>;
+
 %include "ortools/constraint_solver/csharp/constraint_solver.i"
 %include "ortools/constraint_solver/csharp/routing_types.i"
 %include "ortools/constraint_solver/csharp/routing_index_manager.i"
@@ -81,34 +84,34 @@ namespace operations_research {
 %}
 // Ignored:
 %ignore RoutingModel::AddDimensionDependentDimensionWithVehicleCapacity;
-%ignore RoutingModel::AddHardTypeIncompatibility;
-%ignore RoutingModel::AddMatrixDimension(
-    std::vector<std::vector<int64> > values,
-    int64 capacity,
-    bool fix_start_cumul_to_zero,
-    const std::string& name);
+
+%unignore RoutingModel::RegisterUnaryTransitVector;
+%unignore RoutingModel::RegisterTransitMatrix;
+
+%unignore RoutingModel::AddVectorDimension;
+%unignore RoutingModel::AddMatrixDimension;
+
 %ignore RoutingModel::AddSameVehicleRequiredTypeAlternatives;
-%ignore RoutingModel::AddTemporalRequiredTypeAlternatives;
-%ignore RoutingModel::AddTemporalTypeIncompatibility;
-%ignore RoutingModel::CloseVisitTypes;
 %ignore RoutingModel::GetAllDimensionNames;
+%ignore RoutingModel::GetAutomaticFirstSolutionStrategy;
 %ignore RoutingModel::GetDeliveryIndexPairs;
 %ignore RoutingModel::GetDimensions;
 %ignore RoutingModel::GetDimensionsWithSoftAndSpanCosts;
 %ignore RoutingModel::GetDimensionsWithSoftOrSpanCosts;
+%ignore RoutingModel::GetGlobalDimensionCumulOptimizers;
 %ignore RoutingModel::GetHardTypeIncompatibilitiesOfType;
+%ignore RoutingModel::GetLocalDimensionCumulMPOptimizers;
+%ignore RoutingModel::GetLocalDimensionCumulOptimizers;
+%ignore RoutingModel::GetMutableGlobalCumulOptimizer;
+%ignore RoutingModel::GetMutableLocalCumulOptimizer;
+%ignore RoutingModel::GetMutableLocalCumulMPOptimizer;
 %ignore RoutingModel::GetPerfectBinaryDisjunctions;
 %ignore RoutingModel::GetPickupIndexPairs;
-%ignore RoutingModel::GetSameVehicleRequiredTypeAlternativesOfType;
-%ignore RoutingModel::GetTemporalRequiredTypeAlternativesOfType;
-%ignore RoutingModel::GetTemporalTypeIncompatibilitiesOfType;
-%ignore RoutingModel::HasHardTypeIncompatibilities;
-%ignore RoutingModel::HasSameVehicleTypeRequirements;
-%ignore RoutingModel::HasTemporalTypeIncompatibilities;
-%ignore RoutingModel::HasTemporalTypeRequirements;
 %ignore RoutingModel::HasTypeRegulations;
 %ignore RoutingModel::MakeStateDependentTransit;
+%ignore RoutingModel::PackCumulsOfOptimizerDimensionsFromAssignment;
 %ignore RoutingModel::RegisterStateDependentTransitCallback;
+%ignore RoutingModel::RemainingTime;
 %ignore RoutingModel::StateDependentTransitCallback;
 %ignore RoutingModel::SolveWithParameters(
     const RoutingSearchParameters& search_parameters,
@@ -140,6 +143,11 @@ namespace operations_research {
     return groupDelay;
   }
 %}
+%ignore RoutingDimension::GetBreakDistanceDurationOfVehicle;
+
+// TypeRegulationsChecker
+%unignore TypeRegulationsChecker;
+%ignore TypeRegulationsChecker::CheckVehicle;
 
 }  // namespace operations_research
 

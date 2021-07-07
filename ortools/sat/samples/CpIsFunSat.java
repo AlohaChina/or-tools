@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,6 +12,9 @@
 // limitations under the License.
 
 // [START program]
+package com.google.ortools.sat.samples;
+
+import com.google.ortools.Loader;
 import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.CpSolver;
 import com.google.ortools.sat.CpSolverSolutionCallback;
@@ -20,10 +23,6 @@ import com.google.ortools.sat.LinearExpr;
 
 /** Cryptarithmetic puzzle. */
 public class CpIsFunSat {
-  static {
-    System.loadLibrary("jniortools");
-  }
-
   // [START solution_printing]
   static class VarArraySolutionPrinter extends CpSolverSolutionCallback {
     public VarArraySolutionPrinter(IntVar[] variables) {
@@ -49,6 +48,7 @@ public class CpIsFunSat {
   // [END solution_printing]
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     // Create the model.
     CpModel model = new CpModel();
 
@@ -84,7 +84,10 @@ public class CpIsFunSat {
     // Create a solver and solve the model.
     CpSolver solver = new CpSolver();
     VarArraySolutionPrinter cb = new VarArraySolutionPrinter(letters);
-    solver.searchAllSolutions(model, cb);
+    // Tell the solver to enumerate all solutions.
+    solver.getParameters().setEnumerateAllSolutions(true);
+    // And solve.
+    solver.solve(model, cb);
     // [END solve]
 
     System.out.println("Statistics");

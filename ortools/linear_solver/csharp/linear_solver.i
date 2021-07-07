@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -59,8 +59,8 @@ class MPSolutionResponse;
 %typemap(csclassmodifiers) operations_research::MPVariable "public partial class"
 %typemap(csclassmodifiers) operations_research::MPSolver "public partial class"
 
-%template(MpDoubleVector) std::vector<double>;
-VECTOR_AS_CSHARP_ARRAY(double, double, double, MpDoubleVector);
+%template(DoubleVector) std::vector<double>;
+VECTOR_AS_CSHARP_ARRAY(double, double, double, DoubleVector);
 
 %define CONVERT_VECTOR(CTYPE, TYPE)
 SWIG_STD_VECTOR_ENHANCED(CTYPE*);
@@ -123,6 +123,8 @@ CONVERT_VECTOR(operations_research::MPVariable, MPVariable)
 // Expose the MPSolver's basic API, with trivial renames when needed.
 %unignore operations_research::MPSolver::MPSolver;
 %unignore operations_research::MPSolver::~MPSolver;
+%newobject operations_research::MPSolver::CreateSolver;
+%unignore operations_research::MPSolver::CreateSolver;
 %unignore operations_research::MPSolver::MakeBoolVar;
 %unignore operations_research::MPSolver::MakeIntVar;
 %unignore operations_research::MPSolver::MakeNumVar;
@@ -138,9 +140,11 @@ CONVERT_VECTOR(operations_research::MPVariable, MPVariable)
 %unignore operations_research::MPSolver::SetSolverSpecificParametersAsString;
 %rename (WallTime) operations_research::MPSolver::wall_time;
 %unignore operations_research::MPSolver::Clear;
+%rename (Constraint) operations_research::MPSolver::constraint;
 %unignore operations_research::MPSolver::constraints;
 %unignore operations_research::MPSolver::NumConstraints;
 %unignore operations_research::MPSolver::NumVariables;
+%rename (Variable) operations_research::MPSolver::variable;
 %unignore operations_research::MPSolver::variables;
 %unignore operations_research::MPSolver::EnableOutput;
 %unignore operations_research::MPSolver::SuppressOutput;

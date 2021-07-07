@@ -1,4 +1,4 @@
-# Copyright 2010-2018 Google LLC
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -21,7 +21,6 @@ Constraints:
 - 15 min cleaning time after the last shift
 - 2 min waiting time after each shift for passenger boarding and alighting
 """
-from __future__ import print_function
 
 import argparse
 import collections

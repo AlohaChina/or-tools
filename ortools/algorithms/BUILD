@@ -8,6 +8,7 @@ cc_library(
         "//ortools/base",
         "//ortools/base:hash",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -22,7 +23,7 @@ cc_test(
         "//ortools/base:map_util",
         "//ortools/base:random",
         "@com_google_absl//absl/strings",
-        "@gtest//:main",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -68,8 +69,8 @@ cc_library(
     deps = [
         "//ortools/base",
         "//ortools/base:int_type",
-        "//ortools/base:int_type_indexed_vector",
         "//ortools/base:ptr_util",
+        "//ortools/base:strong_vector",
         "//ortools/util:time_limit",
     ],
 )
@@ -125,13 +126,12 @@ cc_library(
         ":dynamic_permutation",
         ":sparse_permutation",
         "//ortools/base",
-        "//ortools/base:canonical_errors",
-        "//ortools/base:status",
-        "@com_google_absl//absl/strings",
         "//ortools/graph",
         "//ortools/graph:iterators",
         "//ortools/graph:util",
         "//ortools/util:stats",
         "//ortools/util:time_limit",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
     ],
 )

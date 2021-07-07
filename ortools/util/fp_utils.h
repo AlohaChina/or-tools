@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -52,7 +52,7 @@ namespace operations_research {
 //
 // Note(user): For some reason, this causes an FPE exception to be triggered for
 // unknown reasons when compiled in 32 bits. Because of this, we do not turn
-// on FPE exception if ARCH_K8 is not defined.
+// on FPE exception if __x86_64__ is not defined.
 //
 // TODO(user): Make it work on 32 bits.
 // TODO(user): Make it work on msvc, currently calls to _controlfp crash.
@@ -62,7 +62,7 @@ class ScopedFloatingPointEnv {
   ScopedFloatingPointEnv() {
 #if defined(_MSC_VER)
     // saved_control_ = _controlfp(0, 0);
-#elif defined(ARCH_K8)
+#elif (defined(__GNUC__) || defined(__llvm__)) && defined(__x86_64__)
     CHECK_EQ(0, fegetenv(&saved_fenv_));
 #endif
   }
@@ -70,7 +70,7 @@ class ScopedFloatingPointEnv {
   ~ScopedFloatingPointEnv() {
 #if defined(_MSC_VER)
     // CHECK_EQ(saved_control_, _controlfp(saved_control_, 0xFFFFFFFF));
-#elif defined(ARCH_K8)
+#elif defined(__x86_64__) && defined(__GLIBC__)
     CHECK_EQ(0, fesetenv(&saved_fenv_));
 #endif
   }
@@ -78,11 +78,14 @@ class ScopedFloatingPointEnv {
   void EnableExceptions(int excepts) {
 #if defined(_MSC_VER)
     // _controlfp(static_cast<unsigned int>(excepts), _MCW_EM);
-#elif defined(ARCH_K8)
+#elif (defined(__GNUC__) || defined(__llvm__)) && defined(__x86_64__) && \
+    !defined(__ANDROID__)
     CHECK_EQ(0, fegetenv(&fenv_));
     excepts &= FE_ALL_EXCEPT;
-#ifdef __APPLE__
+#if defined(__APPLE__)
     fenv_.__control &= ~excepts;
+#elif defined(__FreeBSD__)
+    fenv_.__x87.__control &= ~excepts;
 #else  // Linux
     fenv_.__control_word &= ~excepts;
 #endif
@@ -94,7 +97,7 @@ class ScopedFloatingPointEnv {
  private:
 #if defined(_MSC_VER)
   // unsigned int saved_control_;
-#elif defined(ARCH_K8)
+#elif (defined(__GNUC__) || defined(__llvm__)) && defined(__x86_64__)
   fenv_t fenv_;
   mutable fenv_t saved_fenv_;
 #endif
@@ -200,7 +203,7 @@ inline bool IsIntegerWithinTolerance(FloatType x, FloatType tolerance) {
 // TODO(user): incorporate the gcd computation here? The issue is that I am
 // not sure if I just do factor /= gcd that round(x * factor) will be the same.
 void GetBestScalingOfDoublesToInt64(const std::vector<double>& input,
-                                    int64 max_absolute_sum,
+                                    int64_t max_absolute_sum,
                                     double* scaling_factor,
                                     double* max_relative_coeff_error);
 
@@ -211,7 +214,7 @@ void GetBestScalingOfDoublesToInt64(const std::vector<double>& input,
 double GetBestScalingOfDoublesToInt64(const std::vector<double>& input,
                                       const std::vector<double>& lb,
                                       const std::vector<double>& ub,
-                                      int64 max_absolute_sum);
+                                      int64_t max_absolute_sum);
 // This computes:
 //
 // The max_relative_coeff_error, which is the maximum over all coeff of
@@ -231,8 +234,8 @@ void ComputeScalingErrors(const std::vector<double>& input,
 // round(fabs(x[i] * scaling_factor)). The numbers 0 are ignored and if they are
 // all zero then the result is 1. Note that round(fabs()) is the same as
 // fabs(round()) since the numbers are rounded away from zero.
-int64 ComputeGcdOfRoundedDoubles(const std::vector<double>& x,
-                                 double scaling_factor);
+int64_t ComputeGcdOfRoundedDoubles(const std::vector<double>& x,
+                                   double scaling_factor);
 
 // Returns alpha * x + (1 - alpha) * y.
 template <typename FloatType>

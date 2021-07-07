@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -285,6 +285,9 @@ PROTO2_RETURN(
 %unignore operations_research::MPSolver;
 %unignore operations_research::MPSolver::MPSolver;
 %unignore operations_research::MPSolver::~MPSolver;
+%newobject operations_research::MPSolver::CreateSolver;
+%rename (createSolver) operations_research::MPSolver::CreateSolver;
+
 %unignore operations_research::MPConstraint;
 %unignore operations_research::MPVariable;
 %unignore operations_research::MPObjective;
@@ -338,6 +341,7 @@ PROTO2_RETURN(
 %rename (reset) operations_research::MPSolver::Reset;  // no test
 %rename (infinity) operations_research::MPSolver::infinity;
 %rename (setTimeLimit) operations_research::MPSolver::set_time_limit;  // no test
+%rename (isMip) operations_research::MPSolver::IsMIP;  // no test
 
 // Proto-based API of the MPSolver. Use is encouraged.
 // Note: the following proto-based methods aren't listed here, but are
@@ -358,7 +362,9 @@ PROTO2_RETURN(
 %rename (interruptSolve) operations_research::MPSolver::InterruptSolve;  // no test
 %rename (wallTime) operations_research::MPSolver::wall_time;
 %rename (clear) operations_research::MPSolver::Clear;  // no test
+%unignore operations_research::MPSolver::constraint;
 %unignore operations_research::MPSolver::constraints;
+%unignore operations_research::MPSolver::variable;
 %unignore operations_research::MPSolver::variables;
 %rename (numVariables) operations_research::MPSolver::NumVariables;
 %rename (numConstraints) operations_research::MPSolver::NumConstraints;
@@ -378,7 +384,7 @@ PROTO2_RETURN(
 %unignore operations_research::MPSolver::AT_UPPER_BOUND;  // no test
 %unignore operations_research::MPSolver::FIXED_VALUE;  // no test
 %unignore operations_research::MPSolver::BASIC;
-%unignore operations_research::MPSolver::SetStartingLpBasis;
+%ignore operations_research::MPSolver::SetStartingLpBasis; // no typemap for const vector<BasisStatus>&
 
 // MPVariable: writer API.
 %rename (setInteger) operations_research::MPVariable::SetInteger;

@@ -88,7 +88,7 @@ cc_binary(
     ],
     output_licenses = ["unencumbered"],
     visibility = ["//visibility:public"],
-    deps = ["@pcre//:pcre"],
+    deps = ["@pcre"],
 )
 
 filegroup(

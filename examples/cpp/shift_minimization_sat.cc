@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -31,6 +31,9 @@
 #include <string>
 #include <vector>
 
+#include "absl/flags/flag.h"
+#include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_split.h"
 #include "ortools/base/commandlineflags.h"
@@ -39,8 +42,8 @@
 #include "ortools/sat/cp_model.h"
 #include "ortools/sat/model.h"
 
-DEFINE_string(input, "", "Input file.");
-DEFINE_string(params, "", "Sat parameters in text proto format.");
+ABSL_FLAG(std::string, input, "", "Input file.");
+ABSL_FLAG(std::string, params, "", "Sat parameters in text proto format.");
 
 namespace operations_research {
 namespace sat {
@@ -292,7 +295,7 @@ void LoadAndSolve(const std::string& file_name) {
 
   // Solve.
   Model model;
-  model.Add(NewSatParameters(FLAGS_params));
+  model.Add(NewSatParameters(absl::GetFlag(FLAGS_params)));
 
   const CpSolverResponse response = SolveCpModel(cp_model.Build(), &model);
   LOG(INFO) << CpSolverResponseStats(response);
@@ -302,11 +305,13 @@ void LoadAndSolve(const std::string& file_name) {
 
 int main(int argc, char** argv) {
   absl::SetFlag(&FLAGS_logtostderr, true);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  if (FLAGS_input.empty()) {
+  google::InitGoogleLogging(argv[0]);
+  absl::ParseCommandLine(argc, argv);
+
+  if (absl::GetFlag(FLAGS_input).empty()) {
     LOG(FATAL) << "Please supply a data file with --input=";
   }
 
-  operations_research::sat::LoadAndSolve(FLAGS_input);
+  operations_research::sat::LoadAndSolve(absl::GetFlag(FLAGS_input));
   return EXIT_SUCCESS;
 }

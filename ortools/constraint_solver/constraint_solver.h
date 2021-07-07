@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -20,17 +20,22 @@
 ///
 /// Here is a very simple Constraint Programming problem:
 ///
-///   Knowing that we see 56 legs and 20 heads, how many pheasants and rabbits
-///   are we looking at?
+///   If we see 56 legs and 20 heads, how many two-legged pheasants
+///   and four-legged rabbits are we looking at?
 ///
 /// Here is some simple Constraint Programming code to find out:
 ///
 ///   void pheasant() {
 ///     Solver s("pheasant");
+///     // Create integer variables to represent the number of pheasants and
+///     // rabbits, with a minimum of 0 and a maximum of 20.
 ///     IntVar* const p = s.MakeIntVar(0, 20, "pheasant"));
 ///     IntVar* const r = s.MakeIntVar(0, 20, "rabbit"));
-///     IntExpr* const legs = s.MakeSum(s.MakeProd(p, 2), s.MakeProd(r, 4));
+///     // The number of heads is the sum of pheasants and rabbits.
 ///     IntExpr* const heads = s.MakeSum(p, r);
+///     // The number of legs is the sum of pheasants * 2 and rabbits * 4.
+///     IntExpr* const legs = s.MakeSum(s.MakeProd(p, 2), s.MakeProd(r, 4));
+///     // Constraints: the number of legs is 56 and heads is 20.
 ///     Constraint* const ct_legs = s.MakeEquality(legs, 56);
 ///     Constraint* const ct_heads = s.MakeEquality(heads, 20);
 ///     s.AddConstraint(ct_legs);
@@ -63,34 +68,39 @@
 #ifndef OR_TOOLS_CONSTRAINT_SOLVER_CONSTRAINT_SOLVER_H_
 #define OR_TOOLS_CONSTRAINT_SOLVER_CONSTRAINT_SOLVER_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
+#include <deque>
 #include <functional>
-#include <iosfwd>
 #include <memory>
 #include <random>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
+#include "absl/base/log_severity.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
-#include "absl/random/distributions.h"
+#include "absl/flags/declare.h"
+#include "absl/flags/flag.h"
 #include "absl/random/random.h"
 #include "absl/strings/str_format.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/hash.h"
+#include "absl/time/time.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
 #include "ortools/base/map_util.h"
-#include "ortools/base/sysinfo.h"
 #include "ortools/base/timer.h"
+#include "ortools/constraint_solver/search_stats.pb.h"
 #include "ortools/constraint_solver/solver_parameters.pb.h"
 #include "ortools/util/piecewise_linear_function.h"
 #include "ortools/util/sorted_interval_list.h"
 #include "ortools/util/tuple_set.h"
 
 #if !defined(SWIG)
-DECLARE_int64(cp_random_seed);
+ABSL_DECLARE_FLAG(int64_t, cp_random_seed);
 #endif  // !defined(SWIG)
 
 class File;
@@ -100,11 +110,6 @@ namespace operations_research {
 class Assignment;
 class AssignmentProto;
 class BaseObject;
-class CpArgument;
-class CpConstraint;
-class CpIntegerExpression;
-class CpIntervalVariable;
-class CpSequenceVariable;
 class CastConstraint;
 class Constraint;
 class Decision;
@@ -112,34 +117,31 @@ class DecisionBuilder;
 class DecisionVisitor;
 class Demon;
 class DemonProfiler;
-class LocalSearchProfiler;
 class Dimension;
 class DisjunctiveConstraint;
-class ExpressionCache;
+class ImprovementSearchLimit;
 class IntExpr;
-class IntTupleSet;
 class IntVar;
 class IntVarAssignment;
-class IntVarElement;
+class IntVarLocalSearchFilter;
 class IntervalVar;
 class IntervalVarAssignment;
-class IntervalVarElement;
-class IntVarLocalSearchFilter;
 class LocalSearchFilter;
+class LocalSearchFilterManager;
+class LocalSearchMonitor;
 class LocalSearchOperator;
 class LocalSearchPhaseParameters;
+class LocalSearchProfiler;
 class ModelCache;
 class ModelVisitor;
 class OptimizeVar;
 class Pack;
 class PropagationBaseObject;
 class PropagationMonitor;
-class LocalSearchMonitor;
 class Queue;
-class RevBitMatrix;
-class RevBitSet;
 class RegularLimit;
 class RegularLimitParameters;
+class RevBitMatrix;
 class Search;
 class SearchLimit;
 class SearchMonitor;
@@ -147,18 +149,16 @@ class SequenceVar;
 class SequenceVarAssignment;
 class SolutionCollector;
 class SolutionPool;
-class Solver;
-class ConstraintSolverParameters;
 class SymmetryBreaker;
 struct StateInfo;
 struct Trail;
 template <class T>
 class SimpleRevFIFO;
 
-inline int64 CpRandomSeed() {
-  return FLAGS_cp_random_seed == -1
-             ? absl::Uniform<int64>(absl::BitGen(), 0, kint64max)
-             : FLAGS_cp_random_seed;
+inline int64_t CpRandomSeed() {
+  return absl::GetFlag(FLAGS_cp_random_seed) == -1
+             ? absl::Uniform<int64_t>(absl::BitGen(), 0, kint64max)
+             : absl::GetFlag(FLAGS_cp_random_seed);
 }
 
 /// This struct holds all parameters for the default search.
@@ -257,7 +257,7 @@ class Solver {
   };
 
   /// Number of priorities for demons.
-  static const int kNumPriorities = 3;
+  static constexpr int kNumPriorities = 3;
 
   /// This enum describes the strategy used to select the next branching
   /// variable at each node during the search.
@@ -730,20 +730,23 @@ class Solver {
   enum OptimizationDirection { NOT_SET, MAXIMIZATION, MINIMIZATION };
 
   /// Callback typedefs
-  typedef std::function<int64(int64)> IndexEvaluator1;
-  typedef std::function<int64(int64, int64)> IndexEvaluator2;
-  typedef std::function<int64(int64, int64, int64)> IndexEvaluator3;
+  typedef std::function<int64_t(int64_t)> IndexEvaluator1;
+  typedef std::function<int64_t(int64_t, int64_t)> IndexEvaluator2;
+  typedef std::function<int64_t(int64_t, int64_t, int64_t)> IndexEvaluator3;
 
-  typedef std::function<bool(int64)> IndexFilter1;
+  typedef std::function<bool(int64_t)> IndexFilter1;
 
-  typedef std::function<IntVar*(int64)> Int64ToIntVar;
+  typedef std::function<IntVar*(int64_t)> Int64ToIntVar;
 
-  typedef std::function<int64(Solver* solver, const std::vector<IntVar*>& vars,
-                              int64 first_unbound, int64 last_unbound)>
+  typedef std::function<int64_t(Solver* solver,
+                                const std::vector<IntVar*>& vars,
+                                int64_t first_unbound, int64_t last_unbound)>
       VariableIndexSelector;
 
-  typedef std::function<int64(const IntVar* v, int64 id)> VariableValueSelector;
-  typedef std::function<bool(int64, int64, int64)> VariableValueComparator;
+  typedef std::function<int64_t(const IntVar* v, int64_t id)>
+      VariableValueSelector;
+  typedef std::function<bool(int64_t, int64_t, int64_t)>
+      VariableValueComparator;
   typedef std::function<DecisionModification()> BranchSelector;
   // TODO(user): wrap in swig.
   typedef std::function<void(Solver*)> Action;
@@ -791,7 +794,7 @@ class Solver {
   /// must have been allocated with the new[] operator. The entire array
   /// will be deleted when backtracking out of the current state.
   ///
-  /// This method is valid for arrays of int, int64, uint64, bool,
+  /// This method is valid for arrays of int, int64_t, uint64_t, bool,
   /// BaseObject*, IntVar*, IntExpr*, and Constraint*.
   template <typename T>
   T* RevAllocArray(T* object) {
@@ -957,11 +960,11 @@ class Solver {
   void AddBacktrackAction(Action a, bool fast);
 #endif  /// !defined(SWIG)
 
-  /// misc debug std::string.
+  /// misc debug string.
   std::string DebugString() const;
 
   /// Current memory usage in bytes
-  static int64 MemoryUsage();
+  static int64_t MemoryUsage();
 
   /// The 'absolute time' as seen by the solver. Unless a user-provided clock
   /// was injected via SetClock() (eg. for unit tests), this is a real walltime,
@@ -971,38 +974,38 @@ class Solver {
 
   /// DEPRECATED: Use Now() instead.
   /// Time elapsed, in ms since the creation of the solver.
-  int64 wall_time() const;
+  int64_t wall_time() const;
 
   /// The number of branches explored since the creation of the solver.
-  int64 branches() const { return branches_; }
+  int64_t branches() const { return branches_; }
 
   /// The number of solutions found since the start of the search.
-  int64 solutions() const;
+  int64_t solutions() const;
 
   /// The number of unchecked solutions found by local search.
-  int64 unchecked_solutions() const;
+  int64_t unchecked_solutions() const;
 
   /// The number of demons executed during search for a given priority.
-  int64 demon_runs(DemonPriority p) const { return demon_runs_[p]; }
+  int64_t demon_runs(DemonPriority p) const { return demon_runs_[p]; }
 
   /// The number of failures encountered since the creation of the solver.
-  int64 failures() const { return fails_; }
+  int64_t failures() const { return fails_; }
 
   /// The number of neighbors created.
-  int64 neighbors() const { return neighbors_; }
+  int64_t neighbors() const { return neighbors_; }
 
   /// The number of filtered neighbors (neighbors accepted by filters).
-  int64 filtered_neighbors() const { return filtered_neighbors_; }
+  int64_t filtered_neighbors() const { return filtered_neighbors_; }
 
   /// The number of accepted neighbors.
-  int64 accepted_neighbors() const { return accepted_neighbors_; }
+  int64_t accepted_neighbors() const { return accepted_neighbors_; }
 
   /// The stamp indicates how many moves in the search tree we have performed.
   /// It is useful to detect if we need to update same lazy structures.
-  uint64 stamp() const;
+  uint64_t stamp() const;
 
   /// The fail_stamp() is incremented after each backtrack.
-  uint64 fail_stamp() const;
+  uint64_t fail_stamp() const;
 
   /// The direction of optimization, getter and setter.
   OptimizationDirection optimization_direction() const {
@@ -1021,19 +1024,20 @@ class Solver {
   // ----- Int Variables and Constants -----
 
   /// MakeIntVar will create the best range based int var for the bounds given.
-  IntVar* MakeIntVar(int64 min, int64 max, const std::string& name);
+  IntVar* MakeIntVar(int64_t min, int64_t max, const std::string& name);
 
   /// MakeIntVar will create a variable with the given sparse domain.
-  IntVar* MakeIntVar(const std::vector<int64>& values, const std::string& name);
+  IntVar* MakeIntVar(const std::vector<int64_t>& values,
+                     const std::string& name);
 
   /// MakeIntVar will create a variable with the given sparse domain.
   IntVar* MakeIntVar(const std::vector<int>& values, const std::string& name);
 
   /// MakeIntVar will create the best range based int var for the bounds given.
-  IntVar* MakeIntVar(int64 min, int64 max);
+  IntVar* MakeIntVar(int64_t min, int64_t max);
 
   /// MakeIntVar will create a variable with the given sparse domain.
-  IntVar* MakeIntVar(const std::vector<int64>& values);
+  IntVar* MakeIntVar(const std::vector<int64_t>& values);
 
   /// MakeIntVar will create a variable with the given sparse domain.
   IntVar* MakeIntVar(const std::vector<int>& values);
@@ -1045,22 +1049,22 @@ class Solver {
   IntVar* MakeBoolVar();
 
   /// IntConst will create a constant expression.
-  IntVar* MakeIntConst(int64 val, const std::string& name);
+  IntVar* MakeIntConst(int64_t val, const std::string& name);
 
   /// IntConst will create a constant expression.
-  IntVar* MakeIntConst(int64 val);
+  IntVar* MakeIntConst(int64_t val);
 
   /// This method will append the vector vars with 'var_count' variables
   /// having bounds vmin and vmax and having name "name<i>" where <i> is
   /// the index of the variable.
-  void MakeIntVarArray(int var_count, int64 vmin, int64 vmax,
+  void MakeIntVarArray(int var_count, int64_t vmin, int64_t vmax,
                        const std::string& name, std::vector<IntVar*>* vars);
   /// This method will append the vector vars with 'var_count' variables
   /// having bounds vmin and vmax and having no names.
-  void MakeIntVarArray(int var_count, int64 vmin, int64 vmax,
+  void MakeIntVarArray(int var_count, int64_t vmin, int64_t vmax,
                        std::vector<IntVar*>* vars);
   /// Same but allocates an array and returns it.
-  IntVar** MakeIntVarArray(int var_count, int64 vmin, int64 vmax,
+  IntVar** MakeIntVarArray(int var_count, int64_t vmin, int64_t vmax,
                            const std::string& name);
 
   /// This method will append the vector vars with 'var_count' boolean
@@ -1079,13 +1083,13 @@ class Solver {
   /// left + right.
   IntExpr* MakeSum(IntExpr* const left, IntExpr* const right);
   /// expr + value.
-  IntExpr* MakeSum(IntExpr* const expr, int64 value);
+  IntExpr* MakeSum(IntExpr* const expr, int64_t value);
   /// sum of all vars.
   IntExpr* MakeSum(const std::vector<IntVar*>& vars);
 
   /// scalar product
   IntExpr* MakeScalProd(const std::vector<IntVar*>& vars,
-                        const std::vector<int64>& coefs);
+                        const std::vector<int64_t>& coefs);
   /// scalar product
   IntExpr* MakeScalProd(const std::vector<IntVar*>& vars,
                         const std::vector<int>& coefs);
@@ -1093,17 +1097,17 @@ class Solver {
   /// left - right
   IntExpr* MakeDifference(IntExpr* const left, IntExpr* const right);
   /// value - expr
-  IntExpr* MakeDifference(int64 value, IntExpr* const expr);
+  IntExpr* MakeDifference(int64_t value, IntExpr* const expr);
   /// -expr
   IntExpr* MakeOpposite(IntExpr* const expr);
 
   /// left * right
   IntExpr* MakeProd(IntExpr* const left, IntExpr* const right);
   /// expr * value
-  IntExpr* MakeProd(IntExpr* const expr, int64 value);
+  IntExpr* MakeProd(IntExpr* const expr, int64_t value);
 
   /// expr / value (integer division)
-  IntExpr* MakeDiv(IntExpr* const expr, int64 value);
+  IntExpr* MakeDiv(IntExpr* const expr, int64_t value);
   /// numerator / denominator (integer division). Terms need to be positive.
   IntExpr* MakeDiv(IntExpr* const numerator, IntExpr* const denominator);
 
@@ -1112,10 +1116,10 @@ class Solver {
   /// expr * expr
   IntExpr* MakeSquare(IntExpr* const expr);
   /// expr ^ n (n > 0)
-  IntExpr* MakePower(IntExpr* const expr, int64 n);
+  IntExpr* MakePower(IntExpr* const expr, int64_t n);
 
   /// values[index]
-  IntExpr* MakeElement(const std::vector<int64>& values, IntVar* const index);
+  IntExpr* MakeElement(const std::vector<int64_t>& values, IntVar* const index);
   /// values[index]
   IntExpr* MakeElement(const std::vector<int>& values, IntVar* const index);
 
@@ -1140,13 +1144,13 @@ class Solver {
 
 #if !defined(SWIG)
   /// vars(argument)
-  IntExpr* MakeElement(Int64ToIntVar vars, int64 range_start, int64 range_end,
-                       IntVar* argument);
+  IntExpr* MakeElement(Int64ToIntVar vars, int64_t range_start,
+                       int64_t range_end, IntVar* argument);
 #endif  // SWIG
 
   /// Returns the expression expr such that vars[expr] == value.
   /// It assumes that vars are all different.
-  IntExpr* MakeIndexExpression(const std::vector<IntVar*>& vars, int64 value);
+  IntExpr* MakeIndexExpression(const std::vector<IntVar*>& vars, int64_t value);
 
   /// Special cases with arrays of size two.
   Constraint* MakeIfThenElseCt(IntVar* const condition,
@@ -1159,7 +1163,7 @@ class Solver {
   /// std::min (left, right)
   IntExpr* MakeMin(IntExpr* const left, IntExpr* const right);
   /// std::min(expr, value)
-  IntExpr* MakeMin(IntExpr* const expr, int64 value);
+  IntExpr* MakeMin(IntExpr* const expr, int64_t value);
   /// std::min(expr, value)
   IntExpr* MakeMin(IntExpr* const expr, int value);
 
@@ -1168,19 +1172,19 @@ class Solver {
   /// std::max(left, right)
   IntExpr* MakeMax(IntExpr* const left, IntExpr* const right);
   /// std::max(expr, value)
-  IntExpr* MakeMax(IntExpr* const expr, int64 value);
+  IntExpr* MakeMax(IntExpr* const expr, int64_t value);
   /// std::max(expr, value)
   IntExpr* MakeMax(IntExpr* const expr, int value);
 
   /// Convex piecewise function.
-  IntExpr* MakeConvexPiecewiseExpr(IntExpr* expr, int64 early_cost,
-                                   int64 early_date, int64 late_date,
-                                   int64 late_cost);
+  IntExpr* MakeConvexPiecewiseExpr(IntExpr* expr, int64_t early_cost,
+                                   int64_t early_date, int64_t late_date,
+                                   int64_t late_cost);
 
   /// Semi continuous Expression (x <= 0 -> f(x) = 0; x > 0 -> f(x) = ax + b)
   /// a >= 0 and b >= 0
-  IntExpr* MakeSemiContinuousExpr(IntExpr* const expr, int64 fixed_charge,
-                                  int64 step);
+  IntExpr* MakeSemiContinuousExpr(IntExpr* const expr, int64_t fixed_charge,
+                                  int64_t step);
 
   /// General piecewise-linear function expression, built from f(x) where f is
   /// piecewise-linear. The resulting expression is f(expr).
@@ -1192,7 +1196,7 @@ class Solver {
 #endif
 
   /// Modulo expression x % mod (with the python convention for modulo).
-  IntExpr* MakeModulo(IntExpr* const x, int64 mod);
+  IntExpr* MakeModulo(IntExpr* const x, int64_t mod);
 
   /// Modulo expression x % mod (with the python convention for modulo).
   IntExpr* MakeModulo(IntExpr* const x, IntExpr* const mod);
@@ -1200,7 +1204,7 @@ class Solver {
   /// Conditional Expr condition ? expr : unperformed_value
   IntExpr* MakeConditionalExpression(IntVar* const condition,
                                      IntExpr* const expr,
-                                     int64 unperformed_value);
+                                     int64_t unperformed_value);
 
   /// This constraint always succeeds.
   Constraint* MakeTrueConstraint();
@@ -1209,10 +1213,10 @@ class Solver {
   Constraint* MakeFalseConstraint(const std::string& explanation);
 
   /// boolvar == (var == value)
-  Constraint* MakeIsEqualCstCt(IntExpr* const var, int64 value,
+  Constraint* MakeIsEqualCstCt(IntExpr* const var, int64_t value,
                                IntVar* const boolvar);
   /// status var of (var == value)
-  IntVar* MakeIsEqualCstVar(IntExpr* const var, int64 value);
+  IntVar* MakeIsEqualCstVar(IntExpr* const var, int64_t value);
   /// b == (v1 == v2)
   Constraint* MakeIsEqualCt(IntExpr* const v1, IntExpr* v2, IntVar* const b);
   /// status var of (v1 == v2)
@@ -1220,15 +1224,15 @@ class Solver {
   /// left == right
   Constraint* MakeEquality(IntExpr* const left, IntExpr* const right);
   /// expr == value
-  Constraint* MakeEquality(IntExpr* const expr, int64 value);
+  Constraint* MakeEquality(IntExpr* const expr, int64_t value);
   /// expr == value
   Constraint* MakeEquality(IntExpr* const expr, int value);
 
   /// boolvar == (var != value)
-  Constraint* MakeIsDifferentCstCt(IntExpr* const var, int64 value,
+  Constraint* MakeIsDifferentCstCt(IntExpr* const var, int64_t value,
                                    IntVar* const boolvar);
   /// status var of (var != value)
-  IntVar* MakeIsDifferentCstVar(IntExpr* const var, int64 value);
+  IntVar* MakeIsDifferentCstVar(IntExpr* const var, int64_t value);
   /// status var of (v1 != v2)
   IntVar* MakeIsDifferentVar(IntExpr* const v1, IntExpr* const v2);
   /// b == (v1 != v2)
@@ -1237,15 +1241,15 @@ class Solver {
   /// left != right
   Constraint* MakeNonEquality(IntExpr* const left, IntExpr* const right);
   /// expr != value
-  Constraint* MakeNonEquality(IntExpr* const expr, int64 value);
+  Constraint* MakeNonEquality(IntExpr* const expr, int64_t value);
   /// expr != value
   Constraint* MakeNonEquality(IntExpr* const expr, int value);
 
   /// boolvar == (var <= value)
-  Constraint* MakeIsLessOrEqualCstCt(IntExpr* const var, int64 value,
+  Constraint* MakeIsLessOrEqualCstCt(IntExpr* const var, int64_t value,
                                      IntVar* const boolvar);
   /// status var of (var <= value)
-  IntVar* MakeIsLessOrEqualCstVar(IntExpr* const var, int64 value);
+  IntVar* MakeIsLessOrEqualCstVar(IntExpr* const var, int64_t value);
   /// status var of (left <= right)
   IntVar* MakeIsLessOrEqualVar(IntExpr* const left, IntExpr* const right);
   /// b == (left <= right)
@@ -1254,15 +1258,15 @@ class Solver {
   /// left <= right
   Constraint* MakeLessOrEqual(IntExpr* const left, IntExpr* const right);
   /// expr <= value
-  Constraint* MakeLessOrEqual(IntExpr* const expr, int64 value);
+  Constraint* MakeLessOrEqual(IntExpr* const expr, int64_t value);
   /// expr <= value
   Constraint* MakeLessOrEqual(IntExpr* const expr, int value);
 
   /// boolvar == (var >= value)
-  Constraint* MakeIsGreaterOrEqualCstCt(IntExpr* const var, int64 value,
+  Constraint* MakeIsGreaterOrEqualCstCt(IntExpr* const var, int64_t value,
                                         IntVar* const boolvar);
   /// status var of (var >= value)
-  IntVar* MakeIsGreaterOrEqualCstVar(IntExpr* const var, int64 value);
+  IntVar* MakeIsGreaterOrEqualCstVar(IntExpr* const var, int64_t value);
   /// status var of (left >= right)
   IntVar* MakeIsGreaterOrEqualVar(IntExpr* const left, IntExpr* const right);
   /// b == (left >= right)
@@ -1271,14 +1275,14 @@ class Solver {
   /// left >= right
   Constraint* MakeGreaterOrEqual(IntExpr* const left, IntExpr* const right);
   /// expr >= value
-  Constraint* MakeGreaterOrEqual(IntExpr* const expr, int64 value);
+  Constraint* MakeGreaterOrEqual(IntExpr* const expr, int64_t value);
   /// expr >= value
   Constraint* MakeGreaterOrEqual(IntExpr* const expr, int value);
 
   /// b == (v > c)
-  Constraint* MakeIsGreaterCstCt(IntExpr* const v, int64 c, IntVar* const b);
+  Constraint* MakeIsGreaterCstCt(IntExpr* const v, int64_t c, IntVar* const b);
   /// status var of (var > value)
-  IntVar* MakeIsGreaterCstVar(IntExpr* const var, int64 value);
+  IntVar* MakeIsGreaterCstVar(IntExpr* const var, int64_t value);
   /// status var of (left > right)
   IntVar* MakeIsGreaterVar(IntExpr* const left, IntExpr* const right);
   /// b == (left > right)
@@ -1287,14 +1291,14 @@ class Solver {
   /// left > right
   Constraint* MakeGreater(IntExpr* const left, IntExpr* const right);
   /// expr > value
-  Constraint* MakeGreater(IntExpr* const expr, int64 value);
+  Constraint* MakeGreater(IntExpr* const expr, int64_t value);
   /// expr > value
   Constraint* MakeGreater(IntExpr* const expr, int value);
 
   /// b == (v < c)
-  Constraint* MakeIsLessCstCt(IntExpr* const v, int64 c, IntVar* const b);
+  Constraint* MakeIsLessCstCt(IntExpr* const v, int64_t c, IntVar* const b);
   /// status var of (var < value)
-  IntVar* MakeIsLessCstVar(IntExpr* const var, int64 value);
+  IntVar* MakeIsLessCstVar(IntExpr* const var, int64_t value);
   /// status var of (left < right)
   IntVar* MakeIsLessVar(IntExpr* const left, IntExpr* const right);
   /// b == (left < right)
@@ -1303,55 +1307,55 @@ class Solver {
   /// left < right
   Constraint* MakeLess(IntExpr* const left, IntExpr* const right);
   /// expr < value
-  Constraint* MakeLess(IntExpr* const expr, int64 value);
+  Constraint* MakeLess(IntExpr* const expr, int64_t value);
   /// expr < value
   Constraint* MakeLess(IntExpr* const expr, int value);
 
   /// Variation on arrays.
-  Constraint* MakeSumLessOrEqual(const std::vector<IntVar*>& vars, int64 cst);
+  Constraint* MakeSumLessOrEqual(const std::vector<IntVar*>& vars, int64_t cst);
   Constraint* MakeSumGreaterOrEqual(const std::vector<IntVar*>& vars,
-                                    int64 cst);
-  Constraint* MakeSumEquality(const std::vector<IntVar*>& vars, int64 cst);
+                                    int64_t cst);
+  Constraint* MakeSumEquality(const std::vector<IntVar*>& vars, int64_t cst);
   Constraint* MakeSumEquality(const std::vector<IntVar*>& vars,
                               IntVar* const var);
   Constraint* MakeScalProdEquality(const std::vector<IntVar*>& vars,
-                                   const std::vector<int64>& coefficients,
-                                   int64 cst);
+                                   const std::vector<int64_t>& coefficients,
+                                   int64_t cst);
   Constraint* MakeScalProdEquality(const std::vector<IntVar*>& vars,
                                    const std::vector<int>& coefficients,
-                                   int64 cst);
+                                   int64_t cst);
   Constraint* MakeScalProdEquality(const std::vector<IntVar*>& vars,
-                                   const std::vector<int64>& coefficients,
+                                   const std::vector<int64_t>& coefficients,
                                    IntVar* const target);
   Constraint* MakeScalProdEquality(const std::vector<IntVar*>& vars,
                                    const std::vector<int>& coefficients,
                                    IntVar* const target);
   Constraint* MakeScalProdGreaterOrEqual(const std::vector<IntVar*>& vars,
-                                         const std::vector<int64>& coeffs,
-                                         int64 cst);
+                                         const std::vector<int64_t>& coeffs,
+                                         int64_t cst);
   Constraint* MakeScalProdGreaterOrEqual(const std::vector<IntVar*>& vars,
                                          const std::vector<int>& coeffs,
-                                         int64 cst);
+                                         int64_t cst);
   Constraint* MakeScalProdLessOrEqual(const std::vector<IntVar*>& vars,
-                                      const std::vector<int64>& coefficients,
-                                      int64 cst);
+                                      const std::vector<int64_t>& coefficients,
+                                      int64_t cst);
   Constraint* MakeScalProdLessOrEqual(const std::vector<IntVar*>& vars,
                                       const std::vector<int>& coefficients,
-                                      int64 cst);
+                                      int64_t cst);
 
   Constraint* MakeMinEquality(const std::vector<IntVar*>& vars,
                               IntVar* const min_var);
   Constraint* MakeMaxEquality(const std::vector<IntVar*>& vars,
                               IntVar* const max_var);
 
-  Constraint* MakeElementEquality(const std::vector<int64>& vals,
+  Constraint* MakeElementEquality(const std::vector<int64_t>& vals,
                                   IntVar* const index, IntVar* const target);
   Constraint* MakeElementEquality(const std::vector<int>& vals,
                                   IntVar* const index, IntVar* const target);
   Constraint* MakeElementEquality(const std::vector<IntVar*>& vars,
                                   IntVar* const index, IntVar* const target);
   Constraint* MakeElementEquality(const std::vector<IntVar*>& vars,
-                                  IntVar* const index, int64 target);
+                                  IntVar* const index, int64_t target);
   /// Creates the constraint abs(var) == abs_var.
   Constraint* MakeAbsEquality(IntVar* const var, IntVar* const abs_var);
   /// This constraint is a special case of the element constraint with
@@ -1359,7 +1363,7 @@ class Solver {
   /// different and the index variable is constrained such that
   /// vars[index] == target.
   Constraint* MakeIndexOfConstraint(const std::vector<IntVar*>& vars,
-                                    IntVar* const index, int64 target);
+                                    IntVar* const index, int64_t target);
 
   /// This method is a specialized case of the MakeConstraintDemon
   /// method to call the InitiatePropagate of the constraint 'ct'.
@@ -1378,36 +1382,36 @@ class Solver {
   // ----- Between and related constraints -----
 
   /// (l <= expr <= u)
-  Constraint* MakeBetweenCt(IntExpr* const expr, int64 l, int64 u);
+  Constraint* MakeBetweenCt(IntExpr* const expr, int64_t l, int64_t u);
 
   /// (expr < l || expr > u)
   /// This constraint is lazy as it will not make holes in the domain of
   /// variables. It will propagate only when expr->Min() >= l
   /// or expr->Max() <= u.
-  Constraint* MakeNotBetweenCt(IntExpr* const expr, int64 l, int64 u);
+  Constraint* MakeNotBetweenCt(IntExpr* const expr, int64_t l, int64_t u);
 
   /// b == (l <= expr <= u)
-  Constraint* MakeIsBetweenCt(IntExpr* const expr, int64 l, int64 u,
+  Constraint* MakeIsBetweenCt(IntExpr* const expr, int64_t l, int64_t u,
                               IntVar* const b);
-  IntVar* MakeIsBetweenVar(IntExpr* const v, int64 l, int64 u);
+  IntVar* MakeIsBetweenVar(IntExpr* const v, int64_t l, int64_t u);
 
   // ----- Member and related constraints -----
 
   /// expr in set. Propagation is lazy, i.e. this constraint does not
   /// creates holes in the domain of the variable.
   Constraint* MakeMemberCt(IntExpr* const expr,
-                           const std::vector<int64>& values);
+                           const std::vector<int64_t>& values);
   Constraint* MakeMemberCt(IntExpr* const expr, const std::vector<int>& values);
 
   /// expr not in set.
   Constraint* MakeNotMemberCt(IntExpr* const expr,
-                              const std::vector<int64>& values);
+                              const std::vector<int64_t>& values);
   Constraint* MakeNotMemberCt(IntExpr* const expr,
                               const std::vector<int>& values);
 
   /// expr should not be in the list of forbidden intervals [start[i]..end[i]].
-  Constraint* MakeNotMemberCt(IntExpr* const expr, std::vector<int64> starts,
-                              std::vector<int64> ends);
+  Constraint* MakeNotMemberCt(IntExpr* const expr, std::vector<int64_t> starts,
+                              std::vector<int64_t> ends);
   /// expr should not be in the list of forbidden intervals [start[i]..end[i]].
   Constraint* MakeNotMemberCt(IntExpr* const expr, std::vector<int> starts,
                               std::vector<int> ends);
@@ -1419,28 +1423,28 @@ class Solver {
 
   /// boolvar == (expr in set)
   Constraint* MakeIsMemberCt(IntExpr* const expr,
-                             const std::vector<int64>& values,
+                             const std::vector<int64_t>& values,
                              IntVar* const boolvar);
   Constraint* MakeIsMemberCt(IntExpr* const expr,
                              const std::vector<int>& values,
                              IntVar* const boolvar);
   IntVar* MakeIsMemberVar(IntExpr* const expr,
-                          const std::vector<int64>& values);
+                          const std::vector<int64_t>& values);
   IntVar* MakeIsMemberVar(IntExpr* const expr, const std::vector<int>& values);
 
   /// |{i | vars[i] == value}| <= max_count
-  Constraint* MakeAtMost(std::vector<IntVar*> vars, int64 value,
-                         int64 max_count);
+  Constraint* MakeAtMost(std::vector<IntVar*> vars, int64_t value,
+                         int64_t max_count);
   /// |{i | vars[i] == value}| == max_count
-  Constraint* MakeCount(const std::vector<IntVar*>& vars, int64 value,
-                        int64 max_count);
+  Constraint* MakeCount(const std::vector<IntVar*>& vars, int64_t value,
+                        int64_t max_count);
   /// |{i | vars[i] == value}| == max_count
-  Constraint* MakeCount(const std::vector<IntVar*>& vars, int64 value,
+  Constraint* MakeCount(const std::vector<IntVar*>& vars, int64_t value,
                         IntVar* const max_count);
 
   /// Aggregated version of count:  |{i | v[i] == values[j]}| == cards[j]
   Constraint* MakeDistribute(const std::vector<IntVar*>& vars,
-                             const std::vector<int64>& values,
+                             const std::vector<int64_t>& values,
                              const std::vector<IntVar*>& cards);
   /// Aggregated version of count:  |{i | v[i] == values[j]}| == cards[j]
   Constraint* MakeDistribute(const std::vector<IntVar*>& vars,
@@ -1451,14 +1455,14 @@ class Solver {
                              const std::vector<IntVar*>& cards);
   /// Aggregated version of count with bounded cardinalities:
   /// forall j in 0 .. card_size - 1: card_min <= |{i | v[i] == j}| <= card_max
-  Constraint* MakeDistribute(const std::vector<IntVar*>& vars, int64 card_min,
-                             int64 card_max, int64 card_size);
+  Constraint* MakeDistribute(const std::vector<IntVar*>& vars, int64_t card_min,
+                             int64_t card_max, int64_t card_size);
   /// Aggregated version of count with bounded cardinalities:
   /// forall j in 0 .. card_size - 1:
   ///    card_min[j] <= |{i | v[i] == j}| <= card_max[j]
   Constraint* MakeDistribute(const std::vector<IntVar*>& vars,
-                             const std::vector<int64>& card_min,
-                             const std::vector<int64>& card_max);
+                             const std::vector<int64_t>& card_min,
+                             const std::vector<int64_t>& card_max);
   /// Aggregated version of count with bounded cardinalities:
   /// forall j in 0 .. card_size - 1:
   ///    card_min[j] <= |{i | v[i] == j}| <= card_max[j]
@@ -1469,9 +1473,9 @@ class Solver {
   /// forall j in 0 .. card_size - 1:
   ///    card_min[j] <= |{i | v[i] == values[j]}| <= card_max[j]
   Constraint* MakeDistribute(const std::vector<IntVar*>& vars,
-                             const std::vector<int64>& values,
-                             const std::vector<int64>& card_min,
-                             const std::vector<int64>& card_max);
+                             const std::vector<int64_t>& values,
+                             const std::vector<int64_t>& card_min,
+                             const std::vector<int64_t>& card_max);
   /// Aggregated version of count with bounded cardinalities:
   /// forall j in 0 .. card_size - 1:
   ///    card_min[j] <= |{i | v[i] == values[j]}| <= card_max[j]
@@ -1485,7 +1489,7 @@ class Solver {
   /// sum_i vars[i] == total_sum
   /// n = #vars
   Constraint* MakeDeviation(const std::vector<IntVar*>& vars,
-                            IntVar* const deviation_var, int64 total_sum);
+                            IntVar* const deviation_var, int64_t total_sum);
 
   /// All variables are pairwise different. This corresponds to the
   /// stronger version of the propagation algorithm.
@@ -1500,7 +1504,7 @@ class Solver {
   /// All variables are pairwise different, unless they are assigned to
   /// the escape value.
   Constraint* MakeAllDifferentExcept(const std::vector<IntVar*>& vars,
-                                     int64 escape_value);
+                                     int64_t escape_value);
   // TODO(user): Do we need a version with an array of escape values.
 
   /// Creates a constraint binding the arrays of variables "vars" and
@@ -1565,7 +1569,7 @@ class Solver {
   /// intersect with the set of values in the second vector.
   Constraint* MakeNullIntersectExcept(const std::vector<IntVar*>& first_vars,
                                       const std::vector<IntVar*>& second_vars,
-                                      int64 escape_value);
+                                      int64_t escape_value);
 
   // TODO(user): Implement MakeAllNullIntersect taking an array of
   // variable vectors.
@@ -1635,8 +1639,8 @@ class Solver {
   // TODO(user): Only does checking on WhenBound events on next variables.
   /// Check whether more propagation is needed.
   Constraint* MakePathConnected(std::vector<IntVar*> nexts,
-                                std::vector<int64> sources,
-                                std::vector<int64> sinks,
+                                std::vector<int64_t> sources,
+                                std::vector<int64_t> sinks,
                                 std::vector<IntVar*> status);
 #ifndef SWIG
   /// Contraint enforcing, for each pair (i,j) in precedences, i to be before j
@@ -1665,7 +1669,7 @@ class Solver {
   Constraint* MakePathTransitPrecedenceConstraint(
       std::vector<IntVar*> nexts, std::vector<IntVar*> transits,
       const std::vector<std::pair<int, int>>& precedences);
-#endif
+#endif  // !SWIG
   /// This constraint maps the domain of 'var' onto the array of
   /// variables 'actives'. That is
   /// for all i in [0 .. size - 1]: actives[i] == 1 <=> var->Contains(i);
@@ -1686,10 +1690,9 @@ class Solver {
   /// The initial state is given, and the set of accepted states is decribed
   /// by 'final_states'. These states are hidden inside the constraint.
   /// Only the transitions (i.e. the variables) are visible.
-  Constraint* MakeTransitionConstraint(const std::vector<IntVar*>& vars,
-                                       const IntTupleSet& transition_table,
-                                       int64 initial_state,
-                                       const std::vector<int64>& final_states);
+  Constraint* MakeTransitionConstraint(
+      const std::vector<IntVar*>& vars, const IntTupleSet& transition_table,
+      int64_t initial_state, const std::vector<int64_t>& final_states);
 
   /// This constraint create a finite automaton that will check the
   /// sequence of variables vars. It uses a transition table called
@@ -1700,14 +1703,14 @@ class Solver {
   /// Only the transitions (i.e. the variables) are visible.
   Constraint* MakeTransitionConstraint(const std::vector<IntVar*>& vars,
                                        const IntTupleSet& transition_table,
-                                       int64 initial_state,
+                                       int64_t initial_state,
                                        const std::vector<int>& final_states);
 
 #if defined(SWIGPYTHON)
   /// Compatibility layer for Python API.
   Constraint* MakeAllowedAssignments(
       const std::vector<IntVar*>& vars,
-      const std::vector<std::vector<int64>>& raw_tuples) {
+      const std::vector<std::vector<int64_t> /*keep for swig*/>& raw_tuples) {
     IntTupleSet tuples(vars.size());
     tuples.InsertAll(raw_tuples);
     return MakeAllowedAssignments(vars, tuples);
@@ -1715,8 +1718,9 @@ class Solver {
 
   Constraint* MakeTransitionConstraint(
       const std::vector<IntVar*>& vars,
-      const std::vector<std::vector<int64>>& raw_transitions,
-      int64 initial_state, const std::vector<int>& final_states) {
+      const std::vector<std::vector<int64_t> /*keep for swig*/>&
+          raw_transitions,
+      int64_t initial_state, const std::vector<int>& final_states) {
     IntTupleSet transitions(3);
     transitions.InsertAll(raw_transitions);
     return MakeTransitionConstraint(vars, transitions, initial_state,
@@ -1737,7 +1741,7 @@ class Solver {
       const std::vector<IntVar*>& x_size, const std::vector<IntVar*>& y_size);
   Constraint* MakeNonOverlappingBoxesConstraint(
       const std::vector<IntVar*>& x_vars, const std::vector<IntVar*>& y_vars,
-      const std::vector<int64>& x_size, const std::vector<int64>& y_size);
+      const std::vector<int64_t>& x_size, const std::vector<int64_t>& y_size);
   Constraint* MakeNonOverlappingBoxesConstraint(
       const std::vector<IntVar*>& x_vars, const std::vector<IntVar*>& y_vars,
       const std::vector<int>& x_size, const std::vector<int>& y_size);
@@ -1755,7 +1759,7 @@ class Solver {
       const std::vector<IntVar*>& x_size, const std::vector<IntVar*>& y_size);
   Constraint* MakeNonOverlappingNonStrictBoxesConstraint(
       const std::vector<IntVar*>& x_vars, const std::vector<IntVar*>& y_vars,
-      const std::vector<int64>& x_size, const std::vector<int64>& y_size);
+      const std::vector<int64_t>& x_size, const std::vector<int64_t>& y_size);
   Constraint* MakeNonOverlappingNonStrictBoxesConstraint(
       const std::vector<IntVar*>& x_vars, const std::vector<IntVar*>& y_vars,
       const std::vector<int>& x_size, const std::vector<int>& y_size);
@@ -1771,41 +1775,42 @@ class Solver {
   /// be greater than 0. If optional is true, then the interval can be
   /// performed or unperformed. If optional is false, then the interval
   /// is always performed.
-  IntervalVar* MakeFixedDurationIntervalVar(int64 start_min, int64 start_max,
-                                            int64 duration, bool optional,
+  IntervalVar* MakeFixedDurationIntervalVar(int64_t start_min,
+                                            int64_t start_max, int64_t duration,
+                                            bool optional,
                                             const std::string& name);
 
   /// This method fills the vector with 'count' interval variables built with
   /// the corresponding parameters.
   void MakeFixedDurationIntervalVarArray(
-      int count, int64 start_min, int64 start_max, int64 duration,
+      int count, int64_t start_min, int64_t start_max, int64_t duration,
       bool optional, const std::string& name,
       std::vector<IntervalVar*>* const array);
 
   /// Creates a performed interval var with a fixed duration. The duration must
   /// be greater than 0.
   IntervalVar* MakeFixedDurationIntervalVar(IntVar* const start_variable,
-                                            int64 duration,
+                                            int64_t duration,
                                             const std::string& name);
 
   /// Creates an interval var with a fixed duration, and performed_variable.
   /// The duration must be greater than 0.
   IntervalVar* MakeFixedDurationIntervalVar(IntVar* const start_variable,
-                                            int64 duration,
+                                            int64_t duration,
                                             IntVar* const performed_variable,
                                             const std::string& name);
 
   /// This method fills the vector with 'count' interval var built with
   /// the corresponding start variables.
   void MakeFixedDurationIntervalVarArray(
-      const std::vector<IntVar*>& start_variables, int64 duration,
+      const std::vector<IntVar*>& start_variables, int64_t duration,
       const std::string& name, std::vector<IntervalVar*>* const array);
 
   /// This method fills the vector with interval variables built with
   /// the corresponding start variables.
   void MakeFixedDurationIntervalVarArray(
       const std::vector<IntVar*>& start_variables,
-      const std::vector<int64>& durations, const std::string& name,
+      const std::vector<int64_t>& durations, const std::string& name,
       std::vector<IntervalVar*>* const array);
   /// This method fills the vector with interval variables built with
   /// the corresponding start variables.
@@ -1818,7 +1823,7 @@ class Solver {
   /// the corresponding start and performed variables.
   void MakeFixedDurationIntervalVarArray(
       const std::vector<IntVar*>& start_variables,
-      const std::vector<int64>& durations,
+      const std::vector<int64_t>& durations,
       const std::vector<IntVar*>& performed_variables, const std::string& name,
       std::vector<IntervalVar*>* const array);
 
@@ -1831,21 +1836,21 @@ class Solver {
       std::vector<IntervalVar*>* const array);
 
   /// Creates a fixed and performed interval.
-  IntervalVar* MakeFixedInterval(int64 start, int64 duration,
+  IntervalVar* MakeFixedInterval(int64_t start, int64_t duration,
                                  const std::string& name);
 
   /// Creates an interval var by specifying the bounds on start,
   /// duration, and end.
-  IntervalVar* MakeIntervalVar(int64 start_min, int64 start_max,
-                               int64 duration_min, int64 duration_max,
-                               int64 end_min, int64 end_max, bool optional,
+  IntervalVar* MakeIntervalVar(int64_t start_min, int64_t start_max,
+                               int64_t duration_min, int64_t duration_max,
+                               int64_t end_min, int64_t end_max, bool optional,
                                const std::string& name);
 
   /// This method fills the vector with 'count' interval var built with
   /// the corresponding parameters.
-  void MakeIntervalVarArray(int count, int64 start_min, int64 start_max,
-                            int64 duration_min, int64 duration_max,
-                            int64 end_min, int64 end_max, bool optional,
+  void MakeIntervalVarArray(int count, int64_t start_min, int64_t start_max,
+                            int64_t duration_min, int64_t duration_max,
+                            int64_t end_min, int64_t end_max, bool optional,
                             const std::string& name,
                             std::vector<IntervalVar*>* const array);
 
@@ -1858,28 +1863,28 @@ class Solver {
   /// offset. The performed status is also in sync with the performed
   /// status of the given interval variable.
   IntervalVar* MakeFixedDurationStartSyncedOnStartIntervalVar(
-      IntervalVar* const interval_var, int64 duration, int64 offset);
+      IntervalVar* const interval_var, int64_t duration, int64_t offset);
 
   /// Creates an interval var with a fixed duration whose start is
   /// synchronized with the end of another interval, with a given
   /// offset. The performed status is also in sync with the performed
   /// status of the given interval variable.
   IntervalVar* MakeFixedDurationStartSyncedOnEndIntervalVar(
-      IntervalVar* const interval_var, int64 duration, int64 offset);
+      IntervalVar* const interval_var, int64_t duration, int64_t offset);
 
   /// Creates an interval var with a fixed duration whose end is
   /// synchronized with the start of another interval, with a given
   /// offset. The performed status is also in sync with the performed
   /// status of the given interval variable.
   IntervalVar* MakeFixedDurationEndSyncedOnStartIntervalVar(
-      IntervalVar* const interval_var, int64 duration, int64 offset);
+      IntervalVar* const interval_var, int64_t duration, int64_t offset);
 
   /// Creates an interval var with a fixed duration whose end is
   /// synchronized with the end of another interval, with a given
   /// offset. The performed status is also in sync with the performed
   /// status of the given interval variable.
   IntervalVar* MakeFixedDurationEndSyncedOnEndIntervalVar(
-      IntervalVar* const interval_var, int64 duration, int64 offset);
+      IntervalVar* const interval_var, int64_t duration, int64_t offset);
 
   /// Creates and returns an interval variable that wraps around the given one,
   /// relaxing the min start and end. Relaxing means making unbounded when
@@ -1922,7 +1927,7 @@ class Solver {
   /// This method creates a relation between an interval var and a
   /// date.
   Constraint* MakeIntervalVarRelation(IntervalVar* const t,
-                                      UnaryIntervalRelation r, int64 d);
+                                      UnaryIntervalRelation r, int64_t d);
 
   /// This method creates a relation between two interval vars.
   Constraint* MakeIntervalVarRelation(IntervalVar* const t1,
@@ -1936,7 +1941,7 @@ class Solver {
   Constraint* MakeIntervalVarRelationWithDelay(IntervalVar* const t1,
                                                BinaryIntervalRelation r,
                                                IntervalVar* const t2,
-                                               int64 delay);
+                                               int64_t delay);
 
   /// This constraint implements a temporal disjunction between two
   /// interval vars t1 and t2. 'alt' indicates which alternative was
@@ -1970,7 +1975,20 @@ class Solver {
   /// supported, and the corresponding intervals are filtered out, as they
   /// neither impact nor are impacted by this constraint.
   Constraint* MakeCumulative(const std::vector<IntervalVar*>& intervals,
-                             const std::vector<int64>& demands, int64 capacity,
+                             const std::vector<int64_t>& demands,
+                             int64_t capacity, const std::string& name);
+
+  /// This constraint forces that, for any integer t, the sum of the demands
+  /// corresponding to an interval containing t does not exceed the given
+  /// capacity.
+  ///
+  /// Intervals and demands should be vectors of equal size.
+  ///
+  /// Demands should only contain non-negative values. Zero values are
+  /// supported, and the corresponding intervals are filtered out, as they
+  /// neither impact nor are impacted by this constraint.
+  Constraint* MakeCumulative(const std::vector<IntervalVar*>& intervals,
+                             const std::vector<int>& demands, int64_t capacity,
                              const std::string& name);
 
   /// This constraint forces that, for any integer t, the sum of the demands
@@ -1983,20 +2001,7 @@ class Solver {
   /// supported, and the corresponding intervals are filtered out, as they
   /// neither impact nor are impacted by this constraint.
   Constraint* MakeCumulative(const std::vector<IntervalVar*>& intervals,
-                             const std::vector<int>& demands, int64 capacity,
-                             const std::string& name);
-
-  /// This constraint forces that, for any integer t, the sum of the demands
-  /// corresponding to an interval containing t does not exceed the given
-  /// capacity.
-  ///
-  /// Intervals and demands should be vectors of equal size.
-  ///
-  /// Demands should only contain non-negative values. Zero values are
-  /// supported, and the corresponding intervals are filtered out, as they
-  /// neither impact nor are impacted by this constraint.
-  Constraint* MakeCumulative(const std::vector<IntervalVar*>& intervals,
-                             const std::vector<int64>& demands,
+                             const std::vector<int64_t>& demands,
                              IntVar* const capacity, const std::string& name);
 
   /// This constraint enforces that, for any integer t, the sum of the demands
@@ -2021,7 +2026,7 @@ class Solver {
   /// Demands should be positive.
   Constraint* MakeCumulative(const std::vector<IntervalVar*>& intervals,
                              const std::vector<IntVar*>& demands,
-                             int64 capacity, const std::string& name);
+                             int64_t capacity, const std::string& name);
 
   /// This constraint enforces that, for any integer t, the sum of demands
   /// corresponding to an interval containing t does not exceed the given
@@ -2094,47 +2099,47 @@ class Solver {
   SolutionCollector* MakeAllSolutionCollector();
 
   /// Creates a minimization objective.
-  OptimizeVar* MakeMinimize(IntVar* const v, int64 step);
+  OptimizeVar* MakeMinimize(IntVar* const v, int64_t step);
 
   /// Creates a maximization objective.
-  OptimizeVar* MakeMaximize(IntVar* const v, int64 step);
+  OptimizeVar* MakeMaximize(IntVar* const v, int64_t step);
 
   /// Creates a objective with a given sense (true = maximization).
-  OptimizeVar* MakeOptimize(bool maximize, IntVar* const v, int64 step);
+  OptimizeVar* MakeOptimize(bool maximize, IntVar* const v, int64_t step);
 
   /// Creates a minimization weighted objective. The actual objective is
   /// scalar_prod(sub_objectives, weights).
   OptimizeVar* MakeWeightedMinimize(const std::vector<IntVar*>& sub_objectives,
-                                    const std::vector<int64>& weights,
-                                    int64 step);
+                                    const std::vector<int64_t>& weights,
+                                    int64_t step);
 
   /// Creates a minimization weighted objective. The actual objective is
   /// scalar_prod(sub_objectives, weights).
   OptimizeVar* MakeWeightedMinimize(const std::vector<IntVar*>& sub_objectives,
                                     const std::vector<int>& weights,
-                                    int64 step);
+                                    int64_t step);
 
   /// Creates a maximization weigthed objective.
   OptimizeVar* MakeWeightedMaximize(const std::vector<IntVar*>& sub_objectives,
-                                    const std::vector<int64>& weights,
-                                    int64 step);
+                                    const std::vector<int64_t>& weights,
+                                    int64_t step);
 
   /// Creates a maximization weigthed objective.
   OptimizeVar* MakeWeightedMaximize(const std::vector<IntVar*>& sub_objectives,
                                     const std::vector<int>& weights,
-                                    int64 step);
+                                    int64_t step);
 
   /// Creates a weighted objective with a given sense (true = maximization).
   OptimizeVar* MakeWeightedOptimize(bool maximize,
                                     const std::vector<IntVar*>& sub_objectives,
-                                    const std::vector<int64>& weights,
-                                    int64 step);
+                                    const std::vector<int64_t>& weights,
+                                    int64_t step);
 
   /// Creates a weighted objective with a given sense (true = maximization).
   OptimizeVar* MakeWeightedOptimize(bool maximize,
                                     const std::vector<IntVar*>& sub_objectives,
                                     const std::vector<int>& weights,
-                                    int64 step);
+                                    int64_t step);
 
   /// MetaHeuristics which try to get the search out of local optima.
 
@@ -2154,33 +2159,34 @@ class Solver {
   /// of "tabu" violations which is tolerated; a factor of 1 means no violations
   /// allowed; a factor of 0 means all violations are allowed.
 
-  SearchMonitor* MakeTabuSearch(bool maximize, IntVar* const v, int64 step,
+  SearchMonitor* MakeTabuSearch(bool maximize, IntVar* const v, int64_t step,
                                 const std::vector<IntVar*>& vars,
-                                int64 keep_tenure, int64 forbid_tenure,
+                                int64_t keep_tenure, int64_t forbid_tenure,
                                 double tabu_factor);
 
   /// Creates a Tabu Search based on the vars |vars|.
   /// A solution is "tabu" if all the vars in |vars| keep their value.
   SearchMonitor* MakeGenericTabuSearch(bool maximize, IntVar* const v,
-                                       int64 step,
+                                       int64_t step,
                                        const std::vector<IntVar*>& tabu_vars,
-                                       int64 forbid_tenure);
+                                       int64_t forbid_tenure);
 
   /// Creates a Simulated Annealing monitor.
   // TODO(user): document behavior
   SearchMonitor* MakeSimulatedAnnealing(bool maximize, IntVar* const v,
-                                        int64 step, int64 initial_temperature);
+                                        int64_t step,
+                                        int64_t initial_temperature);
 
   /// Creates a Guided Local Search monitor.
   /// Description here: http://en.wikipedia.org/wiki/Guided_Local_Search
   SearchMonitor* MakeGuidedLocalSearch(bool maximize, IntVar* const objective,
                                        IndexEvaluator2 objective_function,
-                                       int64 step,
+                                       int64_t step,
                                        const std::vector<IntVar*>& vars,
                                        double penalty_factor);
   SearchMonitor* MakeGuidedLocalSearch(
       bool maximize, IntVar* const objective,
-      IndexEvaluator3 objective_function, int64 step,
+      IndexEvaluator3 objective_function, int64_t step,
       const std::vector<IntVar*>& vars,
       const std::vector<IntVar*>& secondary_vars, double penalty_factor);
 
@@ -2193,46 +2199,64 @@ class Solver {
   /// failures.
   SearchMonitor* MakeConstantRestart(int frequency);
 
-  /// Creates a search limit that constrains the running time given in
-  /// milliseconds.
-  RegularLimit* MakeTimeLimit(int64 time_in_ms);
+  /// Creates a search limit that constrains the running time.
+  RegularLimit* MakeTimeLimit(absl::Duration time);
+#if !defined(SWIG)
+  ABSL_DEPRECATED("Use the version taking absl::Duration() as argument")
+#endif  // !defined(SWIG)
+  RegularLimit* MakeTimeLimit(int64_t time_in_ms) {
+    return MakeTimeLimit(time_in_ms == kint64max
+                             ? absl::InfiniteDuration()
+                             : absl::Milliseconds(time_in_ms));
+  }
 
   /// Creates a search limit that constrains the number of branches
   /// explored in the search tree.
-  RegularLimit* MakeBranchesLimit(int64 branches);
+  RegularLimit* MakeBranchesLimit(int64_t branches);
 
   /// Creates a search limit that constrains the number of failures
   /// that can happen when exploring the search tree.
-  RegularLimit* MakeFailuresLimit(int64 failures);
+  RegularLimit* MakeFailuresLimit(int64_t failures);
 
   /// Creates a search limit that constrains the number of solutions found
   /// during the search.
-  RegularLimit* MakeSolutionsLimit(int64 solutions);
+  RegularLimit* MakeSolutionsLimit(int64_t solutions);
 
   /// Limits the search with the 'time', 'branches', 'failures' and
-  /// 'solutions' limits.
-  RegularLimit* MakeLimit(int64 time, int64 branches, int64 failures,
-                          int64 solutions);
-  /// Version reducing calls to wall timer by estimating number of remaining
-  /// calls.
-  RegularLimit* MakeLimit(int64 time, int64 branches, int64 failures,
-                          int64 solutions, bool smart_time_check);
-  /// Creates a search limit which can either apply cumulatively or
-  /// search-by-search.
-  RegularLimit* MakeLimit(int64 time, int64 branches, int64 failures,
-                          int64 solutions, bool smart_time_check,
-                          bool cumulative);
+  /// 'solutions' limits. 'smart_time_check' reduces the calls to the wall
+  // timer by estimating the number of remaining calls, and 'cumulative' means
+  // that the limit applies cumulatively, instead of search-by-search.
+  RegularLimit* MakeLimit(absl::Duration time, int64_t branches,
+                          int64_t failures, int64_t solutions,
+                          bool smart_time_check = false,
+                          bool cumulative = false);
   /// Creates a search limit from its protobuf description
   RegularLimit* MakeLimit(const RegularLimitParameters& proto);
+
+#if !defined(SWIG)
+  ABSL_DEPRECATED("Use other MakeLimit() versions")
+#endif  // !defined(SWIG)
+  RegularLimit* MakeLimit(int64_t time, int64_t branches, int64_t failures,
+                          int64_t solutions, bool smart_time_check = false,
+                          bool cumulative = false);
 
   /// Creates a regular limit proto containing default values.
   RegularLimitParameters MakeDefaultRegularLimitParameters() const;
 
   /// Creates a search limit that is reached when either of the underlying limit
-  /// is reached. That is, the returned limit is more std::stringent than both
+  /// is reached. That is, the returned limit is more stringent than both
   /// argument limits.
   SearchLimit* MakeLimit(SearchLimit* const limit_1,
                          SearchLimit* const limit_2);
+
+  /// Limits the search based on the improvements of 'objective_var'. Stops the
+  /// search when the improvement rate gets lower than a threshold value. This
+  /// threshold value is computed based on the improvement rate during the first
+  /// phase of the search.
+  ImprovementSearchLimit* MakeImprovementLimit(
+      IntVar* objective_var, bool maximize, double objective_scaling_factor,
+      double objective_offset, double improvement_rate_coefficient,
+      int improvement_rate_solutions_distance);
 
   /// Callback-based search limit. Search stops when limiter returns true; if
   /// this happens at a leaf the corresponding solution will be rejected.
@@ -2281,8 +2305,12 @@ class Solver {
     double scaling_factor = 1.0;
     double offset = 0;
     /// SearchMonitors will display the result of display_callback at each new
-    /// solution found.
+    /// solution found and when the search finishes if
+    /// display_on_new_solutions_only is false.
     std::function<std::string()> display_callback;
+    /// To be used to protect from cases where display_callback assumes
+    /// variables are instantiated, which only happens in AtSolution().
+    bool display_on_new_solutions_only = true;
   };
   SearchMonitor* MakeSearchLog(SearchLogParameters parameters);
 
@@ -2320,15 +2348,16 @@ class Solver {
                                      SymmetryBreaker* const v4);
 
   /// Decisions.
-  Decision* MakeAssignVariableValue(IntVar* const var, int64 val);
-  Decision* MakeVariableLessOrEqualValue(IntVar* const var, int64 value);
-  Decision* MakeVariableGreaterOrEqualValue(IntVar* const var, int64 value);
-  Decision* MakeSplitVariableDomain(IntVar* const var, int64 val,
+  Decision* MakeAssignVariableValue(IntVar* const var, int64_t val);
+  Decision* MakeVariableLessOrEqualValue(IntVar* const var, int64_t value);
+  Decision* MakeVariableGreaterOrEqualValue(IntVar* const var, int64_t value);
+  Decision* MakeSplitVariableDomain(IntVar* const var, int64_t val,
                                     bool start_with_lower_half);
-  Decision* MakeAssignVariableValueOrFail(IntVar* const var, int64 value);
-  Decision* MakeAssignVariableValueOrDoNothing(IntVar* const var, int64 value);
+  Decision* MakeAssignVariableValueOrFail(IntVar* const var, int64_t value);
+  Decision* MakeAssignVariableValueOrDoNothing(IntVar* const var,
+                                               int64_t value);
   Decision* MakeAssignVariablesValues(const std::vector<IntVar*>& vars,
-                                      const std::vector<int64>& values);
+                                      const std::vector<int64_t>& values);
   Decision* MakeFailDecision();
   Decision* MakeDecision(Action apply, Action refute);
 
@@ -2428,16 +2457,16 @@ class Solver {
   /// its start to 'est'. On the Refute branch, it will just update the
   /// 'marker' to 'est' + 1. This decision is used in the
   /// INTERVAL_SET_TIMES_FORWARD strategy.
-  Decision* MakeScheduleOrPostpone(IntervalVar* const var, int64 est,
-                                   int64* const marker);
+  Decision* MakeScheduleOrPostpone(IntervalVar* const var, int64_t est,
+                                   int64_t* const marker);
 
   /// Returns a decision that tries to schedule a task at a given time.
   /// On the Apply branch, it will set that interval var as performed and set
   /// its end to 'est'. On the Refute branch, it will just update the
   /// 'marker' to 'est' - 1. This decision is used in the
   /// INTERVAL_SET_TIMES_BACKWARD strategy.
-  Decision* MakeScheduleOrExpedite(IntervalVar* const var, int64 est,
-                                   int64* const marker);
+  Decision* MakeScheduleOrExpedite(IntervalVar* const var, int64_t est,
+                                   int64_t* const marker);
 
   /// Returns a decision that tries to rank first the ith interval var
   /// in the sequence variable.
@@ -2514,29 +2543,32 @@ class Solver {
   /// to this solution, and return nullptr.
   DecisionBuilder* MakeNestedOptimize(DecisionBuilder* const db,
                                       Assignment* const solution, bool maximize,
-                                      int64 step);
+                                      int64_t step);
   DecisionBuilder* MakeNestedOptimize(DecisionBuilder* const db,
                                       Assignment* const solution, bool maximize,
-                                      int64 step,
+                                      int64_t step,
                                       SearchMonitor* const monitor1);
   DecisionBuilder* MakeNestedOptimize(DecisionBuilder* const db,
                                       Assignment* const solution, bool maximize,
-                                      int64 step, SearchMonitor* const monitor1,
+                                      int64_t step,
+                                      SearchMonitor* const monitor1,
                                       SearchMonitor* const monitor2);
   DecisionBuilder* MakeNestedOptimize(DecisionBuilder* const db,
                                       Assignment* const solution, bool maximize,
-                                      int64 step, SearchMonitor* const monitor1,
+                                      int64_t step,
+                                      SearchMonitor* const monitor1,
                                       SearchMonitor* const monitor2,
                                       SearchMonitor* const monitor3);
   DecisionBuilder* MakeNestedOptimize(DecisionBuilder* const db,
                                       Assignment* const solution, bool maximize,
-                                      int64 step, SearchMonitor* const monitor1,
+                                      int64_t step,
+                                      SearchMonitor* const monitor1,
                                       SearchMonitor* const monitor2,
                                       SearchMonitor* const monitor3,
                                       SearchMonitor* const monitor4);
   DecisionBuilder* MakeNestedOptimize(
       DecisionBuilder* const db, Assignment* const solution, bool maximize,
-      int64 step, const std::vector<SearchMonitor*>& monitors);
+      int64_t step, const std::vector<SearchMonitor*>& monitors);
 
   /// Returns a DecisionBuilder which restores an Assignment
   /// (calls void Assignment::Restore())
@@ -2573,7 +2605,7 @@ class Solver {
                                              int number_of_variables);
   LocalSearchOperator* MakeRandomLnsOperator(const std::vector<IntVar*>& vars,
                                              int number_of_variables,
-                                             int32 seed);
+                                             int32_t seed);
 
   /// Creates a local search operator that tries to move the assignment of some
   /// variables toward a target. The target is given as an Assignment. This
@@ -2590,7 +2622,7 @@ class Solver {
   /// variable that belongs to the given vector is set to its target value.
   LocalSearchOperator* MakeMoveTowardTargetOperator(
       const std::vector<IntVar*>& variables,
-      const std::vector<int64>& target_values);
+      const std::vector<int64_t>& target_values);
 
   /// Creates a local search operator which concatenates a vector of operators.
   /// Each operator from the vector is called sequentially. By default, when a
@@ -2609,7 +2641,7 @@ class Solver {
   /// Example:
   ///
   ///  const int kPriorities = {10, 100, 10, 0};
-  ///  int64 Evaluate(int active_operator, int current_operator) {
+  ///  int64_t Evaluate(int active_operator, int current_operator) {
   ///    return kPriorities[current_operator];
   ///  }
   ///
@@ -2628,7 +2660,7 @@ class Solver {
       const std::vector<LocalSearchOperator*>& ops, bool restart);
   LocalSearchOperator* ConcatenateOperators(
       const std::vector<LocalSearchOperator*>& ops,
-      std::function<int64(int, int)> evaluator);
+      std::function<int64_t(int, int)> evaluator);
   /// Randomized version of local search concatenator; calls a random operator
   /// at each call to MakeNextNeighbor().
   LocalSearchOperator* RandomConcatenateOperators(
@@ -2638,7 +2670,18 @@ class Solver {
   /// at each call to MakeNextNeighbor(). The provided seed is used to
   /// initialize the random number generator.
   LocalSearchOperator* RandomConcatenateOperators(
-      const std::vector<LocalSearchOperator*>& ops, int32 seed);
+      const std::vector<LocalSearchOperator*>& ops, int32_t seed);
+
+  /// Creates a local search operator which concatenates a vector of operators.
+  /// Uses Multi-Armed Bandit approach for choosing the next operator to use.
+  /// Sorts operators based on Upper Confidence Bound Algorithm which evaluates
+  /// each operator as sum of average improvement and exploration function.
+  ///
+  /// Updates the order of operators when accepts a neighbor with objective
+  /// improvement.
+  LocalSearchOperator* MultiArmedBanditConcatenateOperators(
+      const std::vector<LocalSearchOperator*>& ops, double memory_coefficient,
+      double exploration_coefficient, bool maximize);
 
   /// Creates a local search operator that wraps another local search
   /// operator and limits the number of neighbors explored (i.e., calls
@@ -2646,7 +2689,7 @@ class Solver {
   /// to Start()). When this limit is reached, MakeNextNeighbor()
   /// returns false. The counter is cleared when Start() is called.
   LocalSearchOperator* MakeNeighborhoodLimit(LocalSearchOperator* const op,
-                                             int64 limit);
+                                             int64_t limit);
 
   /// Local Search decision builders factories.
   /// Local search is used to improve a given solution. This initial solution
@@ -2704,7 +2747,7 @@ class Solver {
   LocalSearchPhaseParameters* MakeLocalSearchPhaseParameters(
       IntVar* objective, LocalSearchOperator* const ls_operator,
       DecisionBuilder* const sub_decision_builder, RegularLimit* const limit,
-      const std::vector<LocalSearchFilter*>& filters);
+      LocalSearchFilterManager* filter_manager);
 
   LocalSearchPhaseParameters* MakeLocalSearchPhaseParameters(
       IntVar* objective, SolutionPool* const pool,
@@ -2718,7 +2761,7 @@ class Solver {
       IntVar* objective, SolutionPool* const pool,
       LocalSearchOperator* const ls_operator,
       DecisionBuilder* const sub_decision_builder, RegularLimit* const limit,
-      const std::vector<LocalSearchFilter*>& filters);
+      LocalSearchFilterManager* filter_manager);
 
   /// Local Search Filters
   LocalSearchFilter* MakeAcceptFilter();
@@ -2783,19 +2826,19 @@ class Solver {
   }
 
   /// Returns a random value between 0 and 'size' - 1;
-  int64 Rand64(int64 size) {
+  int64_t Rand64(int64_t size) {
     DCHECK_GT(size, 0);
-    return absl::Uniform<int64>(random_, 0, size);
+    return absl::Uniform<int64_t>(random_, 0, size);
   }
 
   /// Returns a random value between 0 and 'size' - 1;
-  int32 Rand32(int32 size) {
+  int32_t Rand32(int32_t size) {
     DCHECK_GT(size, 0);
-    return absl::Uniform<int32>(random_, 0, size);
+    return absl::Uniform<int32_t>(random_, 0, size);
   }
 
   /// Reseed the solver random generator.
-  void ReSeed(int32 seed) { random_.seed(seed); }
+  void ReSeed(int32_t seed) { random_.seed(seed); }
 
   /// Exports the profiling information in a human readable overview.
   /// The parameter profile_level used to create the solver must be
@@ -2803,9 +2846,15 @@ class Solver {
   void ExportProfilingOverview(const std::string& filename);
 
   /// Returns local search profiling information in a human readable format.
-  // TODO(user): Add a profiling protocol buffer and merge demon and local
-  /// search profiles.
+  // TODO(user): Merge demon and local search profiles.
   std::string LocalSearchProfile() const;
+
+#if !defined(SWIG)
+  /// Returns detailed cp search statistics.
+  ConstraintSolverStatistics GetConstraintSolverStatistics() const;
+  /// Returns detailed local search statistics.
+  LocalSearchStatistics GetLocalSearchStatistics() const;
+#endif  // !defined(SWIG)
 
   /// Returns true whether the current search has been
   /// created using a Solve() call instead of a NewSearch one. It
@@ -2889,7 +2938,7 @@ class Solver {
   /// that need storage and that may fail. See IntVar::SetValues() for
   /// instance. It is not locked; do not use in a multi-threaded or reentrant
   /// setup.
-  std::vector<int64> tmp_vector_;
+  std::vector<int64_t> tmp_vector_;
 
   friend class BaseIntExpr;
   friend class Constraint;
@@ -2921,7 +2970,8 @@ class Solver {
   /// constant.  In that case, it fills inner_expr and coefficient with
   /// these, and returns true. In the other case, it fills inner_expr
   /// with expr, coefficient with 1, and returns false.
-  bool IsProduct(IntExpr* const expr, IntExpr** inner_expr, int64* coefficient);
+  bool IsProduct(IntExpr* const expr, IntExpr** inner_expr,
+                 int64_t* coefficient);
 #endif  /// !defined(SWIG)
 
   /// Internal. If the variables is the result of expr->Var(), this
@@ -2965,20 +3015,20 @@ class Solver {
   bool IsUncheckedSolutionLimitReached();
 
   void InternalSaveValue(int* valptr);
-  void InternalSaveValue(int64* valptr);
-  void InternalSaveValue(uint64* valptr);
+  void InternalSaveValue(int64_t* valptr);
+  void InternalSaveValue(uint64_t* valptr);
   void InternalSaveValue(double* valptr);
   void InternalSaveValue(bool* valptr);
   void InternalSaveValue(void** valptr);
-  void InternalSaveValue(int64** valptr) {
+  void InternalSaveValue(int64_t** valptr) {
     InternalSaveValue(reinterpret_cast<void**>(valptr));
   }
 
   BaseObject* SafeRevAlloc(BaseObject* ptr);
 
   int* SafeRevAllocArray(int* ptr);
-  int64* SafeRevAllocArray(int64* ptr);
-  uint64* SafeRevAllocArray(uint64* ptr);
+  int64_t* SafeRevAllocArray(int64_t* ptr);
+  uint64_t* SafeRevAllocArray(uint64_t* ptr);
   double* SafeRevAllocArray(double* ptr);
   BaseObject** SafeRevAllocArray(BaseObject** ptr);
   IntVar** SafeRevAllocArray(IntVar** ptr);
@@ -3041,18 +3091,18 @@ class Solver {
   std::vector<Constraint*> additional_constraints_list_;
   std::vector<int> additional_constraints_parent_list_;
   SolverState state_;
-  int64 branches_;
-  int64 fails_;
-  int64 decisions_;
-  int64 demon_runs_[kNumPriorities];
-  int64 neighbors_;
-  int64 filtered_neighbors_;
-  int64 accepted_neighbors_;
+  int64_t branches_;
+  int64_t fails_;
+  int64_t decisions_;
+  int64_t demon_runs_[kNumPriorities];
+  int64_t neighbors_;
+  int64_t filtered_neighbors_;
+  int64_t accepted_neighbors_;
   OptimizationDirection optimization_direction_;
   std::unique_ptr<ClockTimer> timer_;
   std::vector<Search*> searches_;
   std::mt19937 random_;
-  uint64 fail_stamp_;
+  uint64_t fail_stamp_;
   std::unique_ptr<Decision> balancing_decision_;
   /// intercept failures
   std::function<void()> fail_intercept_;
@@ -3093,10 +3143,10 @@ std::ostream& operator<<(std::ostream& out, const Solver* const s);  /// NOLINT
 /// This method returns 0. It is useful when 0 can be cast either as
 /// a pointer or as an integer value and thus lead to an ambiguous
 /// function call.
-inline int64 Zero() { return 0; }
+inline int64_t Zero() { return 0; }
 
 /// This method returns 1
-inline int64 One() { return 1; }
+inline int64_t One() { return 1; }
 
 /// A BaseObject is the root of all reversibly allocated objects.
 /// A DebugString method and the associated << operator are implemented
@@ -3202,11 +3252,11 @@ class DecisionVisitor : public BaseObject {
  public:
   DecisionVisitor() {}
   ~DecisionVisitor() override {}
-  virtual void VisitSetVariableValue(IntVar* const var, int64 value);
-  virtual void VisitSplitVariableDomain(IntVar* const var, int64 value,
+  virtual void VisitSetVariableValue(IntVar* const var, int64_t value);
+  virtual void VisitSplitVariableDomain(IntVar* const var, int64_t value,
                                         bool start_with_lower_half);
-  virtual void VisitScheduleOrPostpone(IntervalVar* const var, int64 est);
-  virtual void VisitScheduleOrExpedite(IntervalVar* const var, int64 est);
+  virtual void VisitScheduleOrPostpone(IntervalVar* const var, int64_t est);
+  virtual void VisitScheduleOrExpedite(IntervalVar* const var, int64_t est);
   virtual void VisitRankFirstInterval(SequenceVar* const sequence, int index);
   virtual void VisitRankLastInterval(SequenceVar* const sequence, int index);
   virtual void VisitUnknownDecision();
@@ -3254,7 +3304,7 @@ class Demon : public BaseObject {
  public:
   /// This indicates the priority of a demon. Immediate demons are treated
   /// separately and corresponds to variables.
-  Demon() : stamp_(GG_ULONGLONG(0)) {}
+  Demon() : stamp_(uint64_t{0}) {}
   ~Demon() override {}
 
   /// This is the main callback of the demon.
@@ -3276,9 +3326,9 @@ class Demon : public BaseObject {
 
  private:
   friend class Queue;
-  void set_stamp(int64 stamp) { stamp_ = stamp; }
-  uint64 stamp() const { return stamp_; }
-  uint64 stamp_;
+  void set_stamp(int64_t stamp) { stamp_ = stamp; }
+  uint64_t stamp() const { return stamp_; }
+  uint64_t stamp_;
   DISALLOW_COPY_AND_ASSIGN(Demon);
 };
 
@@ -3477,17 +3527,18 @@ class ModelVisitor : public BaseObject {
   virtual void VisitIntegerVariable(const IntVar* const variable,
                                     IntExpr* const delegate);
   virtual void VisitIntegerVariable(const IntVar* const variable,
-                                    const std::string& operation, int64 value,
+                                    const std::string& operation, int64_t value,
                                     IntVar* const delegate);
   virtual void VisitIntervalVariable(const IntervalVar* const variable,
-                                     const std::string& operation, int64 value,
+                                     const std::string& operation,
+                                     int64_t value,
                                      IntervalVar* const delegate);
   virtual void VisitSequenceVariable(const SequenceVar* const variable);
 
   /// Visit integer arguments.
-  virtual void VisitIntegerArgument(const std::string& arg_name, int64 value);
+  virtual void VisitIntegerArgument(const std::string& arg_name, int64_t value);
   virtual void VisitIntegerArrayArgument(const std::string& arg_name,
-                                         const std::vector<int64>& values);
+                                         const std::vector<int64_t>& values);
   virtual void VisitIntegerMatrixArgument(const std::string& arg_name,
                                           const IntTupleSet& tuples);
 
@@ -3517,13 +3568,13 @@ class ModelVisitor : public BaseObject {
 
   /// Using SWIG on callbacks is troublesome, so we hide these methods during
   /// the wrapping.
-  void VisitInt64ToBoolExtension(Solver::IndexFilter1 filter, int64 index_min,
-                                 int64 index_max);
+  void VisitInt64ToBoolExtension(Solver::IndexFilter1 filter, int64_t index_min,
+                                 int64_t index_max);
   void VisitInt64ToInt64Extension(const Solver::IndexEvaluator1& eval,
-                                  int64 index_min, int64 index_max);
+                                  int64_t index_min, int64_t index_max);
   /// Expands function as array when index min is 0.
   void VisitInt64ToInt64AsArray(const Solver::IndexEvaluator1& eval,
-                                const std::string& arg_name, int64 index_max);
+                                const std::string& arg_name, int64_t index_max);
 #endif  // #if !defined(SWIG)
 };
 
@@ -3586,7 +3637,7 @@ class CastConstraint : public Constraint {
 /// A search monitor is a simple set of callbacks to monitor all search events
 class SearchMonitor : public BaseObject {
  public:
-  static const int kNoProgress = -1;
+  static constexpr int kNoProgress = -1;
 
   explicit SearchMonitor(Solver* const s) : solver_(s) {}
   ~SearchMonitor() override {}
@@ -3701,7 +3752,7 @@ class Rev {
   }
 
  private:
-  uint64 stamp_;
+  uint64_t stamp_;
   T value_;
 };
 
@@ -3729,7 +3780,7 @@ template <class T>
 class RevArray {
  public:
   RevArray(int size, const T& val)
-      : stamps_(new uint64[size]), values_(new T[size]), size_(size) {
+      : stamps_(new uint64_t[size]), values_(new T[size]), size_(size) {
     for (int i = 0; i < size; ++i) {
       stamps_[i] = 0;
       values_[i] = val;
@@ -3738,7 +3789,7 @@ class RevArray {
 
   ~RevArray() {}
 
-  int64 size() const { return size_; }
+  int64_t size() const { return size_; }
 
   const T& Value(int index) const { return values_[index]; }
 
@@ -3758,7 +3809,7 @@ class RevArray {
   }
 
  private:
-  std::unique_ptr<uint64[]> stamps_;
+  std::unique_ptr<uint64_t[]> stamps_;
   std::unique_ptr<T[]> values_;
   const int size_;
 };
@@ -3790,25 +3841,25 @@ class IntExpr : public PropagationBaseObject {
   explicit IntExpr(Solver* const s) : PropagationBaseObject(s) {}
   ~IntExpr() override {}
 
-  virtual int64 Min() const = 0;
-  virtual void SetMin(int64 m) = 0;
-  virtual int64 Max() const = 0;
-  virtual void SetMax(int64 m) = 0;
+  virtual int64_t Min() const = 0;
+  virtual void SetMin(int64_t m) = 0;
+  virtual int64_t Max() const = 0;
+  virtual void SetMax(int64_t m) = 0;
 
   /// By default calls Min() and Max(), but can be redefined when Min and Max
   /// code can be factorized.
-  virtual void Range(int64* l, int64* u) {
+  virtual void Range(int64_t* l, int64_t* u) {
     *l = Min();
     *u = Max();
   }
   /// This method sets both the min and the max of the expression.
-  virtual void SetRange(int64 l, int64 u) {
+  virtual void SetRange(int64_t l, int64_t u) {
     SetMin(l);
     SetMax(u);
   }
 
   /// This method sets the value of the expression.
-  virtual void SetValue(int64 v) { SetRange(v, v); }
+  virtual void SetValue(int64_t v) { SetRange(v, v); }
 
   /// Returns true if the min and the max of the expression are equal.
   virtual bool Bound() const { return (Min() == Max()); }
@@ -3859,7 +3910,7 @@ class IntExpr : public PropagationBaseObject {
 
 /// IntVar* current_var;
 /// std::unique_ptr<IntVarIterator> it(current_var->MakeHoleIterator(false));
-/// for (const int64 hole : InitAndGetValues(it)) {
+/// for (const int64_t hole : InitAndGetValues(it)) {
 ///   /// use the hole
 /// }
 
@@ -3874,7 +3925,7 @@ class IntVarIterator : public BaseObject {
   virtual bool Ok() const = 0;
 
   /// This method returns the current value of the iterator.
-  virtual int64 Value() const = 0;
+  virtual int64_t Value() const = 0;
 
   /// This method moves the iterator to the next value.
   virtual void Next() = 0;
@@ -3897,6 +3948,7 @@ class InitAndGetValues {
     it_->Init();
   }
   struct Iterator;
+
   Iterator begin() {
     if (DEBUG_MODE) {
       DCHECK(!begin_was_called_);
@@ -3915,7 +3967,7 @@ class InitAndGetValues {
       return Iterator(it, /*is_end=*/true);
     }
 
-    int64 operator*() const {
+    int64_t operator*() const {
       DCHECK(it_->Ok());
       return it_->Value();
     }
@@ -3957,20 +4009,20 @@ class IntVar : public IntExpr {
 
   /// This method returns the value of the variable. This method checks
   /// before that the variable is bound.
-  virtual int64 Value() const = 0;
+  virtual int64_t Value() const = 0;
 
   /// This method removes the value 'v' from the domain of the variable.
-  virtual void RemoveValue(int64 v) = 0;
+  virtual void RemoveValue(int64_t v) = 0;
 
   /// This method removes the interval 'l' .. 'u' from the domain of
   /// the variable. It assumes that 'l' <= 'u'.
-  virtual void RemoveInterval(int64 l, int64 u) = 0;
+  virtual void RemoveInterval(int64_t l, int64_t u) = 0;
 
   /// This method remove the values from the domain of the variable.
-  virtual void RemoveValues(const std::vector<int64>& values);
+  virtual void RemoveValues(const std::vector<int64_t>& values);
 
   /// This method intersects the current domain with the values in the array.
-  virtual void SetValues(const std::vector<int64>& values);
+  virtual void SetValues(const std::vector<int64_t>& values);
 
   /// This method attaches a demon that will be awakened when the
   /// variable is bound.
@@ -4006,11 +4058,11 @@ class IntVar : public IntExpr {
 #endif  // SWIG
 
   /// This method returns the number of values in the domain of the variable.
-  virtual uint64 Size() const = 0;
+  virtual uint64_t Size() const = 0;
 
   /// This method returns whether the value 'v' is in the domain of the
   /// variable.
-  virtual bool Contains(int64 v) const = 0;
+  virtual bool Contains(int64_t v) const = 0;
 
   /// Creates a hole iterator. When 'reversible' is false, the returned
   /// object is created on the normal C++ heap and the solver does NOT
@@ -4023,10 +4075,10 @@ class IntVar : public IntExpr {
   virtual IntVarIterator* MakeDomainIterator(bool reversible) const = 0;
 
   /// Returns the previous min.
-  virtual int64 OldMin() const = 0;
+  virtual int64_t OldMin() const = 0;
 
   /// Returns the previous max.
-  virtual int64 OldMax() const = 0;
+  virtual int64_t OldMax() const = 0;
 
   virtual int VarType() const;
 
@@ -4034,10 +4086,10 @@ class IntVar : public IntExpr {
   void Accept(ModelVisitor* const visitor) const override;
 
   /// IsEqual
-  virtual IntVar* IsEqual(int64 constant) = 0;
-  virtual IntVar* IsDifferent(int64 constant) = 0;
-  virtual IntVar* IsGreaterOrEqual(int64 constant) = 0;
-  virtual IntVar* IsLessOrEqual(int64 constant) = 0;
+  virtual IntVar* IsEqual(int64_t constant) = 0;
+  virtual IntVar* IsDifferent(int64_t constant) = 0;
+  virtual IntVar* IsGreaterOrEqual(int64_t constant) = 0;
+  virtual IntVar* IsLessOrEqual(int64_t constant) = 0;
 
   /// Returns the index of the variable.
   int index() const { return index_; }
@@ -4076,32 +4128,32 @@ class SolutionCollector : public SearchMonitor {
   Assignment* solution(int n) const;
 
   /// Returns the wall time in ms for the nth solution.
-  int64 wall_time(int n) const;
+  int64_t wall_time(int n) const;
 
   /// Returns the number of branches when the nth solution was found.
-  int64 branches(int n) const;
+  int64_t branches(int n) const;
 
   /// Returns the number of failures encountered at the time of the nth
   /// solution.
-  int64 failures(int n) const;
+  int64_t failures(int n) const;
 
   /// Returns the objective value of the nth solution.
-  int64 objective_value(int n) const;
+  int64_t objective_value(int n) const;
 
   /// This is a shortcut to get the Value of 'var' in the nth solution.
-  int64 Value(int n, IntVar* const var) const;
+  int64_t Value(int n, IntVar* const var) const;
 
   /// This is a shortcut to get the StartValue of 'var' in the nth solution.
-  int64 StartValue(int n, IntervalVar* const var) const;
+  int64_t StartValue(int n, IntervalVar* const var) const;
 
   /// This is a shortcut to get the EndValue of 'var' in the nth solution.
-  int64 EndValue(int n, IntervalVar* const var) const;
+  int64_t EndValue(int n, IntervalVar* const var) const;
 
   /// This is a shortcut to get the DurationValue of 'var' in the nth solution.
-  int64 DurationValue(int n, IntervalVar* const var) const;
+  int64_t DurationValue(int n, IntervalVar* const var) const;
 
   /// This is a shortcut to get the PerformedValue of 'var' in the nth solution.
-  int64 PerformedValue(int n, IntervalVar* const var) const;
+  int64_t PerformedValue(int n, IntervalVar* const var) const;
 
   /// This is a shortcut to get the ForwardSequence of 'var' in the
   /// nth solution. The forward sequence is the list of ranked interval
@@ -4118,10 +4170,10 @@ class SolutionCollector : public SearchMonitor {
  protected:
   struct SolutionData {
     Assignment* solution;
-    int64 time;
-    int64 branches;
-    int64 failures;
-    int64 objective_value;
+    int64_t time;
+    int64_t branches;
+    int64_t failures;
+    int64_t objective_value;
     bool operator<(const SolutionData& other) const {
       return std::tie(solution, time, branches, failures, objective_value) <
              std::tie(other.solution, other.time, other.branches,
@@ -4155,11 +4207,11 @@ class SolutionCollector : public SearchMonitor {
 /// improvement step.
 class OptimizeVar : public SearchMonitor {
  public:
-  OptimizeVar(Solver* const s, bool maximize, IntVar* const a, int64 step);
+  OptimizeVar(Solver* const s, bool maximize, IntVar* const a, int64_t step);
   ~OptimizeVar() override;
 
   /// Returns the best value found during search.
-  int64 best() const { return best_; }
+  int64_t best() const { return best_; }
 
   /// Returns the variable that is optimized.
   IntVar* Var() const { return var_; }
@@ -4178,8 +4230,8 @@ class OptimizeVar : public SearchMonitor {
 
  protected:
   IntVar* const var_;
-  int64 step_;
-  int64 best_;
+  int64_t step_;
+  int64_t best_;
   bool maximize_;
   bool found_initial_solution_;
 
@@ -4232,8 +4284,9 @@ class SearchLimit : public SearchMonitor {
 /// number of failures in the search tree
 class RegularLimit : public SearchLimit {
  public:
-  RegularLimit(Solver* const s, int64 time, int64 branches, int64 failures,
-               int64 solutions, bool smart_time_check, bool cumulative);
+  RegularLimit(Solver* const s, absl::Duration time, int64_t branches,
+               int64_t failures, int64_t solutions, bool smart_time_check,
+               bool cumulative);
   ~RegularLimit() override;
   void Copy(const SearchLimit* const limit) override;
   SearchLimit* MakeClone() const override;
@@ -4241,17 +4294,17 @@ class RegularLimit : public SearchLimit {
   bool Check() override;
   void Init() override;
   void ExitSearch() override;
-  void UpdateLimits(int64 time, int64 branches, int64 failures,
-                    int64 solutions);
+  void UpdateLimits(absl::Duration time, int64_t branches, int64_t failures,
+                    int64_t solutions);
   absl::Duration duration_limit() const { return duration_limit_; }
-  int64 wall_time() const {
+  int64_t wall_time() const {
     return duration_limit_ == absl::InfiniteDuration()
                ? kint64max
                : absl::ToInt64Milliseconds(duration_limit());
   }
-  int64 branches() const { return branches_; }
-  int64 failures() const { return failures_; }
-  int64 solutions() const { return solutions_; }
+  int64_t branches() const { return branches_; }
+  int64_t failures() const { return failures_; }
+  int64_t solutions() const { return solutions_; }
   bool IsUncheckedSolutionLimitReached() override;
   int ProgressPercent() override;
   std::string DebugString() const override;
@@ -4265,7 +4318,7 @@ class RegularLimit : public SearchLimit {
  private:
   bool CheckTime();
   absl::Duration TimeElapsed();
-  static int64 GetPercent(int64 value, int64 offset, int64 total) {
+  static int64_t GetPercent(int64_t value, int64_t offset, int64_t total) {
     return (total > 0 && total < kint64max) ? 100 * (value - offset) / total
                                             : -1;
   }
@@ -4273,15 +4326,15 @@ class RegularLimit : public SearchLimit {
   absl::Duration duration_limit_;
   absl::Time solver_time_at_limit_start_;
   absl::Duration last_time_elapsed_;
-  int64 check_count_;
-  int64 next_check_;
+  int64_t check_count_;
+  int64_t next_check_;
   bool smart_time_check_;
-  int64 branches_;
-  int64 branches_offset_;
-  int64 failures_;
-  int64 failures_offset_;
-  int64 solutions_;
-  int64 solutions_offset_;
+  int64_t branches_;
+  int64_t branches_offset_;
+  int64_t failures_;
+  int64_t failures_offset_;
+  int64_t solutions_;
+  int64_t solutions_offset_;
   /// If cumulative if false, then the limit applies to each search
   /// independently. If it's true, the limit applies globally to all search for
   /// which this monitor is used.
@@ -4290,6 +4343,46 @@ class RegularLimit : public SearchLimit {
   /// - within a search, it's an offset to be subtracted from the current value
   /// - outside of search, it's the amount consumed in previous searches
   bool cumulative_;
+};
+
+// Limit based on the improvement rate of 'objective_var'.
+// This limit proceeds in two stages:
+// 1) During the phase of the search in which the objective_var is strictly
+// improving, a threshold value is computed as the minimum improvement rate of
+// the objective, based on the 'improvement_rate_coefficient' and
+// 'improvement_rate_solutions_distance' parameters.
+// 2) Then, if the search continues beyond this phase of strict improvement, the
+// limit stops the search when the improvement rate of the objective gets below
+// this threshold value.
+class ImprovementSearchLimit : public SearchLimit {
+ public:
+  ImprovementSearchLimit(Solver* const s, IntVar* objective_var, bool maximize,
+                         double objective_scaling_factor,
+                         double objective_offset,
+                         double improvement_rate_coefficient,
+                         int improvement_rate_solutions_distance);
+  ~ImprovementSearchLimit() override;
+  void Copy(const SearchLimit* const limit) override;
+  SearchLimit* MakeClone() const override;
+  bool Check() override;
+  bool AtSolution() override;
+  void Init() override;
+
+ private:
+  IntVar* objective_var_;
+  bool maximize_;
+  double objective_scaling_factor_;
+  double objective_offset_;
+  double improvement_rate_coefficient_;
+  int improvement_rate_solutions_distance_;
+
+  double best_objective_;
+  // clang-format off
+  std::deque<std::pair<double, int64_t> > improvements_;
+  // clang-format on
+  double threshold_;
+  bool objective_updated_;
+  bool gradient_stage_;
 };
 
 /// Interval variables are often used in scheduling. The main characteristics
@@ -4305,9 +4398,9 @@ class RegularLimit : public SearchLimit {
 class IntervalVar : public PropagationBaseObject {
  public:
   /// The smallest acceptable value to be returned by StartMin()
-  static const int64 kMinValidValue;
+  static const int64_t kMinValidValue;
   /// The largest acceptable value to be returned by EndMax()
-  static const int64 kMaxValidValue;
+  static const int64_t kMaxValidValue;
   IntervalVar(Solver* const solver, const std::string& name)
       : PropagationBaseObject(solver) {
     set_name(name);
@@ -4316,13 +4409,13 @@ class IntervalVar : public PropagationBaseObject {
 
   /// These methods query, set, and watch the start position of the
   /// interval var.
-  virtual int64 StartMin() const = 0;
-  virtual int64 StartMax() const = 0;
-  virtual void SetStartMin(int64 m) = 0;
-  virtual void SetStartMax(int64 m) = 0;
-  virtual void SetStartRange(int64 mi, int64 ma) = 0;
-  virtual int64 OldStartMin() const = 0;
-  virtual int64 OldStartMax() const = 0;
+  virtual int64_t StartMin() const = 0;
+  virtual int64_t StartMax() const = 0;
+  virtual void SetStartMin(int64_t m) = 0;
+  virtual void SetStartMax(int64_t m) = 0;
+  virtual void SetStartRange(int64_t mi, int64_t ma) = 0;
+  virtual int64_t OldStartMin() const = 0;
+  virtual int64_t OldStartMax() const = 0;
   virtual void WhenStartRange(Demon* const d) = 0;
   void WhenStartRange(Solver::Closure closure) {
     WhenStartRange(solver()->MakeClosureDemon(std::move(closure)));
@@ -4343,13 +4436,13 @@ class IntervalVar : public PropagationBaseObject {
 #endif  // SWIG
 
   /// These methods query, set, and watch the duration of the interval var.
-  virtual int64 DurationMin() const = 0;
-  virtual int64 DurationMax() const = 0;
-  virtual void SetDurationMin(int64 m) = 0;
-  virtual void SetDurationMax(int64 m) = 0;
-  virtual void SetDurationRange(int64 mi, int64 ma) = 0;
-  virtual int64 OldDurationMin() const = 0;
-  virtual int64 OldDurationMax() const = 0;
+  virtual int64_t DurationMin() const = 0;
+  virtual int64_t DurationMax() const = 0;
+  virtual void SetDurationMin(int64_t m) = 0;
+  virtual void SetDurationMax(int64_t m) = 0;
+  virtual void SetDurationRange(int64_t mi, int64_t ma) = 0;
+  virtual int64_t OldDurationMin() const = 0;
+  virtual int64_t OldDurationMax() const = 0;
   virtual void WhenDurationRange(Demon* const d) = 0;
   void WhenDurationRange(Solver::Closure closure) {
     WhenDurationRange(solver()->MakeClosureDemon(std::move(closure)));
@@ -4370,13 +4463,13 @@ class IntervalVar : public PropagationBaseObject {
 #endif  // SWIG
 
   /// These methods query, set, and watch the end position of the interval var.
-  virtual int64 EndMin() const = 0;
-  virtual int64 EndMax() const = 0;
-  virtual void SetEndMin(int64 m) = 0;
-  virtual void SetEndMax(int64 m) = 0;
-  virtual void SetEndRange(int64 mi, int64 ma) = 0;
-  virtual int64 OldEndMin() const = 0;
-  virtual int64 OldEndMax() const = 0;
+  virtual int64_t EndMin() const = 0;
+  virtual int64_t EndMax() const = 0;
+  virtual void SetEndMin(int64_t m) = 0;
+  virtual void SetEndMax(int64_t m) = 0;
+  virtual void SetEndRange(int64_t mi, int64_t ma) = 0;
+  virtual int64_t OldEndMin() const = 0;
+  virtual int64_t OldEndMax() const = 0;
   virtual void WhenEndRange(Demon* const d) = 0;
   void WhenEndRange(Solver::Closure closure) {
     WhenEndRange(solver()->MakeClosureDemon(std::move(closure)));
@@ -4439,9 +4532,9 @@ class IntervalVar : public PropagationBaseObject {
   /// These methods create expressions encapsulating the start, end
   /// and duration of the interval var. If the interval var is
   /// unperformed, they will return the unperformed_value.
-  virtual IntExpr* SafeStartExpr(int64 unperformed_value) = 0;
-  virtual IntExpr* SafeDurationExpr(int64 unperformed_value) = 0;
-  virtual IntExpr* SafeEndExpr(int64 unperformed_value) = 0;
+  virtual IntExpr* SafeStartExpr(int64_t unperformed_value) = 0;
+  virtual IntExpr* SafeDurationExpr(int64_t unperformed_value) = 0;
+  virtual IntExpr* SafeEndExpr(int64_t unperformed_value) = 0;
 
   /// Accepts the given visitor.
   virtual void Accept(ModelVisitor* const visitor) const = 0;
@@ -4468,15 +4561,15 @@ class SequenceVar : public PropagationBaseObject {
 #if !defined(SWIG)
   /// Returns the minimum and maximum duration of combined interval
   /// vars in the sequence.
-  void DurationRange(int64* const dmin, int64* const dmax) const;
+  void DurationRange(int64_t* const dmin, int64_t* const dmax) const;
 
   /// Returns the minimum start min and the maximum end max of all
   /// interval vars in the sequence.
-  void HorizonRange(int64* const hmin, int64* const hmax) const;
+  void HorizonRange(int64_t* const hmin, int64_t* const hmax) const;
 
   /// Returns the minimum start min and the maximum end max of all
   /// unranked interval vars in the sequence.
-  void ActiveHorizonRange(int64* const hmin, int64* const hmax) const;
+  void ActiveHorizonRange(int64_t* const hmin, int64_t* const hmax) const;
 
   /// Compute statistics on the sequence.
   void ComputeStatistics(int* const ranked, int* const not_ranked,
@@ -4532,7 +4625,7 @@ class SequenceVar : public PropagationBaseObject {
   IntVar* Next(int index) const;
 
   /// Returns the number of interval vars in the sequence.
-  int64 size() const { return intervals_.size(); }
+  int64_t size() const { return intervals_.size(); }
 
   /// Accepts the given visitor.
   virtual void Accept(ModelVisitor* const visitor) const;
@@ -4579,21 +4672,21 @@ class IntVarElement : public AssignmentElement {
   void LoadFromProto(const IntVarAssignment& int_var_assignment_proto);
   void WriteToProto(IntVarAssignment* int_var_assignment_proto) const;
 
-  int64 Min() const { return min_; }
-  void SetMin(int64 m) { min_ = m; }
-  int64 Max() const { return max_; }
-  void SetMax(int64 m) { max_ = m; }
-  int64 Value() const {
+  int64_t Min() const { return min_; }
+  void SetMin(int64_t m) { min_ = m; }
+  int64_t Max() const { return max_; }
+  void SetMax(int64_t m) { max_ = m; }
+  int64_t Value() const {
     DCHECK_EQ(min_, max_);
     // Get the value from an unbound int var assignment element.
     return min_;
   }
   bool Bound() const { return (max_ == min_); }
-  void SetRange(int64 l, int64 u) {
+  void SetRange(int64_t l, int64_t u) {
     min_ = l;
     max_ = u;
   }
-  void SetValue(int64 v) {
+  void SetValue(int64_t v) {
     min_ = v;
     max_ = v;
   }
@@ -4606,8 +4699,8 @@ class IntVarElement : public AssignmentElement {
 
  private:
   IntVar* var_;
-  int64 min_;
-  int64 max_;
+  int64_t min_;
+  int64_t max_;
 };
 
 class IntervalVarElement : public AssignmentElement {
@@ -4624,67 +4717,67 @@ class IntervalVarElement : public AssignmentElement {
       const IntervalVarAssignment& interval_var_assignment_proto);
   void WriteToProto(IntervalVarAssignment* interval_var_assignment_proto) const;
 
-  int64 StartMin() const { return start_min_; }
-  int64 StartMax() const { return start_max_; }
-  int64 StartValue() const {
+  int64_t StartMin() const { return start_min_; }
+  int64_t StartMax() const { return start_max_; }
+  int64_t StartValue() const {
     CHECK_EQ(start_max_, start_min_);
     return start_max_;
   }
-  int64 DurationMin() const { return duration_min_; }
-  int64 DurationMax() const { return duration_max_; }
-  int64 DurationValue() const {
+  int64_t DurationMin() const { return duration_min_; }
+  int64_t DurationMax() const { return duration_max_; }
+  int64_t DurationValue() const {
     CHECK_EQ(duration_max_, duration_min_);
     return duration_max_;
   }
-  int64 EndMin() const { return end_min_; }
-  int64 EndMax() const { return end_max_; }
-  int64 EndValue() const {
+  int64_t EndMin() const { return end_min_; }
+  int64_t EndMax() const { return end_max_; }
+  int64_t EndValue() const {
     CHECK_EQ(end_max_, end_min_);
     return end_max_;
   }
-  int64 PerformedMin() const { return performed_min_; }
-  int64 PerformedMax() const { return performed_max_; }
-  int64 PerformedValue() const {
+  int64_t PerformedMin() const { return performed_min_; }
+  int64_t PerformedMax() const { return performed_max_; }
+  int64_t PerformedValue() const {
     CHECK_EQ(performed_max_, performed_min_);
     return performed_max_;
   }
-  void SetStartMin(int64 m) { start_min_ = m; }
-  void SetStartMax(int64 m) { start_max_ = m; }
-  void SetStartRange(int64 mi, int64 ma) {
+  void SetStartMin(int64_t m) { start_min_ = m; }
+  void SetStartMax(int64_t m) { start_max_ = m; }
+  void SetStartRange(int64_t mi, int64_t ma) {
     start_min_ = mi;
     start_max_ = ma;
   }
-  void SetStartValue(int64 v) {
+  void SetStartValue(int64_t v) {
     start_min_ = v;
     start_max_ = v;
   }
-  void SetDurationMin(int64 m) { duration_min_ = m; }
-  void SetDurationMax(int64 m) { duration_max_ = m; }
-  void SetDurationRange(int64 mi, int64 ma) {
+  void SetDurationMin(int64_t m) { duration_min_ = m; }
+  void SetDurationMax(int64_t m) { duration_max_ = m; }
+  void SetDurationRange(int64_t mi, int64_t ma) {
     duration_min_ = mi;
     duration_max_ = ma;
   }
-  void SetDurationValue(int64 v) {
+  void SetDurationValue(int64_t v) {
     duration_min_ = v;
     duration_max_ = v;
   }
-  void SetEndMin(int64 m) { end_min_ = m; }
-  void SetEndMax(int64 m) { end_max_ = m; }
-  void SetEndRange(int64 mi, int64 ma) {
+  void SetEndMin(int64_t m) { end_min_ = m; }
+  void SetEndMax(int64_t m) { end_max_ = m; }
+  void SetEndRange(int64_t mi, int64_t ma) {
     end_min_ = mi;
     end_max_ = ma;
   }
-  void SetEndValue(int64 v) {
+  void SetEndValue(int64_t v) {
     end_min_ = v;
     end_max_ = v;
   }
-  void SetPerformedMin(int64 m) { performed_min_ = m; }
-  void SetPerformedMax(int64 m) { performed_max_ = m; }
-  void SetPerformedRange(int64 mi, int64 ma) {
+  void SetPerformedMin(int64_t m) { performed_min_ = m; }
+  void SetPerformedMax(int64_t m) { performed_max_ = m; }
+  void SetPerformedRange(int64_t mi, int64_t ma) {
     performed_min_ = mi;
     performed_max_ = ma;
   }
-  void SetPerformedValue(int64 v) {
+  void SetPerformedValue(int64_t v) {
     performed_min_ = v;
     performed_max_ = v;
   }
@@ -4699,14 +4792,14 @@ class IntervalVarElement : public AssignmentElement {
   }
 
  private:
-  int64 start_min_;
-  int64 start_max_;
-  int64 duration_min_;
-  int64 duration_max_;
-  int64 end_min_;
-  int64 end_max_;
-  int64 performed_min_;
-  int64 performed_max_;
+  int64_t start_min_;
+  int64_t start_max_;
+  int64_t duration_min_;
+  int64_t duration_max_;
+  int64_t end_min_;
+  int64_t end_max_;
+  int64_t performed_min_;
+  int64_t performed_max_;
   IntervalVar* var_;
 };
 
@@ -4793,7 +4886,7 @@ class AssignmentContainer {
   }
   void Clear() {
     elements_.clear();
-    if (!elements_map_.empty()) {  /// 2x speedup on OR-tools.
+    if (!elements_map_.empty()) {  /// 2x speedup on OR-Tools.
       elements_map_.clear();
     }
   }
@@ -4990,60 +5083,60 @@ class Assignment : public PropagationBaseObject {
   void ClearObjective() { objective_element_.Reset(nullptr); }
   IntVar* Objective() const;
   bool HasObjective() const { return (objective_element_.Var() != nullptr); }
-  int64 ObjectiveMin() const;
-  int64 ObjectiveMax() const;
-  int64 ObjectiveValue() const;
+  int64_t ObjectiveMin() const;
+  int64_t ObjectiveMax() const;
+  int64_t ObjectiveValue() const;
   bool ObjectiveBound() const;
-  void SetObjectiveMin(int64 m);
-  void SetObjectiveMax(int64 m);
-  void SetObjectiveValue(int64 value);
-  void SetObjectiveRange(int64 l, int64 u);
+  void SetObjectiveMin(int64_t m);
+  void SetObjectiveMax(int64_t m);
+  void SetObjectiveValue(int64_t value);
+  void SetObjectiveRange(int64_t l, int64_t u);
 
   IntVarElement* Add(IntVar* const var);
   void Add(const std::vector<IntVar*>& vars);
   /// Adds without checking if variable has been previously added.
   IntVarElement* FastAdd(IntVar* const var);
-  int64 Min(const IntVar* const var) const;
-  int64 Max(const IntVar* const var) const;
-  int64 Value(const IntVar* const var) const;
+  int64_t Min(const IntVar* const var) const;
+  int64_t Max(const IntVar* const var) const;
+  int64_t Value(const IntVar* const var) const;
   bool Bound(const IntVar* const var) const;
-  void SetMin(const IntVar* const var, int64 m);
-  void SetMax(const IntVar* const var, int64 m);
-  void SetRange(const IntVar* const var, int64 l, int64 u);
-  void SetValue(const IntVar* const var, int64 value);
+  void SetMin(const IntVar* const var, int64_t m);
+  void SetMax(const IntVar* const var, int64_t m);
+  void SetRange(const IntVar* const var, int64_t l, int64_t u);
+  void SetValue(const IntVar* const var, int64_t value);
 
   IntervalVarElement* Add(IntervalVar* const var);
   void Add(const std::vector<IntervalVar*>& vars);
   /// Adds without checking if variable has been previously added.
   IntervalVarElement* FastAdd(IntervalVar* const var);
-  int64 StartMin(const IntervalVar* const var) const;
-  int64 StartMax(const IntervalVar* const var) const;
-  int64 StartValue(const IntervalVar* const var) const;
-  int64 DurationMin(const IntervalVar* const var) const;
-  int64 DurationMax(const IntervalVar* const var) const;
-  int64 DurationValue(const IntervalVar* const var) const;
-  int64 EndMin(const IntervalVar* const var) const;
-  int64 EndMax(const IntervalVar* const var) const;
-  int64 EndValue(const IntervalVar* const var) const;
-  int64 PerformedMin(const IntervalVar* const var) const;
-  int64 PerformedMax(const IntervalVar* const var) const;
-  int64 PerformedValue(const IntervalVar* const var) const;
-  void SetStartMin(const IntervalVar* const var, int64 m);
-  void SetStartMax(const IntervalVar* const var, int64 m);
-  void SetStartRange(const IntervalVar* const var, int64 mi, int64 ma);
-  void SetStartValue(const IntervalVar* const var, int64 value);
-  void SetDurationMin(const IntervalVar* const var, int64 m);
-  void SetDurationMax(const IntervalVar* const var, int64 m);
-  void SetDurationRange(const IntervalVar* const var, int64 mi, int64 ma);
-  void SetDurationValue(const IntervalVar* const var, int64 value);
-  void SetEndMin(const IntervalVar* const var, int64 m);
-  void SetEndMax(const IntervalVar* const var, int64 m);
-  void SetEndRange(const IntervalVar* const var, int64 mi, int64 ma);
-  void SetEndValue(const IntervalVar* const var, int64 value);
-  void SetPerformedMin(const IntervalVar* const var, int64 m);
-  void SetPerformedMax(const IntervalVar* const var, int64 m);
-  void SetPerformedRange(const IntervalVar* const var, int64 mi, int64 ma);
-  void SetPerformedValue(const IntervalVar* const var, int64 value);
+  int64_t StartMin(const IntervalVar* const var) const;
+  int64_t StartMax(const IntervalVar* const var) const;
+  int64_t StartValue(const IntervalVar* const var) const;
+  int64_t DurationMin(const IntervalVar* const var) const;
+  int64_t DurationMax(const IntervalVar* const var) const;
+  int64_t DurationValue(const IntervalVar* const var) const;
+  int64_t EndMin(const IntervalVar* const var) const;
+  int64_t EndMax(const IntervalVar* const var) const;
+  int64_t EndValue(const IntervalVar* const var) const;
+  int64_t PerformedMin(const IntervalVar* const var) const;
+  int64_t PerformedMax(const IntervalVar* const var) const;
+  int64_t PerformedValue(const IntervalVar* const var) const;
+  void SetStartMin(const IntervalVar* const var, int64_t m);
+  void SetStartMax(const IntervalVar* const var, int64_t m);
+  void SetStartRange(const IntervalVar* const var, int64_t mi, int64_t ma);
+  void SetStartValue(const IntervalVar* const var, int64_t value);
+  void SetDurationMin(const IntervalVar* const var, int64_t m);
+  void SetDurationMax(const IntervalVar* const var, int64_t m);
+  void SetDurationRange(const IntervalVar* const var, int64_t mi, int64_t ma);
+  void SetDurationValue(const IntervalVar* const var, int64_t value);
+  void SetEndMin(const IntervalVar* const var, int64_t m);
+  void SetEndMax(const IntervalVar* const var, int64_t m);
+  void SetEndRange(const IntervalVar* const var, int64_t mi, int64_t ma);
+  void SetEndValue(const IntervalVar* const var, int64_t value);
+  void SetPerformedMin(const IntervalVar* const var, int64_t m);
+  void SetPerformedMax(const IntervalVar* const var, int64_t m);
+  void SetPerformedRange(const IntervalVar* const var, int64_t mi, int64_t ma);
+  void SetPerformedValue(const IntervalVar* const var, int64_t value);
 
   SequenceVarElement* Add(SequenceVar* const var);
   void Add(const std::vector<SequenceVar*>& vars);
@@ -5157,25 +5250,25 @@ class Pack : public Constraint {
   /// (weights[i]) of all objects i assigned to 'b' is less or equal
   /// 'bounds[b]'.
   void AddWeightedSumLessOrEqualConstantDimension(
-      const std::vector<int64>& weights, const std::vector<int64>& bounds);
+      const std::vector<int64_t>& weights, const std::vector<int64_t>& bounds);
 
   /// This dimension imposes that for all bins b, the weighted sum
   /// (weights->Run(i)) of all objects i assigned to 'b' is less or
   /// equal to 'bounds[b]'. Ownership of the callback is transferred to
   /// the pack constraint.
   void AddWeightedSumLessOrEqualConstantDimension(
-      Solver::IndexEvaluator1 weights, const std::vector<int64>& bounds);
+      Solver::IndexEvaluator1 weights, const std::vector<int64_t>& bounds);
 
   /// This dimension imposes that for all bins b, the weighted sum
   /// (weights->Run(i, b) of all objects i assigned to 'b' is less or
   /// equal to 'bounds[b]'. Ownership of the callback is transferred to
   /// the pack constraint.
   void AddWeightedSumLessOrEqualConstantDimension(
-      Solver::IndexEvaluator2 weights, const std::vector<int64>& bounds);
+      Solver::IndexEvaluator2 weights, const std::vector<int64_t>& bounds);
 
   /// This dimension imposes that for all bins b, the weighted sum
   /// (weights[i]) of all objects i assigned to 'b' is equal to loads[b].
-  void AddWeightedSumEqualVarDimension(const std::vector<int64>& weights,
+  void AddWeightedSumEqualVarDimension(const std::vector<int64_t>& weights,
                                        const std::vector<IntVar*>& loads);
 
   /// This dimension imposes that for all bins b, the weighted sum
@@ -5194,11 +5287,11 @@ class Pack : public Constraint {
   /// the same item on parallel dimensions with an allowed assignment
   /// constraint.
   void AddSumVariableWeightsLessOrEqualConstantDimension(
-      const std::vector<IntVar*>& usage, const std::vector<int64>& capacity);
+      const std::vector<IntVar*>& usage, const std::vector<int64_t>& capacity);
 
   /// This dimension enforces that cost_var == sum of weights[i] for
   /// all objects 'i' assigned to a bin.
-  void AddWeightedSumOfAssignedDimension(const std::vector<int64>& weights,
+  void AddWeightedSumOfAssignedDimension(const std::vector<int64_t>& weights,
                                          IntVar* const cost_var);
 
   /// This dimension links 'count_var' to the actual number of bins used in the
@@ -5240,7 +5333,7 @@ class Pack : public Constraint {
   std::vector<std::vector<int>> forced_;
   std::vector<std::vector<int>> removed_;
   std::vector<IntVarIterator*> holes_;
-  uint64 stamp_;
+  uint64_t stamp_;
   Demon* demon_;
   std::vector<std::pair<int, int>> to_set_;
   std::vector<std::pair<int, int>> to_unset_;
@@ -5263,7 +5356,7 @@ class DisjunctiveConstraint : public Constraint {
   /// a positive or null value.
   void SetTransitionTime(Solver::IndexEvaluator2 transition_time);
 
-  int64 TransitionTime(int before_index, int after_index) {
+  int64_t TransitionTime(int before_index, int after_index) {
     DCHECK(transition_time_);
     return transition_time_(before_index, after_index);
   }

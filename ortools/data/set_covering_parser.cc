@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,6 +12,8 @@
 // limitations under the License.
 
 #include "ortools/data/set_covering_parser.h"
+
+#include <cstdint>
 
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_split.h"
@@ -195,8 +197,8 @@ int ScpParser::strtoint32(const std::string& word) {
   return result;
 }
 
-int64 ScpParser::strtoint64(const std::string& word) {
-  int64 result;
+int64_t ScpParser::strtoint64(const std::string& word) {
+  int64_t result;
   CHECK(absl::SimpleAtoi(word, &result));
   return result;
 }

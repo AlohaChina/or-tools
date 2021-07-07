@@ -11,7 +11,7 @@ cc_library(
 
 cc_library(
     name = "sysinfo",
-    srcs = ["sysinfo_nonport.cc"],
+    srcs = ["sysinfo.cc"],
     hdrs = ["sysinfo.h"],
     deps = [
         "//ortools/base",
@@ -22,14 +22,14 @@ cc_library(
 cc_library(
     name = "file",
     srcs = [
-        "file_nonport.cc",
+        "file.cc",
     ],
     hdrs = [
         "file.h",
     ],
     deps = [
         "//ortools/base:file",
-        "//ortools/base:status",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/time",
@@ -44,6 +44,6 @@ cc_library(
     deps = [
         "//ortools/base",
         "@com_google_absl//absl/strings",
-        "@com_google_protobuf_cc//:protobuf",
+        "@com_google_protobuf//:protobuf",
     ],
 )

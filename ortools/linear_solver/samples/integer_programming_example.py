@@ -1,4 +1,5 @@
-# Copyright 2010-2018 Google LLC
+#!/usr/bin/env python3
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -12,7 +13,6 @@
 # limitations under the License.
 """Small example to illustrate solving a MIP problem."""
 # [START program]
-from __future__ import print_function
 # [START import]
 from ortools.linear_solver import pywraplp
 # [END import]
@@ -21,9 +21,9 @@ from ortools.linear_solver import pywraplp
 def IntegerProgrammingExample():
     """Integer programming sample."""
     # [START solver]
-    # Create the mip solver with the CBC backend.
-    solver = pywraplp.Solver('IntegerProgrammingExample',
-                             pywraplp.Solver.CBC_MIXED_INTEGER_PROGRAMMING)
+    # Create the mip solver with the SCIP backend.
+    solver = pywraplp.Solver.CreateSolver('SCIP')
+
     # [END solver]
 
     # [START variables]
@@ -64,6 +64,7 @@ def IntegerProgrammingExample():
 
     # Solve the problem and print the solution.
     # [START print_solution]
+    solver.SetNumThreads(8)
     solver.Solve()
     # Print the objective value of the solution.
     print('Maximum objective function value = %d' % solver.Objective().Value())

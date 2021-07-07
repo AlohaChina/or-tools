@@ -1,4 +1,5 @@
-# Copyright 2010-2018 Google LLC
+#!/usr/bin/env python3
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -20,7 +21,6 @@ This problem has 72 different solutions in base 10.
 """
 
 # [START program]
-from __future__ import print_function
 
 from ortools.sat.python import cp_model
 
@@ -84,7 +84,10 @@ def CPIsFunSat():
     ### Solve model.
     solver = cp_model.CpSolver()
     solution_printer = VarArraySolutionPrinter(letters)
-    status = solver.SearchForAllSolutions(model, solution_printer)
+    # Enumerate all solutions.
+    solver.parameters.enumerate_all_solutions = True
+    # Solve.
+    status = solver.Solve(model, solution_printer)
     # [END solve]
 
     print()

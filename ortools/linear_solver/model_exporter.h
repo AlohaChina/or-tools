@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,10 +17,10 @@
 #include <string>
 #include <vector>
 
+#include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "ortools/base/hash.h"
 #include "ortools/base/macros.h"
-#include "ortools/base/statusor.h"
 #include "ortools/linear_solver/linear_solver.pb.h"
 
 namespace operations_research {
@@ -68,7 +68,7 @@ struct MPModelExportOptions {
  * http://tinyurl.com/cplex-lp-format
  * http://www.gurobi.com/documentation/5.1/reference-manual/node871
  */
-util::StatusOr<std::string> ExportModelAsLpFormat(
+absl::StatusOr<std::string> ExportModelAsLpFormat(
     const MPModelProto& model,
     const MPModelExportOptions& options = MPModelExportOptions());
 
@@ -97,7 +97,7 @@ util::StatusOr<std::string> ExportModelAsLpFormat(
  * Gurobi's description:
  * http://www.gurobi.com/documentation/5.1/reference-manual/node869
  */
-util::StatusOr<std::string> ExportModelAsMpsFormat(
+absl::StatusOr<std::string> ExportModelAsMpsFormat(
     const MPModelProto& model,
     const MPModelExportOptions& options = MPModelExportOptions());
 

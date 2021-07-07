@@ -1,4 +1,4 @@
-# Copyright 2010-2018 Google LLC
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -12,7 +12,6 @@
 # limitations under the License.
 """pywrapcp unittest file."""
 
-from __future__ import print_function
 
 from functools import partial
 
@@ -404,7 +403,7 @@ class PyWrapRoutingTest(unittest.TestCase):
         # Solve with parameters
         assignment = model.SolveWithParameters(search_parameters)
         self.assertEqual(
-            10, model.GetNumberOfDecisionsInFirstSolution(search_parameters))
+            11, model.GetNumberOfDecisionsInFirstSolution(search_parameters))
         self.assertEqual(
             0, model.GetNumberOfRejectsInFirstSolution(search_parameters))
         self.assertEqual(90, assignment.ObjectiveValue())

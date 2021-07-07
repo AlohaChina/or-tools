@@ -1,20 +1,74 @@
 package(default_visibility = ["//visibility:public"])
 
+config_setting(
+    name = "on_linux",
+    constraint_values = [
+        "@platforms//os:linux",
+    ],
+)
+
+config_setting(
+    name = "on_windows",
+    constraint_values = [
+        "@platforms//os:windows",
+    ],
+)
+
 cc_library(
     name = "base",
+    srcs = [
+        "commandlineflags.cc",
+        "logging.cc",
+        "logging_utilities.cc",
+        "raw_logging.cc",
+        "version.cc",
+        "vlog_is_on.cc",
+    ],
     hdrs = [
         "basictypes.h",
         "commandlineflags.h",
         "integral_types.h",
+        "log_severity.h",
         "logging.h",
+        "logging_export.h",
+        "logging_utilities.h",
         "macros.h",
+        "raw_logging.h",
+        "stl_logging.h",
+        "version.h",
+        "vlog_is_on.h",
     ],
-    srcs = [
-        "logging.cc",
+    copts = [
+        "-DOR_TOOLS_MAJOR=8",
+        "-DOR_TOOLS_MINOR=1",
+    ],
+    defines = select({
+        "on_windows": ["OR_TOOLS_EXPORTS"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/container:node_hash_map",
+        "@com_google_absl//absl/container:node_hash_set",
+        "@com_google_absl//absl/debugging:failure_signal_handler",
+        "@com_google_absl//absl/debugging:stacktrace",
+        "@com_google_absl//absl/debugging:symbolize",
+        "@com_google_absl//absl/flags:commandlineflag",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/synchronization",
+    ],
+)
+
+cc_library(
+    name = "container_logging",
+    hdrs = [
+        "container_logging.h",
     ],
     deps = [
-        "@com_github_gflags_gflags//:gflags",
-        "@com_github_glog_glog//:glog",
+        ":base",
     ],
 )
 
@@ -29,35 +83,15 @@ cc_library(
 )
 
 cc_library(
-    name = "status",
-    hdrs = [
-        "status.h",
-    ],
-    deps = [
-        ":base",
-    ],
-)
-
-cc_library(
-    name = "statusor",
-    hdrs = [
-        "statusor.h",
-    ],
-    deps = [
-        ":base",
-        ":status",
-    ],
-)
-
-cc_library(
     name = "status_macros",
     hdrs = [
         "status_macros.h",
     ],
     deps = [
         ":base",
-        ":status",
-        ":statusor",
+        ":status_builder",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
     ],
 )
 
@@ -88,7 +122,7 @@ cc_library(
     ],
     deps = [
         ":base",
-        "@com_google_absl//absl/strings:strings",
+        "@com_google_absl//absl/strings",
     ],
 )
 
@@ -102,9 +136,9 @@ cc_library(
     ],
     deps = [
         ":base",
-        ":status",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
-        "@com_google_protobuf_cc//:protobuf",
+        "@com_google_protobuf//:protobuf",
     ],
 )
 
@@ -114,8 +148,8 @@ cc_library(
     deps = [
         ":base",
         ":file",
-        ":status",
-        "@com_google_absl//absl/strings:strings",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
     ],
 )
 
@@ -131,9 +165,9 @@ cc_library(
     deps = [
         ":base",
         ":file",
-        ":status",
-        "@com_google_absl//absl/strings:strings",
-        "@com_google_protobuf_cc//:protobuf",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_protobuf//:protobuf",
     ],
 )
 
@@ -143,10 +177,10 @@ cc_library(
         "protoutil.h",
     ],
     deps = [
-        ":status",
-        ":statusor",
         ":timer",
-        "@com_google_protobuf_cc//:protobuf",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_protobuf//:protobuf",
     ],
 )
 
@@ -158,8 +192,8 @@ cc_library(
     ],
     deps = [
         ":base",
-        "@com_google_absl//absl/strings:strings",
-        "@com_google_protobuf_cc//:protobuf",
+        "@com_google_absl//absl/strings",
+        #"@com_google_protobuf//:protobuf",
     ],
 )
 
@@ -203,7 +237,7 @@ cc_library(
     deps = [
         ":base",
         ":hash",
-        "@com_google_absl//absl/strings:strings",
+        "@com_google_absl//absl/strings",
     ],
 )
 
@@ -238,9 +272,13 @@ cc_library(
 )
 
 cc_library(
-    name = "canonical_errors",
+    name = "status_builder",
     hdrs = [
-        "canonical_errors.h",
+        "status_builder.h",
+    ],
+    deps = [
+        ":base",
+        "@com_google_absl//absl/status",
     ],
 )
 
@@ -302,8 +340,8 @@ cc_library(
 )
 
 cc_library(
-    name = "int_type_indexed_vector",
-    hdrs = ["int_type_indexed_vector.h"],
+    name = "strong_vector",
+    hdrs = ["strong_vector.h"],
     deps = [
         ":base",
         ":int_type",
@@ -335,6 +373,16 @@ cc_library(
 )
 
 cc_library(
+    name = "linked_hash_map",
+    hdrs = ["linked_hash_map.h"],
+    deps = [
+        ":base",
+        "@com_google_absl//absl/container:common",
+        "@com_google_absl//absl/container:flat_hash_map",
+    ],
+)
+
+cc_library(
     name = "threadpool",
     srcs = [
         "threadpool.cc",
@@ -346,4 +394,20 @@ cc_library(
         ":base",
         "@com_google_absl//absl/synchronization",
     ],
+)
+
+cc_library(
+    name = "dynamic_library",
+    hdrs = ["dynamic_library.h"],
+    linkopts = select({
+        "on_linux": ["-Wl,--no-as-needed -ldl"],
+        "//conditions:default": [],
+    }),
+    deps = [":base"],
+)
+
+cc_library(
+    name = "gzipstring",
+    hdrs = ["gzipstring.h"],
+    deps = [":base"],
 )

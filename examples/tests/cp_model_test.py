@@ -1,10 +1,5 @@
 """Tests for ortools.sat.python.cp_model."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
-
 import unittest
 from ortools.sat import cp_model_pb2
 from ortools.sat.python import cp_model
@@ -23,6 +18,20 @@ class SolutionCounter(cp_model.CpSolverSolutionCallback):
 
     def solution_count(self):
         return self.__solution_count
+
+
+class LogToString(object):
+  """Record log in a string."""
+
+  def __init__(self):
+    self.__log = ''
+
+  def NewMessage(self, message: str):
+    self.__log += message
+    self.__log += '\n'
+
+  def Log(self):
+    return self.__log
 
 
 class CpModelTest(unittest.TestCase):
@@ -564,7 +573,8 @@ class CpModelTest(unittest.TestCase):
 
         solver = cp_model.CpSolver()
         solution_counter = SolutionCounter()
-        status = solver.SearchForAllSolutions(model, solution_counter)
+        solver.parameters.enumerate_all_solutions = True
+        status = solver.Solve(model, solution_counter)
         self.assertEqual(status, cp_model.OPTIMAL)
         self.assertEqual(4, solution_counter.solution_count())
 
@@ -612,6 +622,87 @@ class CpModelTest(unittest.TestCase):
         ct = model.Add(a+b >= 5)
         self.assertEqual(ct.Proto().linear.domain[1], cp_model.INT_MAX)
 
+    def testExporToFile(self):
+        print('testExporToFile')
+        model = cp_model.CpModel()
+
+        a = model.NewIntVar(0, 10, 'a')
+        b = model.NewIntVar(0, 10, 'b')
+
+        ct = model.Add(a+b >= 5)
+        self.assertTrue(model.ExportToFile('test_model_python.pbtxt'))
+
+    def testProductIsNull(self):
+        print('testProductIsNull')
+        model = cp_model.CpModel()
+
+        a = model.NewIntVar(0, 10, 'a')
+        b = model.NewIntVar(0, 8, 'b')
+        p = model.NewIntVar(0, 80, 'p')
+
+        model.AddMultiplicationEquality(p, [a, b])
+        model.Add(p == 0)
+        solver = cp_model.CpSolver()
+        status = solver.Solve(model)
+        self.assertEqual(status, cp_model.OPTIMAL)
+
+    def testCustomLog(self):
+        print('testCustomLog')
+        model = cp_model.CpModel()
+        x = model.NewIntVar(-10, 10, 'x')
+        y = model.NewIntVar(-10, 10, 'y')
+        model.AddLinearConstraint(x + 2 * y, 0, 10)
+        model.Minimize(y)
+        solver = cp_model.CpSolver()
+        solver.parameters.log_search_progress = True
+        solver.parameters.log_to_stdout = False
+        log_callback = LogToString()
+        solver.log_callback = log_callback.NewMessage
+
+        self.assertEqual(cp_model.OPTIMAL, solver.Solve(model))
+        self.assertEqual(10, solver.Value(x))
+        self.assertEqual(-5, solver.Value(y))
+
+        print(log_callback.Log())
+        self.assertRegex(log_callback.Log(), 'Parameters.*log_to_stdout.*')
+
+    def testIndexToProto(self):
+        print('testIndexToProto')
+
+        model = cp_model.CpModel()
+
+        # Creates the variables.
+        v0 = model.NewBoolVar('buggyVarIndexToVarProto')
+        v1 = model.NewBoolVar('v1')
+
+        self.assertEqual(model.VarIndexToVarProto(0).name, v0.Name())
+
+    def testWrongBoolEvaluation(self):
+        print('testWrongBoolEvaluation')
+
+        model = cp_model.CpModel()
+
+        # Creates the variables.
+        v0 = model.NewIntVar(0, 10, 'v0')
+        v1 = model.NewIntVar(0, 10, 'v1')
+        v2 = model.NewIntVar(0, 10, 'v2')
+
+        with self.assertRaises(NotImplementedError):
+            if v0 == 2:
+                print('== passed')
+
+        with self.assertRaises(NotImplementedError):
+            if v0 >= 3:
+                print('>= passed')
+
+        with self.assertRaises(NotImplementedError):
+            model.Add(v2 == min(v0, v1))
+            print('min passed')
+
+        with self.assertRaises(NotImplementedError):
+            if v0:
+                print('bool passed')
+
 
 if __name__ == '__main__':
-    unittest.main()
+    unittest.main(verbosity=2)

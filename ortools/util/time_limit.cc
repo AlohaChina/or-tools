@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,12 +15,12 @@
 
 #include "absl/strings/str_cat.h"
 
-DEFINE_bool(time_limit_use_usertime, false,
-            "If true, rely on the user time in the TimeLimit class. This is "
-            "only recommended for benchmarking on a non-isolated environment.");
+ABSL_FLAG(bool, time_limit_use_usertime, false,
+          "If true, rely on the user time in the TimeLimit class. This is "
+          "only recommended for benchmarking on a non-isolated environment.");
 
-DEFINE_bool(time_limit_use_instruction_count, false,
-            "If true, measures the number of instructions executed");
+ABSL_FLAG(bool, time_limit_use_instruction_count, false,
+          "If true, measures the number of instructions executed");
 
 namespace operations_research {
 

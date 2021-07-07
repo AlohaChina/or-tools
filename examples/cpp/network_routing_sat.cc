@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -26,65 +26,68 @@
 // A random problem generator is also included.
 
 #include <atomic>
+#include <cstdint>
+#include <random>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/flags/flag.h"
+#include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
+#include "absl/random/uniform_int_distribution.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/hash.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/map_util.h"
-#include "ortools/base/random.h"
 #include "ortools/graph/shortestpaths.h"
 #include "ortools/sat/cp_model.h"
 #include "ortools/sat/model.h"
 #include "ortools/util/time_limit.h"
 
 // ----- Data Generator -----
-DEFINE_int32(clients, 0,
-             "Number of network clients nodes. If equal to zero, "
-             "then all backbones nodes are also client nodes.");
-DEFINE_int32(backbones, 0, "Number of backbone nodes");
-DEFINE_int32(demands, 0, "Number of network demands.");
-DEFINE_int32(traffic_min, 0, "Min traffic of a demand.");
-DEFINE_int32(traffic_max, 0, "Max traffic of a demand.");
-DEFINE_int32(min_client_degree, 0,
-             "Min number of connections from a client to the backbone.");
-DEFINE_int32(max_client_degree, 0,
-             "Max number of connections from a client to the backbone.");
-DEFINE_int32(min_backbone_degree, 0,
-             "Min number of connections from a backbone node to the rest of "
-             "the backbone nodes.");
-DEFINE_int32(max_backbone_degree, 0,
-             "Max number of connections from a backbone node to the rest of "
-             "the backbone nodes.");
-DEFINE_int32(max_capacity, 0, "Max traffic on any arc.");
-DEFINE_int32(fixed_charge_cost, 0, "Fixed charged cost when using an arc.");
-DEFINE_int32(seed, 0, "Random seed");
+ABSL_FLAG(int, clients, 0,
+          "Number of network clients nodes. If equal to zero, "
+          "then all backbones nodes are also client nodes.");
+ABSL_FLAG(int, backbones, 0, "Number of backbone nodes");
+ABSL_FLAG(int, demands, 0, "Number of network demands.");
+ABSL_FLAG(int, traffic_min, 0, "Min traffic of a demand.");
+ABSL_FLAG(int, traffic_max, 0, "Max traffic of a demand.");
+ABSL_FLAG(int, min_client_degree, 0,
+          "Min number of connections from a client to the backbone.");
+ABSL_FLAG(int, max_client_degree, 0,
+          "Max number of connections from a client to the backbone.");
+ABSL_FLAG(int, min_backbone_degree, 0,
+          "Min number of connections from a backbone node to the rest of "
+          "the backbone nodes.");
+ABSL_FLAG(int, max_backbone_degree, 0,
+          "Max number of connections from a backbone node to the rest of "
+          "the backbone nodes.");
+ABSL_FLAG(int, max_capacity, 0, "Max traffic on any arc.");
+ABSL_FLAG(int, fixed_charge_cost, 0, "Fixed charged cost when using an arc.");
+ABSL_FLAG(int, seed, 0, "Random seed");
 
 // ----- CP Model -----
-DEFINE_double(comfort_zone, 0.85,
-              "Above this limit in 1/1000th, the link is said to be "
-              "congestioned.");
-DEFINE_int32(extra_hops, 6,
-             "When creating all paths for a demand, we look at paths with "
-             "maximum length 'shortest path + extra_hops'");
-DEFINE_int32(max_paths, 1200, "Max number of possible paths for a demand.");
+ABSL_FLAG(double, comfort_zone, 0.85,
+          "Above this limit in 1/1000th, the link is said to be "
+          "congestioned.");
+ABSL_FLAG(int, extra_hops, 6,
+          "When creating all paths for a demand, we look at paths with "
+          "maximum length 'shortest path + extra_hops'");
+ABSL_FLAG(int, max_paths, 1200, "Max number of possible paths for a demand.");
 
 // ----- Reporting -----
-DEFINE_bool(print_model, false, "Print details of the model.");
+ABSL_FLAG(bool, print_model, false, "Print details of the model.");
 
 // ----- Sat parameters -----
-DEFINE_string(params, "", "Sat parameters.");
+ABSL_FLAG(std::string, params, "", "Sat parameters.");
 
 namespace operations_research {
 namespace sat {
 // ---------- Data and Data Generation ----------
-static const int64 kDisconnectedDistance = -1LL;
+static const int64_t kDisconnectedDistance = -1LL;
 
 // ----- Data -----
 // Contains problem data. It assumes capacities are symmetrical:
@@ -96,7 +99,7 @@ class NetworkRoutingData {
       : name_(""), num_nodes_(-1), max_capacity_(-1), fixed_charge_cost_(-1) {}
 
   // Name of the problem.
-  const std::string &name() const { return name_; }
+  const std::string& name() const { return name_; }
 
   // Properties of the model.
   int num_nodes() const { return num_nodes_; }
@@ -128,7 +131,7 @@ class NetworkRoutingData {
   void AddDemand(int source, int destination, int traffic) {
     all_demands_[std::make_pair(source, destination)] = traffic;
   }
-  void set_name(const std::string &name) { name_ = name; }
+  void set_name(absl::string_view name) { name_ = name; }
   void set_max_capacity(int max_capacity) { max_capacity_ = max_capacity; }
   void set_fixed_charge_cost(int cost) { fixed_charge_cost_ = cost; }
 
@@ -137,8 +140,8 @@ class NetworkRoutingData {
   int num_nodes_;
   int max_capacity_;
   int fixed_charge_cost_;
-  std::unordered_map<std::pair<int, int>, int> all_arcs_;
-  std::unordered_map<std::pair<int, int>, int> all_demands_;
+  std::map<std::pair<int, int>, int> all_arcs_;
+  std::map<std::pair<int, int>, int> all_demands_;
 };
 
 // ----- Data Generation -----
@@ -156,15 +159,32 @@ class NetworkRoutingData {
 // fixed cost of 'fixed_charge_cost'.
 class NetworkRoutingDataBuilder {
  public:
-  NetworkRoutingDataBuilder() : random_(0) {}
-
-  void BuildModelFromParameters(int num_clients, int num_backbones,
-                                int num_demands, int traffic_min,
-                                int traffic_max, int min_client_degree,
-                                int max_client_degree, int min_backbone_degree,
-                                int max_backbone_degree, int max_capacity,
-                                int fixed_charge_cost, int seed,
-                                NetworkRoutingData *const data) {
+  NetworkRoutingDataBuilder(int num_clients, int num_backbones, int num_demands,
+                            int traffic_min, int traffic_max,
+                            int min_client_degree, int max_client_degree,
+                            int min_backbone_degree, int max_backbone_degree,
+                            int max_capacity, int fixed_charge_cost)
+      : num_clients_(num_clients),
+        num_backbones_(num_backbones),
+        num_demands_(num_demands),
+        traffic_min_(traffic_min),
+        traffic_max_(traffic_max),
+        min_client_degree_(min_client_degree),
+        max_client_degree_(max_client_degree),
+        min_backbone_degree_(min_backbone_degree),
+        max_backbone_degree_(max_backbone_degree),
+        max_capacity_(max_capacity),
+        fixed_charge_cost_(fixed_charge_cost),
+        rand_gen_(0),
+        uniform_backbones_(0, num_backbones_ - 1),
+        uniform_clients_(0, num_clients_ - 1),
+        uniform_demands_(0, num_demands_ - 1),
+        uniform_traffic_(traffic_min, traffic_max),
+        uniform_client_degree_(min_client_degree_, max_client_degree_),
+        uniform_backbone_degree_(min_backbone_degree_, max_backbone_degree_),
+        uniform_source_(num_clients_ == 0 ? 0 : num_backbones_,
+                        num_clients_ == 0 ? num_backbones - 1
+                                          : num_clients_ + num_backbones_ - 1) {
     CHECK_GE(num_backbones, 1);
     CHECK_GE(num_clients, 0);
     CHECK_GE(num_demands, 1);
@@ -180,16 +200,14 @@ class NetworkRoutingDataBuilder {
     CHECK_LE(max_client_degree, num_backbones);
     CHECK_LE(max_backbone_degree, num_backbones);
     CHECK_GE(max_capacity, 1);
+  }
 
-    const int size = num_backbones + num_clients;
+  void Build(int seed, NetworkRoutingData* const data) {
+    const int size = num_backbones_ + num_clients_;
     InitData(size, seed);
-    BuildGraph(num_clients, num_backbones, min_client_degree, max_client_degree,
-               min_backbone_degree, max_backbone_degree);
-    CreateDemands(num_clients, num_backbones, num_demands, traffic_min,
-                  traffic_max, data);
-    FillData(num_clients, num_backbones, num_demands, traffic_min, traffic_max,
-             min_client_degree, max_client_degree, min_backbone_degree,
-             max_backbone_degree, max_capacity, fixed_charge_cost, seed, data);
+    BuildGraph();
+    CreateDemands(data);
+    FillData(seed, data);
   }
 
  private:
@@ -201,58 +219,57 @@ class NetworkRoutingDataBuilder {
     }
     degrees_.clear();
     degrees_.resize(size, 0);
-    random_.Reset(seed);
+    rand_gen_.seed(seed);
   }
 
-  void BuildGraph(int num_clients, int num_backbones, int min_client_degree,
-                  int max_client_degree, int min_backbone_degree,
-                  int max_backbone_degree) {
-    const int size = num_backbones + num_clients;
+  void BuildGraph() {
+    const int size = num_backbones_ + num_clients_;
 
     // First we create the backbone nodes.
-    for (int i = 1; i < num_backbones; ++i) {
-      int j = random_.Uniform(i);
+    for (int i = 1; i < num_backbones_; ++i) {
+      absl::uniform_int_distribution<int> source(0, i - 1);
+      const int j = source(rand_gen_);
       CHECK_LT(j, i);
       AddEdge(i, j);
     }
 
-    std::unordered_set<int> to_complete;
-    std::unordered_set<int> not_full;
-    for (int i = 0; i < num_backbones; ++i) {
-      if (degrees_[i] < min_backbone_degree) {
+    std::set<int> to_complete;
+    std::set<int> not_full;
+    for (int i = 0; i < num_backbones_; ++i) {
+      if (degrees_[i] < min_backbone_degree_) {
         to_complete.insert(i);
       }
-      if (degrees_[i] < max_backbone_degree) {
+      if (degrees_[i] < max_backbone_degree_) {
         not_full.insert(i);
       }
     }
     while (!to_complete.empty() && not_full.size() > 1) {
       const int node1 = *(to_complete.begin());
       int node2 = node1;
-      while (node2 == node1 || degrees_[node2] >= max_backbone_degree) {
-        node2 = random_.Uniform(num_backbones);
+      while (node2 == node1 || degrees_[node2] >= max_backbone_degree_) {
+        node2 = uniform_backbones_(rand_gen_);
       }
       AddEdge(node1, node2);
-      if (degrees_[node1] >= min_backbone_degree) {
+      if (degrees_[node1] >= min_backbone_degree_) {
         to_complete.erase(node1);
       }
-      if (degrees_[node2] >= min_backbone_degree) {
+      if (degrees_[node2] >= min_backbone_degree_) {
         to_complete.erase(node2);
       }
-      if (degrees_[node1] >= max_backbone_degree) {
+      if (degrees_[node1] >= max_backbone_degree_) {
         not_full.erase(node1);
       }
-      if (degrees_[node2] >= max_backbone_degree) {
+      if (degrees_[node2] >= max_backbone_degree_) {
         not_full.erase(node2);
       }
     }
 
     // Then create the client nodes connected to the backbone nodes.
     // If num_client is 0, then backbone nodes are also client nodes.
-    for (int i = num_backbones; i < size; ++i) {
-      const int degree = RandomInInterval(min_client_degree, max_client_degree);
+    for (int i = num_backbones_; i < size; ++i) {
+      const int degree = uniform_client_degree_(rand_gen_);
       while (degrees_[i] < degree) {
-        const int j = random_.Uniform(num_backbones);
+        const int j = uniform_backbones_(rand_gen_);
         if (!network_[i][j]) {
           AddEdge(i, j);
         }
@@ -260,33 +277,26 @@ class NetworkRoutingDataBuilder {
     }
   }
 
-  void CreateDemands(int num_clients, int num_backbones, int num_demands,
-                     int traffic_min, int traffic_max,
-                     NetworkRoutingData *const data) {
-    while (data->num_demands() < num_demands) {
-      const int source = RandomClient(num_clients, num_backbones);
+  void CreateDemands(NetworkRoutingData* const data) {
+    while (data->num_demands() < num_demands_) {
+      const int source = uniform_source_(rand_gen_);
       int dest = source;
       while (dest == source) {
-        dest = RandomClient(num_clients, num_backbones);
+        dest = uniform_source_(rand_gen_);
       }
-      const int traffic = RandomInInterval(traffic_min, traffic_max);
+      const int traffic = uniform_traffic_(rand_gen_);
       data->AddDemand(source, dest, traffic);
     }
   }
 
-  void FillData(int num_clients, int num_backbones, int num_demands,
-                int traffic_min, int traffic_max, int min_client_degree,
-                int max_client_degree, int min_backbone_degree,
-                int max_backbone_degree, int max_capacity,
-                int fixed_charge_cost, int seed,
-                NetworkRoutingData *const data) {
-    const int size = num_backbones + num_clients;
+  void FillData(int seed, NetworkRoutingData* const data) {
+    const int size = num_backbones_ + num_clients_;
 
     const std::string name = absl::StrFormat(
-        "mp_c%i_b%i_d%i.t%i-%i.cd%i-%i.bd%i-%i.mc%i.fc%i.s%i", num_clients,
-        num_backbones, num_demands, traffic_min, traffic_max, min_client_degree,
-        max_client_degree, min_backbone_degree, max_backbone_degree,
-        max_capacity, fixed_charge_cost, seed);
+        "mp_c%i_b%i_d%i.t%i-%i.cd%i-%i.bd%i-%i.mc%i.fc%i.s%i", num_clients_,
+        num_backbones_, num_demands_, traffic_min_, traffic_max_,
+        min_client_degree_, max_client_degree_, min_backbone_degree_,
+        max_backbone_degree_, max_capacity_, fixed_charge_cost_, seed);
     data->set_name(name);
 
     data->set_num_nodes(size);
@@ -294,13 +304,13 @@ class NetworkRoutingDataBuilder {
     for (int i = 0; i < size - 1; ++i) {
       for (int j = i + 1; j < size; ++j) {
         if (network_[i][j]) {
-          data->AddArc(i, j, max_capacity);
+          data->AddArc(i, j, max_capacity_);
           num_arcs++;
         }
       }
     }
-    data->set_max_capacity(max_capacity);
-    data->set_fixed_charge_cost(fixed_charge_cost);
+    data->set_max_capacity(max_capacity_);
+    data->set_fixed_charge_cost(fixed_charge_cost_);
   }
 
   void AddEdge(int i, int j) {
@@ -310,19 +320,28 @@ class NetworkRoutingDataBuilder {
     network_[j][i] = true;
   }
 
-  int RandomInInterval(int interval_min, int interval_max) {
-    CHECK_LE(interval_min, interval_max);
-    return random_.Uniform(interval_max - interval_min + 1) + interval_min;
-  }
-
-  int RandomClient(int num_clients, int num_backbones) {
-    return (num_clients == 0) ? random_.Uniform(num_backbones)
-                              : random_.Uniform(num_clients) + num_backbones;
-  }
+  const int num_clients_;
+  const int num_backbones_;
+  const int num_demands_;
+  const int traffic_min_;
+  const int traffic_max_;
+  const int min_client_degree_;
+  const int max_client_degree_;
+  const int min_backbone_degree_;
+  const int max_backbone_degree_;
+  const int max_capacity_;
+  const int fixed_charge_cost_;
 
   std::vector<std::vector<bool>> network_;
   std::vector<int> degrees_;
-  MTRandom random_;
+  std::mt19937 rand_gen_;
+  absl::uniform_int_distribution<int> uniform_backbones_;
+  absl::uniform_int_distribution<int> uniform_clients_;
+  absl::uniform_int_distribution<int> uniform_demands_;
+  absl::uniform_int_distribution<int> uniform_traffic_;
+  absl::uniform_int_distribution<int> uniform_client_degree_;
+  absl::uniform_int_distribution<int> uniform_backbone_degree_;
+  absl::uniform_int_distribution<int> uniform_source_;
 };
 
 // ---------- Solving the Problem ----------
@@ -341,7 +360,7 @@ struct Demand {
 
 class NetworkRoutingSolver {
  public:
-  typedef std::unordered_set<int> OnePath;
+  typedef absl::flat_hash_set<int> OnePath;
 
   NetworkRoutingSolver() : num_nodes_(-1) {}
 
@@ -366,12 +385,12 @@ class NetworkRoutingSolver {
       tmp_vars.push_back(arc_vars[i]);
       TableConstraint table = cp_model.AddAllowedAssignments(
           {node_vars[i], node_vars[i + 1], arc_vars[i]});
-      for (const auto &tuple : arcs_data_) {
+      for (const auto& tuple : arcs_data_) {
         table.AddTuple(tuple);
       }
     }
 
-    const Demand &demand = demands_array_[demand_index];
+    const Demand& demand = demands_array_[demand_index];
     cp_model.AddEquality(node_vars[0], demand.source);
     cp_model.AddEquality(node_vars[max_length - 1], demand.destination);
     cp_model.AddAllDifferent(arc_vars);
@@ -382,7 +401,7 @@ class NetworkRoutingSolver {
     std::atomic<bool> stopped(false);
     model.GetOrCreate<TimeLimit>()->RegisterExternalBooleanAsLimit(&stopped);
 
-    model.Add(NewFeasibleSolutionObserver([&](const CpSolverResponse &r) {
+    model.Add(NewFeasibleSolutionObserver([&](const CpSolverResponse& r) {
       const int path_id = all_paths_[demand_index].size();
       all_paths_[demand_index].resize(path_id + 1);
       for (int arc_index = 0; arc_index < max_length - 1; ++arc_index) {
@@ -422,11 +441,11 @@ class NetworkRoutingSolver {
     return num_paths;
   }
 
-  void AddArcData(int64 source, int64 destination, int arc_id) {
+  void AddArcData(int64_t source, int64_t destination, int arc_id) {
     arcs_data_.push_back({source, destination, arc_id});
   }
 
-  void InitArcInfo(const NetworkRoutingData &data) {
+  void InitArcInfo(const NetworkRoutingData& data) {
     const int num_arcs = data.num_arcs();
     capacity_.clear();
     capacity_.resize(num_nodes_);
@@ -444,7 +463,7 @@ class NetworkRoutingSolver {
           arc_capacity_.push_back(capacity);
           capacity_[i][j] = capacity;
           capacity_[j][i] = capacity;
-          if (FLAGS_print_model) {
+          if (absl::GetFlag(FLAGS_print_model)) {
             LOG(INFO) << "Arc " << i << " <-> " << j << " with capacity "
                       << capacity;
           }
@@ -454,7 +473,7 @@ class NetworkRoutingSolver {
     CHECK_EQ(arc_id, num_arcs);
   }
 
-  int InitDemandInfo(const NetworkRoutingData &data) {
+  int InitDemandInfo(const NetworkRoutingData& data) {
     const int num_demands = data.num_demands();
     int total_demand = 0;
     for (int i = 0; i < num_nodes_; ++i) {
@@ -470,17 +489,18 @@ class NetworkRoutingSolver {
     return total_demand;
   }
 
-  int64 InitShortestPaths(const NetworkRoutingData &data) {
+  int64_t InitShortestPaths(const NetworkRoutingData& data) {
     const int num_demands = data.num_demands();
-    int64 total_cumulated_traffic = 0;
+    int64_t total_cumulated_traffic = 0;
     all_min_path_lengths_.clear();
     std::vector<int> paths;
     for (int demand_index = 0; demand_index < num_demands; ++demand_index) {
       paths.clear();
-      const Demand &demand = demands_array_[demand_index];
-      CHECK(DijkstraShortestPath(num_nodes_, demand.source, demand.destination,
-                                 [this](int x, int y) { return HasArc(x, y); },
-                                 kDisconnectedDistance, &paths));
+      const Demand& demand = demands_array_[demand_index];
+      CHECK(DijkstraShortestPath(
+          num_nodes_, demand.source, demand.destination,
+          [this](int x, int y) { return HasArc(x, y); }, kDisconnectedDistance,
+          &paths));
       all_min_path_lengths_.push_back(paths.size() - 1);
     }
 
@@ -491,7 +511,7 @@ class NetworkRoutingSolver {
     return total_cumulated_traffic;
   }
 
-  int InitPaths(const NetworkRoutingData &data, int extra_hops, int max_paths) {
+  int InitPaths(const NetworkRoutingData& data, int extra_hops, int max_paths) {
     const int num_demands = data.num_demands();
     LOG(INFO) << "Computing all possible paths ";
     LOG(INFO) << "  - extra hops = " << extra_hops;
@@ -501,7 +521,7 @@ class NetworkRoutingSolver {
     all_paths_.resize(num_demands);
     const int num_paths = ComputeAllPaths(extra_hops, max_paths);
     for (int demand_index = 0; demand_index < num_demands; ++demand_index) {
-      const Demand &demand = demands_array_[demand_index];
+      const Demand& demand = demands_array_[demand_index];
       LOG(INFO) << "Demand from " << demand.source << " to "
                 << demand.destination << " with traffic " << demand.traffic
                 << ", and " << all_paths_[demand_index].size()
@@ -510,7 +530,7 @@ class NetworkRoutingSolver {
     return num_paths;
   }
 
-  void Init(const NetworkRoutingData &data, int extra_hops, int max_paths) {
+  void Init(const NetworkRoutingData& data, int extra_hops, int max_paths) {
     LOG(INFO) << "Model " << data.name();
     num_nodes_ = data.num_nodes();
     const int num_arcs = data.num_arcs();
@@ -518,7 +538,7 @@ class NetworkRoutingSolver {
 
     InitArcInfo(data);
     const int total_demand = InitDemandInfo(data);
-    const int64 total_cumulated_traffic = InitShortestPaths(data);
+    const int64_t total_cumulated_traffic = InitShortestPaths(data);
     const int num_paths = InitPaths(data, extra_hops, max_paths);
 
     // ----- Report Problem Sizes -----
@@ -535,7 +555,7 @@ class NetworkRoutingSolver {
 
   // ----- Callback for Dijkstra Shortest Path -----
 
-  int64 HasArc(int i, int j) {
+  int64_t HasArc(int i, int j) {
     if (capacity_[i][j] > 0) {
       return 1;
     } else {
@@ -545,7 +565,7 @@ class NetworkRoutingSolver {
 
   // ----- Main Solve routine -----
 
-  int64 Solve() {
+  int64_t Solve() {
     LOG(INFO) << "Solving model";
     const int num_demands = demands_array_.size();
     const int num_arcs = count_arcs();
@@ -562,8 +582,8 @@ class NetworkRoutingSolver {
       // Fill Tuple Set for AllowedAssignment constraint.
       TableConstraint path_ct =
           cp_model.AddAllowedAssignments(path_vars[demand_index]);
-      for (const auto &one_path : all_paths_[demand_index]) {
-        std::vector<int64> tuple(count_arcs(), 0);
+      for (const auto& one_path : all_paths_[demand_index]) {
+        std::vector<int64_t> tuple(count_arcs(), 0);
         for (const int arc : one_path) {
           tuple[arc] = 1;
         }
@@ -574,9 +594,9 @@ class NetworkRoutingSolver {
     std::vector<IntVar> traffic_vars(num_arcs);
     std::vector<IntVar> normalized_traffic_vars(num_arcs);
     std::vector<BoolVar> comfortable_traffic_vars(num_arcs);
-    int64 max_normalized_traffic = 0;
+    int64_t max_normalized_traffic = 0;
     for (int arc_index = 0; arc_index < num_arcs; ++arc_index) {
-      int64 sum_of_traffic = 0;
+      int64_t sum_of_traffic = 0;
       LinearExpr traffic_expr;
       for (int i = 0; i < path_vars.size(); ++i) {
         sum_of_traffic += demands_array_[i].traffic;
@@ -587,7 +607,7 @@ class NetworkRoutingSolver {
       traffic_vars[arc_index] = traffic_var;
       cp_model.AddEquality(traffic_expr, traffic_var);
 
-      const int64 capacity = arc_capacity_[arc_index];
+      const int64_t capacity = arc_capacity_[arc_index];
       IntVar scaled_traffic =
           cp_model.NewIntVar(Domain(0, sum_of_traffic * 1000));
       cp_model.AddEquality(LinearExpr::ScalProd({traffic_var}, {1000}),
@@ -600,8 +620,8 @@ class NetworkRoutingSolver {
                                    cp_model.NewConstant(capacity));
       normalized_traffic_vars[arc_index] = normalized_traffic;
       const BoolVar comfort = cp_model.NewBoolVar();
-      const int64 safe_capacity =
-          static_cast<int64>(capacity * FLAGS_comfort_zone);
+      const int64_t safe_capacity =
+          static_cast<int64_t>(capacity * absl::GetFlag(FLAGS_comfort_zone));
       cp_model.AddGreaterThan(traffic_var, safe_capacity)
           .OnlyEnforceIf(comfort);
       cp_model.AddLessOrEqual(traffic_var, safe_capacity)
@@ -621,13 +641,12 @@ class NetworkRoutingSolver {
     cp_model.Minimize(objective_expr);
 
     Model model;
-    if (!FLAGS_params.empty()) {
-      model.Add(NewSatParameters(FLAGS_params));
+    if (!absl::GetFlag(FLAGS_params).empty()) {
+      model.Add(NewSatParameters(absl::GetFlag(FLAGS_params)));
     }
     int num_solutions = 0;
-    model.Add(NewFeasibleSolutionObserver([&](const CpSolverResponse &r) {
+    model.Add(NewFeasibleSolutionObserver([&](const CpSolverResponse& r) {
       LOG(INFO) << "Solution " << num_solutions;
-      const double objective_value = r.objective_value();
       const double percent = SolutionIntegerValue(r, max_usage_cost) / 10.0;
       int num_non_comfortable_arcs = 0;
       for (const BoolVar comfort : comfortable_traffic_vars) {
@@ -650,11 +669,11 @@ class NetworkRoutingSolver {
  private:
   int count_arcs() const { return arcs_data_.size() / 2; }
 
-  std::vector<std::vector<int64>> arcs_data_;
+  std::vector<std::vector<int64_t>> arcs_data_;
   std::vector<int> arc_capacity_;
   std::vector<Demand> demands_array_;
   int num_nodes_;
-  std::vector<int64> all_min_path_lengths_;
+  std::vector<int64_t> all_min_path_lengths_;
   std::vector<std::vector<int>> capacity_;
   std::vector<std::vector<OnePath>> all_paths_;
 };
@@ -662,17 +681,25 @@ class NetworkRoutingSolver {
 }  // namespace sat
 }  // namespace operations_research
 
-int main(int argc, char **argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
+int main(int argc, char** argv) {
+  absl::SetFlag(&FLAGS_logtostderr, true);
+  google::InitGoogleLogging(argv[0]);
+  absl::ParseCommandLine(argc, argv);
+
   operations_research::sat::NetworkRoutingData data;
-  operations_research::sat::NetworkRoutingDataBuilder builder;
-  builder.BuildModelFromParameters(
-      FLAGS_clients, FLAGS_backbones, FLAGS_demands, FLAGS_traffic_min,
-      FLAGS_traffic_max, FLAGS_min_client_degree, FLAGS_max_client_degree,
-      FLAGS_min_backbone_degree, FLAGS_max_backbone_degree, FLAGS_max_capacity,
-      FLAGS_fixed_charge_cost, FLAGS_seed, &data);
+  operations_research::sat::NetworkRoutingDataBuilder builder(
+      absl::GetFlag(FLAGS_clients), absl::GetFlag(FLAGS_backbones),
+      absl::GetFlag(FLAGS_demands), absl::GetFlag(FLAGS_traffic_min),
+      absl::GetFlag(FLAGS_traffic_max), absl::GetFlag(FLAGS_min_client_degree),
+      absl::GetFlag(FLAGS_max_client_degree),
+      absl::GetFlag(FLAGS_min_backbone_degree),
+      absl::GetFlag(FLAGS_max_backbone_degree),
+      absl::GetFlag(FLAGS_max_capacity),
+      absl::GetFlag(FLAGS_fixed_charge_cost));
+  builder.Build(absl::GetFlag(FLAGS_seed), &data);
   operations_research::sat::NetworkRoutingSolver solver;
-  solver.Init(data, FLAGS_extra_hops, FLAGS_max_paths);
+  solver.Init(data, absl::GetFlag(FLAGS_extra_hops),
+              absl::GetFlag(FLAGS_max_paths));
   LOG(INFO) << "Final cost = " << solver.Solve();
   return EXIT_SUCCESS;
 }

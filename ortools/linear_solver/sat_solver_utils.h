@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -18,21 +18,21 @@
 
 #include "ortools/glop/preprocessor.h"
 #include "ortools/linear_solver/linear_solver.pb.h"
+#include "ortools/util/logging.h"
 
 namespace operations_research {
 
 // Applies presolve steps to improve the MIP -> IP imperfect conversion. The
 // stricter the domain of the variable, the more room we have for scaling the
-// constraint to integers and prevent overflow.
-//
-// If the bounds were shifted, pass in the preprocessor for postsolve to the
-// given unique_ptr.
+// constraint to integers and prevent overflow. Similarly if we can remove
+// singleton continuous variables, it is just good to do so.
 //
 // Returns the presolve status which is currently UNKNOWN for most cases but
 // might be INFEASIBLE if there is some trivial infeasiblity in the model.
 MPSolverResponseStatus ApplyMipPresolveSteps(
-    MPModelProto* model, std::unique_ptr<glop::ShiftVariableBoundsPreprocessor>*
-                             shift_bounds_preprocessor);
+    const glop::GlopParameters& glop_params, MPModelProto* model,
+    std::vector<std::unique_ptr<glop::Preprocessor>>* for_postsolve,
+    SolverLogger* logger);
 
 }  // namespace operations_research
 #endif  // OR_TOOLS_LINEAR_SOLVER_SAT_SOLVER_UTILS_H_

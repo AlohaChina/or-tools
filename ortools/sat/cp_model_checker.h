@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,6 +14,7 @@
 #ifndef OR_TOOLS_SAT_CP_MODEL_CHECKER_H_
 #define OR_TOOLS_SAT_CP_MODEL_CHECKER_H_
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -36,8 +37,13 @@ std::string ValidateCpModel(const CpModelProto& model);
 // Verifies that the given variable assignment is a feasible solution of the
 // given model. The values vector should be in one to one correspondence with
 // the model.variables() list of variables.
+//
+// The last two arguments are optional and help debugging a failing constraint
+// due to presolve.
 bool SolutionIsFeasible(const CpModelProto& model,
-                        const std::vector<int64>& variable_values);
+                        const std::vector<int64_t>& variable_values,
+                        const CpModelProto* mapping_proto = nullptr,
+                        const std::vector<int>* postsolve_mapping = nullptr);
 
 }  // namespace sat
 }  // namespace operations_research

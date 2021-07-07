@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,11 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include "solution_checker.h"
 
 #include <algorithm>
-
 
 namespace roadef_challenge {
 
@@ -55,7 +53,7 @@ void RemainingCapacities::Consume(const Requirements& requirements) {
   CHECK_EQ(num_resources, ResourceIndex(requirements.size()));
   for (ResourceIndex resource_id(0); resource_id < num_resources;
        ++resource_id) {
-    const int64 consumption = requirements.at(resource_id);
+    const int64_t consumption = requirements.at(resource_id);
     remaining_capacities_.at(resource_id) -= consumption;
     transient_remaining_capacities_.at(resource_id) -= consumption;
   }
@@ -66,7 +64,7 @@ void RemainingCapacities::UndoConsumption(const Requirements& requirements) {
   CHECK_EQ(num_resources, ResourceIndex(requirements.size()));
   for (ResourceIndex resource_id(0); resource_id < num_resources;
        ++resource_id) {
-    const int64 consumption = requirements.at(resource_id);
+    const int64_t consumption = requirements.at(resource_id);
     remaining_capacities_.at(resource_id) += consumption;
     const Resource& resource = resources(resource_id);
     if (!resource.is_transient) {
@@ -75,35 +73,35 @@ void RemainingCapacities::UndoConsumption(const Requirements& requirements) {
   }
 }
 
-int64 RemainingCapacities::GetMinTransientValue() const {
+int64_t RemainingCapacities::GetMinTransientValue() const {
   return *std::min_element(transient_remaining_capacities_.begin(),
                            transient_remaining_capacities_.end());
 }
 
-int64 RemainingCapacities::GetLoadCost(
+int64_t RemainingCapacities::GetLoadCost(
     const Capacities& safety_remaining_capacities) const {
-  int64 load_cost = 0;
+  int64_t load_cost = 0;
   const ResourceIndex num_resources = GetNumberOfResources();
   CHECK_EQ(num_resources, ResourceIndex(safety_remaining_capacities.size()));
   for (ResourceIndex resource_id(0); resource_id < num_resources;
        ++resource_id) {
     const int load_cost_weight = resources_.at(resource_id).load_cost_weight;
-    const int64 delta = safety_remaining_capacities.at(resource_id) -
+    const int64_t delta = safety_remaining_capacities.at(resource_id) -
                         remaining_capacities_.at(resource_id);
-    load_cost += load_cost_weight * std::max(delta, int64{0});
+    load_cost += load_cost_weight * std::max(delta, int64_t{0});
   }
   return load_cost;
 }
 
-int64 RemainingCapacities::GetBalanceCost(const BalanceCost& balance_cost)
-    const {
-  const int64 remaining_on_target =
+int64_t RemainingCapacities::GetBalanceCost(
+    const BalanceCost& balance_cost) const {
+  const int64_t remaining_on_target =
       balance_cost.target *
       remaining_capacities_.at(balance_cost.first_resource_id);
-  const int64 remaining =
+  const int64_t remaining =
       remaining_capacities_.at(balance_cost.second_resource_id);
   return balance_cost.weight *
-         std::max(int64{0}, remaining_on_target - remaining);
+         std::max(int64_t{0}, remaining_on_target - remaining);
 }
 
 // --------------------------------------------------------
@@ -175,11 +173,11 @@ bool Machine::HasNegativeRemainingCapacity() const {
          remaining_capacities_.GetMinTransientValue() < 0;
 }
 
-int64 Machine::GetLoadCost() const {
+int64_t Machine::GetLoadCost() const {
   return remaining_capacities_.GetLoadCost(safety_remaining_capacities_);
 }
 
-int64 Machine::GetBalanceCost(const BalanceCost& balance_cost) const {
+int64_t Machine::GetBalanceCost(const BalanceCost& balance_cost) const {
   return remaining_capacities_.GetBalanceCost(balance_cost);
 }
 
@@ -188,7 +186,7 @@ int64 Machine::GetBalanceCost(const BalanceCost& balance_cost) const {
 // --------------------------------------------------------
 
 namespace {
-template<class T>
+template <class T>
 void CheckNotNullInVector(const std::vector<T*>& v) {
   for (int i = 0; i < v.size(); ++i) {
     CHECK_NOTNULL(v.at(i));
@@ -247,17 +245,16 @@ bool SolutionChecker::Check() const {
          CheckSpreadConstraints() && CheckDependencyConstraints();
 }
 
-int64 SolutionChecker::GetObjectiveCost() const {
-  const int64 load_cost = GetLoadCost();
-  const int64 balance_cost = GetBalanceCost();
-  const int64 process_move_cost = GetProcessMoveCost();
-  const int64 service_move_cost = GetServiceMoveCost();
-  const int64 machine_move_cost = GetMachineMoveCost();
-  const int64 total_cost = load_cost + balance_cost + process_move_cost +
+int64_t SolutionChecker::GetObjectiveCost() const {
+  const int64_t load_cost = GetLoadCost();
+  const int64_t balance_cost = GetBalanceCost();
+  const int64_t process_move_cost = GetProcessMoveCost();
+  const int64_t service_move_cost = GetServiceMoveCost();
+  const int64_t machine_move_cost = GetMachineMoveCost();
+  const int64_t total_cost = load_cost + balance_cost + process_move_cost +
                            service_move_cost + machine_move_cost;
   return total_cost;
 }
-
 
 bool SolutionChecker::HasProcessMoved(const Process& process) const {
   const ProcessIndex process_id = process.id();
@@ -368,8 +365,7 @@ bool SolutionChecker::CheckSpreadConstraints() const {
 bool SolutionChecker::CheckDependencyConstraint(
     const Service& dependent_service, const Service& service) const {
   // Mark all neighborhood where a process of service runs.
-  std::vector<bool> used_neighborhoods(machines_.size(),
-                                    false);
+  std::vector<bool> used_neighborhoods(machines_.size(), false);
   LocalProcessIndex num_local_processes = service.GetNumberOfProcesses();
   for (LocalProcessIndex local_process_id(0);
        local_process_id < num_local_processes; ++local_process_id) {
@@ -421,8 +417,8 @@ bool SolutionChecker::CheckDependencyConstraints() const {
   return true;
 }
 
-int64 SolutionChecker::GetLoadCost() const {
-  int64 cost = 0;
+int64_t SolutionChecker::GetLoadCost() const {
+  int64_t cost = 0;
   const MachineIndex num_machines = GetNumberOfMachines();
   for (MachineIndex machine_id(0); machine_id < num_machines; ++machine_id) {
     const Machine& machine = machines(machine_id);
@@ -431,8 +427,8 @@ int64 SolutionChecker::GetLoadCost() const {
   return cost;
 }
 
-int64 SolutionChecker::GetBalanceCost() const {
-  int64 cost = 0;
+int64_t SolutionChecker::GetBalanceCost() const {
+  int64_t cost = 0;
   const MachineIndex num_machines = GetNumberOfMachines();
   const BalanceCostIndex num_balance_costs(balance_costs_.size());
   for (BalanceCostIndex balance_id(0); balance_id < num_balance_costs;
@@ -446,8 +442,8 @@ int64 SolutionChecker::GetBalanceCost() const {
   return cost;
 }
 
-int64 SolutionChecker::GetProcessMoveCost() const {
-  int64 cost = 0;
+int64_t SolutionChecker::GetProcessMoveCost() const {
+  int64_t cost = 0;
   const ProcessIndex num_processes = GetNumberOfProcesses();
   for (ProcessIndex process_id(0); process_id < num_processes; ++process_id) {
     const Process& process = processes(process_id);
@@ -458,7 +454,7 @@ int64 SolutionChecker::GetProcessMoveCost() const {
   return process_move_cost_weight_ * cost;
 }
 
-int64 SolutionChecker::GetServiceMoveCost() const {
+int64_t SolutionChecker::GetServiceMoveCost() const {
   int max_num_moves = 0;
   const ServiceIndex num_services = GetNumberOfServices();
   for (ServiceIndex service_id(0); service_id < num_services; ++service_id) {
@@ -477,8 +473,8 @@ int64 SolutionChecker::GetServiceMoveCost() const {
   return service_move_cost_weight_ * max_num_moves;
 }
 
-int64 SolutionChecker::GetMachineMoveCost() const {
-  int64 cost = 0;
+int64_t SolutionChecker::GetMachineMoveCost() const {
+  int64_t cost = 0;
   const ProcessIndex num_processes = GetNumberOfProcesses();
   for (ProcessIndex process_id(0); process_id < num_processes; ++process_id) {
     const MachineIndex initial_machine_id = initial_assignments_.at(process_id);
@@ -536,10 +532,9 @@ int DataParser::GetNextModelValue(int max_value) {
   return next_value;
 }
 
-template<class T>
-  void DataParser::GetModelVector(size_t size,
-                                  int max_value,
-                                  std::vector<T>* model_vector) {
+template <class T>
+void DataParser::GetModelVector(size_t size, int max_value,
+                                std::vector<T>* model_vector) {
   CHECK(model_vector != nullptr);
   model_vector->clear();
   for (int i = 0; i < size; ++i) {

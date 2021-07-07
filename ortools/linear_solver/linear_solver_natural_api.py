@@ -1,4 +1,4 @@
-# Copyright 2010-2018 Google LLC
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -20,7 +20,6 @@ For examples leveraging the code defined here, see ./pywraplp_test.py and
 
 import collections
 import numbers
-from six import iteritems
 
 # The classes below allow linear expressions to be expressed naturally with the
 # usual arithmetic operators +-*/ and with constant numbers, which makes the
@@ -260,6 +259,6 @@ class LinearConstraint(object):
       ub = self.__ub - constant
 
     constraint = solver.RowConstraint(lb, ub, name)
-    for v, c, in iteritems(coeffs):
+    for v, c, in coeffs.items():
       constraint.SetCoefficient(v, float(c))
     return constraint

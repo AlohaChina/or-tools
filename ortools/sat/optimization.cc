@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,6 +14,7 @@
 #include "ortools/sat/optimization.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
@@ -29,13 +30,12 @@
 #include "absl/strings/str_format.h"
 #include "ortools/base/cleanup.h"
 #include "ortools/base/int_type.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
 #include "ortools/base/map_util.h"
 #include "ortools/base/stl_util.h"
 #include "ortools/base/timer.h"
-#if !defined(__PORTABLE_PLATFORM__) && (defined(USE_CBC) || defined(USE_SCIP))
+#if !defined(__PORTABLE_PLATFORM__) && defined(USE_SCIP)
 #include "ortools/linear_solver/linear_solver.h"
 #include "ortools/linear_solver/linear_solver.pb.h"
 #endif  // __PORTABLE_PLATFORM__
@@ -61,7 +61,7 @@ class Logger {
   explicit Logger(LogBehavior v) : use_stdout_(v == STDOUT_LOG) {}
   void Log(const std::string& message) {
     if (use_stdout_) {
-      printf("%s\n", message.c_str());
+      absl::PrintF("%s\n", message);
     } else {
       LOG(INFO) << message;
     }
@@ -77,7 +77,7 @@ std::string CnfObjectiveLine(const LinearBooleanProblem& problem,
                              Coefficient objective) {
   const double scaled_objective =
       AddOffsetAndScaleObjectiveValue(problem, objective);
-  return absl::StrFormat("o %d", static_cast<int64>(scaled_objective));
+  return absl::StrFormat("o %d", static_cast<int64_t>(scaled_objective));
 }
 
 struct LiteralWithCoreIndex {
@@ -105,7 +105,7 @@ void DeleteVectorIndices(const std::vector<int>& indices, Vector* v) {
 }
 
 // In the Fu & Malik algorithm (or in WPM1), when two cores overlap, we
-// artifically introduce symmetries. More precisely:
+// artificially introduce symmetries. More precisely:
 //
 // The picture below shows two cores with index 0 and 1, with one blocking
 // variable per '-' and with the variables ordered from left to right (by their
@@ -216,38 +216,7 @@ class FuMalikSymmetryBreaker {
 
 }  // namespace
 
-void MinimizeCore(SatSolver* solver, std::vector<Literal>* core) {
-  std::vector<Literal> temp = *core;
-  std::reverse(temp.begin(), temp.end());
-  solver->Backtrack(0);
-  solver->SetAssumptionLevel(0);
-
-  // Note that this Solve() is really fast, since the solver should detect that
-  // the assumptions are unsat with unit propagation only. This is just a
-  // convenient way to remove assumptions that are propagated by the one before
-  // them.
-  const SatSolver::Status status =
-      solver->ResetAndSolveWithGivenAssumptions(temp);
-  if (status != SatSolver::ASSUMPTIONS_UNSAT) {
-    if (status != SatSolver::LIMIT_REACHED) {
-      CHECK_NE(status, SatSolver::FEASIBLE);
-      // This should almost never happen, but it is not impossible. The reason
-      // is that the solver may delete some learned clauses required by the unit
-      // propagation to show that the core is unsat.
-      LOG(WARNING) << "This should only happen rarely! otherwise, investigate. "
-                   << "Returned status is " << SatStatusString(status);
-    }
-    return;
-  }
-  temp = solver->GetLastIncompatibleDecisions();
-  if (temp.size() < core->size()) {
-    VLOG(1) << "minimization " << core->size() << " -> " << temp.size();
-    std::reverse(temp.begin(), temp.end());
-    *core = temp;
-  }
-}
-
-void MinimizeCoreWithPropagation(SatSolver* solver,
+void MinimizeCoreWithPropagation(TimeLimit* limit, SatSolver* solver,
                                  std::vector<Literal>* core) {
   if (solver->IsModelUnsat()) return;
   std::set<LiteralIndex> moved_last;
@@ -255,7 +224,8 @@ void MinimizeCoreWithPropagation(SatSolver* solver,
 
   solver->Backtrack(0);
   solver->SetAssumptionLevel(0);
-  while (true) {
+  if (!solver->FinishPropagation()) return;
+  while (!limit->LimitReached()) {
     // We want each literal in candidate to appear last once in our propagation
     // order. We want to do that while maximizing the reutilization of the
     // current assignment prefix, that is minimizing the number of
@@ -264,7 +234,7 @@ void MinimizeCoreWithPropagation(SatSolver* solver,
         moved_last, solver->CurrentDecisionLevel(), &candidate);
     if (target_level == -1) break;
     solver->Backtrack(target_level);
-    while (!solver->IsModelUnsat() &&
+    while (!solver->IsModelUnsat() && !limit->LimitReached() &&
            solver->CurrentDecisionLevel() < candidate.size()) {
       const Literal decision = candidate[solver->CurrentDecisionLevel()];
       if (solver->Assignment().LiteralIsTrue(decision)) {
@@ -503,8 +473,8 @@ SatSolver::Status SolveWithWPM1(LogBehavior log,
 
   // The current lower_bound on the cost.
   // It will be correct after the initialization.
-  Coefficient lower_bound(static_cast<int64>(problem.objective().offset()));
-  Coefficient upper_bound(kint64max);
+  Coefficient lower_bound(static_cast<int64_t>(problem.objective().offset()));
+  Coefficient upper_bound(std::numeric_limits<int64_t>::max());
 
   // The assumption literals and their associated cost.
   std::vector<Literal> assumptions;
@@ -604,7 +574,7 @@ SatSolver::Status SolveWithWPM1(LogBehavior log,
       ExtractAssignment(problem, *solver, solution);
       DCHECK(IsAssignmentValid(problem, *solution));
       const Coefficient objective_offset(
-          static_cast<int64>(problem.objective().offset()));
+          static_cast<int64_t>(problem.objective().offset()));
       const Coefficient objective = ComputeObjectiveValue(problem, *solution);
       if (objective + objective_offset < upper_bound) {
         logger.Log(CnfObjectiveLine(problem, objective));
@@ -731,7 +701,7 @@ SatSolver::Status SolveWithWPM1(LogBehavior log,
         // If the soft clause protected by old_a has a cost greater than
         // min_cost then:
         // - its cost is disminished by min_cost.
-        // - an identical clause with cost min_cost is artifically added to
+        // - an identical clause with cost min_cost is artificially added to
         //   the problem.
         CHECK_GE(costs[index], min_cost);
         if (costs[index] == min_cost) {
@@ -807,8 +777,8 @@ SatSolver::Status SolveWithRandomParameters(LogBehavior log,
   int max_number_of_conflicts = 5;
   parameters.set_log_search_progress(false);
 
-  Coefficient min_seen(std::numeric_limits<int64>::max());
-  Coefficient max_seen(std::numeric_limits<int64>::min());
+  Coefficient min_seen(std::numeric_limits<int64_t>::max());
+  Coefficient max_seen(std::numeric_limits<int64_t>::min());
   Coefficient best(min_seen);
   for (int i = 0; i < num_times; ++i) {
     solver->Backtrack(0);
@@ -1000,7 +970,7 @@ SatSolver::Status SolveWithCardinalityEncodingAndCore(
   // Initialize the bounds.
   // This is in term of number of variables not at their minimal value.
   Coefficient lower_bound(0);
-  Coefficient upper_bound(kint64max);
+  Coefficient upper_bound(std::numeric_limits<int64_t>::max());
   if (!solution->empty()) {
     CHECK(IsAssignmentValid(problem, *solution));
     upper_bound = ComputeObjectiveValue(problem, *solution) + offset;
@@ -1038,7 +1008,7 @@ SatSolver::Status SolveWithCardinalityEncodingAndCore(
         absl::StrFormat("c iter:%d [%s] lb:%d%s assumptions:%u depth:%d", iter,
                         previous_core_info,
                         lower_bound.value() - offset.value() +
-                            static_cast<int64>(problem.objective().offset()),
+                            static_cast<int64_t>(problem.objective().offset()),
                         gap_string, nodes.size(), max_depth));
 
     // Solve under the assumptions.
@@ -1252,9 +1222,9 @@ SatSolver::Status FindCores(std::vector<Literal> assumptions,
     if (result != SatSolver::ASSUMPTIONS_UNSAT) return result;
     std::vector<Literal> core = sat_solver->GetLastIncompatibleDecisions();
     if (sat_solver->parameters().minimize_core()) {
-      MinimizeCoreWithPropagation(sat_solver, &core);
+      MinimizeCoreWithPropagation(limit, sat_solver, &core);
     }
-    CHECK(!core.empty());
+    if (core.empty()) return sat_solver->UnsatStatus();
     cores->push_back(core);
     if (!sat_solver->parameters().find_multiple_cores()) break;
 
@@ -1294,6 +1264,45 @@ SatSolver::Status FindCores(std::vector<Literal> assumptions,
     }
     assumptions.resize(new_size);
     assumption_weights.resize(new_size);
+  } while (!assumptions.empty());
+  return SatSolver::ASSUMPTIONS_UNSAT;
+}
+
+// Slightly different algo than FindCores() which aim to extract more cores, but
+// not necessarily non-overlaping ones.
+SatSolver::Status FindMultipleCoresForMaxHs(
+    std::vector<Literal> assumptions, Model* model,
+    std::vector<std::vector<Literal>>* cores) {
+  cores->clear();
+  SatSolver* sat_solver = model->GetOrCreate<SatSolver>();
+  TimeLimit* limit = model->GetOrCreate<TimeLimit>();
+  do {
+    if (limit->LimitReached()) return SatSolver::LIMIT_REACHED;
+
+    const SatSolver::Status result =
+        ResetAndSolveIntegerProblem(assumptions, model);
+    if (result != SatSolver::ASSUMPTIONS_UNSAT) return result;
+    std::vector<Literal> core = sat_solver->GetLastIncompatibleDecisions();
+    if (sat_solver->parameters().minimize_core()) {
+      MinimizeCoreWithPropagation(limit, sat_solver, &core);
+    }
+    CHECK(!core.empty());
+    cores->push_back(core);
+    if (!sat_solver->parameters().find_multiple_cores()) break;
+
+    // Pick a random literal from the core and remove it from the set of
+    // assumptions.
+    CHECK(!core.empty());
+    auto* random = model->GetOrCreate<ModelRandomGenerator>();
+    const Literal random_literal =
+        core[absl::Uniform<int>(*random, 0, core.size())];
+    for (int i = 0; i < assumptions.size(); ++i) {
+      if (assumptions[i] == random_literal) {
+        std::swap(assumptions[i], assumptions.back());
+        assumptions.pop_back();
+        break;
+      }
+    }
   } while (!assumptions.empty());
   return SatSolver::ASSUMPTIONS_UNSAT;
 }
@@ -1346,7 +1355,14 @@ bool CoreBasedOptimizer::ProcessSolution() {
     // seens amongst all the feasible solutions found so far.
     term.cover_ub = std::min(term.cover_ub, value);
   }
-  if (objective > integer_trail_->UpperBound(objective_var_)) return true;
+
+  // We use the level zero upper bound of the objective to indicate an upper
+  // limit for the solution objective we are looking for. Again, because the
+  // objective_var is not assumed to be linked, it could take any value in the
+  // current solution.
+  if (objective > integer_trail_->LevelZeroUpperBound(objective_var_)) {
+    return true;
+  }
 
   if (feasible_solution_observer_ != nullptr) {
     feasible_solution_observer_();
@@ -1461,7 +1477,7 @@ bool CoreBasedOptimizer::CoverOptimization() {
   constexpr double max_dtime_per_core = 0.5;
   const double old_time_limit = parameters_->max_deterministic_time();
   parameters_->set_max_deterministic_time(max_dtime_per_core);
-  auto cleanup = ::gtl::MakeCleanup([old_time_limit, this]() {
+  auto cleanup = ::absl::MakeCleanup([old_time_limit, this]() {
     parameters_->set_max_deterministic_time(old_time_limit);
   });
 
@@ -1592,7 +1608,7 @@ SatSolver::Status CoreBasedOptimizer::Optimize() {
       if (!already_switched_to_linear_scan_) {
         already_switched_to_linear_scan_ = true;
         std::vector<IntegerVariable> constraint_vars;
-        std::vector<int64> constraint_coeffs;
+        std::vector<int64_t> constraint_coeffs;
         for (const int index : term_indices) {
           constraint_vars.push_back(terms_[index].var);
           constraint_coeffs.push_back(terms_[index].weight.value());
@@ -1613,8 +1629,8 @@ SatSolver::Status CoreBasedOptimizer::Optimize() {
       for (const ObjectiveTerm& term : terms_) {
         max_depth = std::max(max_depth, term.depth);
       }
-      const int64 lb = integer_trail_->LowerBound(objective_var_).value();
-      const int64 ub = integer_trail_->UpperBound(objective_var_).value();
+      const int64_t lb = integer_trail_->LowerBound(objective_var_).value();
+      const int64_t ub = integer_trail_->UpperBound(objective_var_).value();
       const int gap =
           lb == ub
               ? 0
@@ -1646,7 +1662,7 @@ SatSolver::Status CoreBasedOptimizer::Optimize() {
 
     // Solve under the assumptions.
     //
-    // TODO(user): If the "search" is interupted while computing cores, we
+    // TODO(user): If the "search" is interrupted while computing cores, we
     // currently do not resume it flawlessly. We however add any cores we found
     // before aborting.
     std::vector<std::vector<Literal>> cores;
@@ -1716,7 +1732,7 @@ SatSolver::Status CoreBasedOptimizer::Optimize() {
       // Sum variables in the core <= new_var.
       {
         std::vector<IntegerVariable> constraint_vars;
-        std::vector<int64> constraint_coeffs;
+        std::vector<int64_t> constraint_coeffs;
         for (const Literal lit : core) {
           const int index = gtl::FindOrDie(literal_to_term_index, lit.Index());
           terms_[index].weight -= min_weight;
@@ -1741,10 +1757,14 @@ SatSolver::Status CoreBasedOptimizer::Optimize() {
 //
 // TODO(user): remove code duplication with MinimizeWithCoreAndLazyEncoding();
 SatSolver::Status MinimizeWithHittingSetAndLazyEncoding(
-    IntegerVariable objective_var, std::vector<IntegerVariable> variables,
-    std::vector<IntegerValue> coefficients,
+    const ObjectiveDefinition& objective_definition,
     const std::function<void()>& feasible_solution_observer, Model* model) {
-#if !defined(__PORTABLE_PLATFORM__) && (defined(USE_CBC) || defined(USE_SCIP))
+#if !defined(__PORTABLE_PLATFORM__) && defined(USE_SCIP)
+
+  IntegerVariable objective_var = objective_definition.objective_var;
+  std::vector<IntegerVariable> variables = objective_definition.vars;
+  std::vector<IntegerValue> coefficients = objective_definition.coeffs;
+
   SatSolver* sat_solver = model->GetOrCreate<SatSolver>();
   IntegerTrail* integer_trail = model->GetOrCreate<IntegerTrail>();
   IntegerEncoder* integer_encoder = model->GetOrCreate<IntegerEncoder>();
@@ -1779,16 +1799,12 @@ SatSolver::Status MinimizeWithHittingSetAndLazyEncoding(
   // This is the "generalized" hitting set problem we will solve. Each time
   // we find a core, a new constraint will be added to this problem.
   MPModelRequest request;
-#if defined(USE_SCIP)
   request.set_solver_specific_parameters("limits/gap = 0");
   request.set_solver_type(MPModelRequest::SCIP_MIXED_INTEGER_PROGRAMMING);
-#else   // USE_CBC
-  request.set_solver_type(MPModelRequest::CBC_MIXED_INTEGER_PROGRAMMING);
-#endif  // USE_CBC or USE_SCIP
 
   MPModelProto& hs_model = *request.mutable_model();
-  const int num_variables = variables.size();
-  for (int i = 0; i < num_variables; ++i) {
+  const int num_variables_in_objective = variables.size();
+  for (int i = 0; i < num_variables_in_objective; ++i) {
     if (coefficients[i] < 0) {
       variables[i] = NegationOf(variables[i]);
       coefficients[i] = -coefficients[i];
@@ -1801,12 +1817,6 @@ SatSolver::Status MinimizeWithHittingSetAndLazyEncoding(
     var_proto->set_is_integer(true);
   }
 
-// The MIP solver.
-#if defined(USE_SCIP)
-  MPSolver solver("HS solver", MPSolver::SCIP_MIXED_INTEGER_PROGRAMMING);
-#else   // USE_CBC
-  MPSolver solver("HS solver", MPSolver::CBC_MIXED_INTEGER_PROGRAMMING);
-#endif  // USE_CBC or USE_SCIP
   MPSolutionResponse response;
 
   // This is used by the "stratified" approach. We will only consider terms with
@@ -1817,7 +1827,7 @@ SatSolver::Status MinimizeWithHittingSetAndLazyEncoding(
   // TODO(user): The core is returned in the same order as the assumptions,
   // so we don't really need this map, we could just do a linear scan to
   // recover which node are part of the core.
-  std::map<LiteralIndex, int> assumption_to_index;
+  std::map<LiteralIndex, std::vector<int>> assumption_to_indices;
 
   // New Booleans variable in the MIP model to represent X >= cte.
   std::map<std::pair<int, double>, int> created_var;
@@ -1831,11 +1841,14 @@ SatSolver::Status MinimizeWithHittingSetAndLazyEncoding(
     // not really done incrementally. It might be hard to improve though.
     //
     // TODO(user): deal with time limit.
-    solver.SolveWithProto(request, &response);
+    MPSolver::SolveWithProto(request, &response);
     CHECK_EQ(response.status(), MPSolverResponseStatus::MPSOLVER_OPTIMAL);
+
+    const IntegerValue mip_objective(
+        static_cast<int64_t>(std::round(response.objective_value())));
     VLOG(1) << "constraints: " << hs_model.constraint_size()
-            << " variables: " << hs_model.variable_size()
-            << " mip_lower_bound: " << response.objective_value()
+            << " variables: " << hs_model.variable_size() << " hs_lower_bound: "
+            << objective_definition.ScaleIntegerObjective(mip_objective)
             << " strat: " << stratified_threshold;
 
     // Update the objective lower bound with our current bound.
@@ -1843,10 +1856,8 @@ SatSolver::Status MinimizeWithHittingSetAndLazyEncoding(
     // Note(user): This is not needed for correctness, but it might cause
     // more propagation and is nice to have for reporting/logging purpose.
     if (!integer_trail->Enqueue(
-            IntegerLiteral::GreaterOrEqual(
-                objective_var,
-                IntegerValue(static_cast<int64>(response.objective_value()))),
-            {}, {})) {
+            IntegerLiteral::GreaterOrEqual(objective_var, mip_objective), {},
+            {})) {
       result = SatSolver::INFEASIBLE;
       break;
     }
@@ -1854,11 +1865,11 @@ SatSolver::Status MinimizeWithHittingSetAndLazyEncoding(
     sat_solver->Backtrack(0);
     sat_solver->SetAssumptionLevel(0);
     std::vector<Literal> assumptions;
-    assumption_to_index.clear();
+    assumption_to_indices.clear();
     IntegerValue next_stratified_threshold(0);
-    for (int i = 0; i < num_variables; ++i) {
+    for (int i = 0; i < num_variables_in_objective; ++i) {
       const IntegerValue hs_value(
-          static_cast<int64>(response.variable_value(i)));
+          static_cast<int64_t>(response.variable_value(i)));
       if (hs_value == integer_trail->UpperBound(variables[i])) continue;
 
       // Only consider the terms above the threshold.
@@ -1866,22 +1877,20 @@ SatSolver::Status MinimizeWithHittingSetAndLazyEncoding(
         next_stratified_threshold =
             std::max(next_stratified_threshold, coefficients[i]);
       } else {
+        // It is possible that different variables have the same associated
+        // literal. So we do need to consider this case.
         assumptions.push_back(integer_encoder->GetOrCreateAssociatedLiteral(
             IntegerLiteral::LowerOrEqual(variables[i], hs_value)));
-        gtl::InsertOrDie(&assumption_to_index, assumptions.back().Index(), i);
+        assumption_to_indices[assumptions.back().Index()].push_back(i);
       }
     }
 
     // No assumptions with the current stratified_threshold? use the new one.
-    if (assumptions.empty()) {
-      if (next_stratified_threshold > 0) {
-        CHECK_LT(next_stratified_threshold, stratified_threshold);
-        stratified_threshold = next_stratified_threshold;
-        --iter;  // "false" iteration, the lower bound does not increase.
-        continue;
-      } else {
-        return SatSolver::INFEASIBLE;
-      }
+    if (assumptions.empty() && next_stratified_threshold > 0) {
+      CHECK_LT(next_stratified_threshold, stratified_threshold);
+      stratified_threshold = next_stratified_threshold;
+      --iter;  // "false" iteration, the lower bound does not increase.
+      continue;
     }
 
     // TODO(user): we could also randomly shuffle the assumptions to find more
@@ -1889,10 +1898,7 @@ SatSolver::Status MinimizeWithHittingSetAndLazyEncoding(
     //
     // TODO(user): Use the real weights and exploit the extra cores.
     std::vector<std::vector<Literal>> cores;
-    std::vector<IntegerValue> assumption_weights(assumptions.size(),
-                                                 IntegerValue(1));
-    result = FindCores(assumptions, assumption_weights, stratified_threshold,
-                       model, &cores);
+    result = FindMultipleCoresForMaxHs(assumptions, model, &cores);
     if (result == SatSolver::FEASIBLE) {
       if (!process_solution()) return SatSolver::INFEASIBLE;
       if (parameters.stop_after_first_solution()) {
@@ -1914,10 +1920,11 @@ SatSolver::Status MinimizeWithHittingSetAndLazyEncoding(
     sat_solver->SetAssumptionLevel(0);
     for (const std::vector<Literal>& core : cores) {
       if (core.size() == 1) {
-        const int index =
-            gtl::FindOrDie(assumption_to_index, core.front().Index());
-        hs_model.mutable_variable(index)->set_lower_bound(
-            integer_trail->LowerBound(variables[index]).value());
+        for (const int index :
+             gtl::FindOrDie(assumption_to_indices, core.front().Index())) {
+          hs_model.mutable_variable(index)->set_lower_bound(
+              integer_trail->LowerBound(variables[index]).value());
+        }
         continue;
       }
 
@@ -1925,44 +1932,46 @@ SatSolver::Status MinimizeWithHittingSetAndLazyEncoding(
       MPConstraintProto* ct = hs_model.add_constraint();
       ct->set_lower_bound(1.0);
       for (const Literal lit : core) {
-        const int index = gtl::FindOrDie(assumption_to_index, lit.Index());
-        const double lb = integer_trail->LowerBound(variables[index]).value();
-        const double hs_value = response.variable_value(index);
-        if (hs_value == lb) {
-          ct->add_var_index(index);
-          ct->add_coefficient(1.0);
-          ct->set_lower_bound(ct->lower_bound() + lb);
-        } else {
-          const std::pair<int, double> key = {index, hs_value};
-          if (!gtl::ContainsKey(created_var, key)) {
-            const int new_var_index = hs_model.variable_size();
-            created_var[key] = new_var_index;
+        for (const int index :
+             gtl::FindOrDie(assumption_to_indices, lit.Index())) {
+          const double lb = integer_trail->LowerBound(variables[index]).value();
+          const double hs_value = response.variable_value(index);
+          if (hs_value == lb) {
+            ct->add_var_index(index);
+            ct->add_coefficient(1.0);
+            ct->set_lower_bound(ct->lower_bound() + lb);
+          } else {
+            const std::pair<int, double> key = {index, hs_value};
+            if (!gtl::ContainsKey(created_var, key)) {
+              const int new_var_index = hs_model.variable_size();
+              created_var[key] = new_var_index;
 
-            MPVariableProto* new_var = hs_model.add_variable();
-            new_var->set_lower_bound(0);
-            new_var->set_upper_bound(1);
-            new_var->set_is_integer(true);
+              MPVariableProto* new_var = hs_model.add_variable();
+              new_var->set_lower_bound(0);
+              new_var->set_upper_bound(1);
+              new_var->set_is_integer(true);
 
-            // (new_var == 1) => x > hs_value.
-            // (x - lb) - (hs_value - lb + 1) * new_var >= 0.
-            MPConstraintProto* implication = hs_model.add_constraint();
-            implication->set_lower_bound(lb);
-            implication->add_var_index(index);
-            implication->add_coefficient(1.0);
-            implication->add_var_index(new_var_index);
-            implication->add_coefficient(lb - hs_value - 1);
+              // (new_var == 1) => x > hs_value.
+              // (x - lb) - (hs_value - lb + 1) * new_var >= 0.
+              MPConstraintProto* implication = hs_model.add_constraint();
+              implication->set_lower_bound(lb);
+              implication->add_var_index(index);
+              implication->add_coefficient(1.0);
+              implication->add_var_index(new_var_index);
+              implication->add_coefficient(lb - hs_value - 1);
+            }
+            ct->add_var_index(gtl::FindOrDieNoPrint(created_var, key));
+            ct->add_coefficient(1.0);
           }
-          ct->add_var_index(gtl::FindOrDieNoPrint(created_var, key));
-          ct->add_coefficient(1.0);
         }
       }
     }
   }
 
   return result;
-#else   // !__PORTABLE_PLATFORM__ && (USE_CBC || USE_SCIP)
+#else   // !__PORTABLE_PLATFORM__ && USE_SCIP
   LOG(FATAL) << "Not supported.";
-#endif  // __PORTABLE_PLATFORM || (!USE_CBC && !USE_SCIP)
+#endif  // !__PORTABLE_PLATFORM__ && USE_SCIP
 }
 
 }  // namespace sat

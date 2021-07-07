@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -23,12 +23,26 @@
 #include "ortools/sat/cp_model.pb.h"
 #include "ortools/sat/sat_parameters.pb.h"
 #include "ortools/sat/swig_helper.h"
+#include "ortools/util/sorted_interval_list.h"
+
+/* Global JNI reference deleter. Instantiate it via std::make_shared<> */
+class GlobalRefGuard {
+  JNIEnv *jenv_;
+  jobject jref_;
+  // non-copyable
+  GlobalRefGuard(const GlobalRefGuard &) = delete;
+  GlobalRefGuard &operator=(const GlobalRefGuard &) = delete;
+ public:
+  GlobalRefGuard(JNIEnv *jenv, jobject jref): jenv_(jenv), jref_(jref) {}
+  ~GlobalRefGuard() { jenv_->DeleteGlobalRef(jref_); }
+};
 %}
 
-typedef int64_t int64;
-typedef uint64_t uint64;
-
 %module(directors="1") operations_research_sat
+
+%typemap(javaimports) operations_research::sat::CpSatHelper %{
+import com.google.ortools.util.Domain;
+%}
 
 PROTO_INPUT(operations_research::sat::CpModelProto,
             com.google.ortools.sat.CpModelProto,
@@ -38,6 +52,10 @@ PROTO_INPUT(operations_research::sat::SatParameters,
             com.google.ortools.sat.SatParameters,
             parameters);
 
+PROTO_INPUT(operations_research::sat::IntegerVariableProto,
+            com.google.ortools.sat.IntegerVariableProto,
+            variable_proto);
+
 PROTO_INPUT(operations_research::sat::CpSolverResponse,
             com.google.ortools.sat.CpSolverResponse,
             response);
@@ -45,19 +63,56 @@ PROTO_INPUT(operations_research::sat::CpSolverResponse,
 PROTO2_RETURN(operations_research::sat::CpSolverResponse,
               com.google.ortools.sat.CpSolverResponse);
 
+// This typemap is inspired by the constraints_solver java typemaps.
+// The only difference is that the argument is not a basic type, and needs
+// processing to be passed to the std::function.
+//
+// TODO(user): cleanup java/functions.i and move the code there.
+%typemap(in) std::function<void(const std::string&)> %{
+  jclass $input_object_class = jenv->GetObjectClass($input);
+  if (nullptr == $input_object_class) return $null;
+
+
+  jmethodID $input_method_id = jenv->GetMethodID(
+    $input_object_class, "accept", "(Ljava/lang/Object;)V");
+  assert($input_method_id != nullptr);
+  // $input will be deleted once this function return.
+  jobject $input_object = jenv->NewGlobalRef($input);
+
+  // Global JNI reference deleter
+  auto $input_guard = std::make_shared<GlobalRefGuard>(jenv, $input_object);
+  $1 = [jenv, $input_object, $input_method_id, $input_guard](
+      const std::string& message) -> void {
+    return jenv->CallVoidMethod($input_object, $input_method_id,
+                                (jenv)->NewStringUTF(message.c_str()));
+  };
+%}
+%typemap(jni) std::function<void(const std::string&)> "jobject" // Type used in the JNI C.
+%typemap(jtype) std::function<void(const std::string&)> "java.util.function.Consumer<String>" // Type used in the JNI.java.
+%typemap(jstype) std::function<void(const std::string&)> "java.util.function.Consumer<String>" // Type used in the Proxy class.
+%typemap(javain) std::function<void(const std::string&)> "$javainput" // passing the Callback to JNI java class.
+
 %ignoreall
 
 %unignore operations_research;
 %unignore operations_research::sat;
 
-// Wrap the relevant part of the SatHelper.
-%unignore operations_research::sat::SatHelper;
-%rename (solve) operations_research::sat::SatHelper::Solve;
-%rename (solveWithParameters) operations_research::sat::SatHelper::SolveWithParameters;
-%rename (solveWithParametersAndSolutionCallback) operations_research::sat::SatHelper::SolveWithParametersAndSolutionCallback;
-%rename (modelStats) operations_research::sat::SatHelper::ModelStats;
-%rename (solverResponseStats) operations_research::sat::SatHelper::SolverResponseStats;
-%rename (validateModel) operations_research::sat::SatHelper::ValidateModel;
+// Wrap the SolveWrapper class.
+%unignore operations_research::sat::SolveWrapper;
+%rename (addLogCallback) operations_research::sat::SolveWrapper::AddLogCallback;
+%rename (addSolutionCallback) operations_research::sat::SolveWrapper::AddSolutionCallback;
+%rename (clearSolutionCallback) operations_research::sat::SolveWrapper::ClearSolutionCallback;
+%rename (setParameters) operations_research::sat::SolveWrapper::SetParameters;
+%rename (solve) operations_research::sat::SolveWrapper::Solve;
+%rename (stopSearch) operations_research::sat::SolveWrapper::StopSearch;
+
+// Wrap the relevant part of the CpSatHelper.
+%unignore operations_research::sat::CpSatHelper;
+%rename (modelStats) operations_research::sat::CpSatHelper::ModelStats;
+%rename (solverResponseStats) operations_research::sat::CpSatHelper::SolverResponseStats;
+%rename (validateModel) operations_research::sat::CpSatHelper::ValidateModel;
+%rename (variableDomain) operations_research::sat::CpSatHelper::VariableDomain;
+%rename (writeModelToFile) operations_research::sat::CpSatHelper::WriteModelToFile;
 
 // We use directors for the solution callback.
 %feature("director") operations_research::sat::SolutionCallback;

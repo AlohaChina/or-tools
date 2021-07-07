@@ -3,15 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1" />
-<meta name="generator" content="pdoc 0.7.2" />
+<meta name="generator" content="pdoc 0.9.2" />
 <title>cp_model API documentation</title>
 <meta name="description" content="Methods for building and solving CP-SAT models …" />
-<link href='https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.0/normalize.min.css' rel='stylesheet'>
-<link href='https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/8.0.0/sanitize.min.css' rel='stylesheet'>
-<link href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/styles/github.min.css" rel="stylesheet">
-<style>.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:30px;overflow:hidden}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:1em 0 .50em 0}h3{font-size:1.4em;margin:25px 0 10px 0}h4{margin:0;font-size:105%}a{color:#058;text-decoration:none;transition:color .3s ease-in-out}a:hover{color:#e82}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900}pre code{background:#f8f8f8;font-size:.8em;line-height:1.4em}code{background:#f2f2f1;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{background:#f8f8f8;border:0;border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0;padding:1ex}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{font-weight:bold}#index h4 + ul{margin-bottom:.6em}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-weight:bold;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}.admonition{padding:.1em .5em;margin-bottom:1em}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
-<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.item .name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul{padding-left:1.5em}.toc > ul > li{margin-top:.5em}}</style>
+<link rel="preload stylesheet" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/11.0.1/sanitize.min.css" integrity="sha256-PK9q560IAAa6WVRRh76LtCaI8pjTJ2z11v0miyNNjrs=" crossorigin>
+<link rel="preload stylesheet" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/10up-sanitize.css/11.0.1/typography.min.css" integrity="sha256-7l/o7C8jubJiy74VsKTidCy1yBkRtiUGbVkYBylBqUg=" crossorigin>
+<link rel="stylesheet preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/10.1.1/styles/github.min.css" crossorigin>
+<style>:root{--highlight-color:#fe9}.flex{display:flex !important}body{line-height:1.5em}#content{padding:20px}#sidebar{padding:30px;overflow:hidden}#sidebar > *:last-child{margin-bottom:2cm}.http-server-breadcrumbs{font-size:130%;margin:0 0 15px 0}#footer{font-size:.75em;padding:5px 30px;border-top:1px solid #ddd;text-align:right}#footer p{margin:0 0 0 1em;display:inline-block}#footer p:last-child{margin-right:30px}h1,h2,h3,h4,h5{font-weight:300}h1{font-size:2.5em;line-height:1.1em}h2{font-size:1.75em;margin:1em 0 .50em 0}h3{font-size:1.4em;margin:25px 0 10px 0}h4{margin:0;font-size:105%}h1:target,h2:target,h3:target,h4:target,h5:target,h6:target{background:var(--highlight-color);padding:.2em 0}a{color:#058;text-decoration:none;transition:color .3s ease-in-out}a:hover{color:#e82}.title code{font-weight:bold}h2[id^="header-"]{margin-top:2em}.ident{color:#900}pre code{background:#f8f8f8;font-size:.8em;line-height:1.4em}code{background:#f2f2f1;padding:1px 4px;overflow-wrap:break-word}h1 code{background:transparent}pre{background:#f8f8f8;border:0;border-top:1px solid #ccc;border-bottom:1px solid #ccc;margin:1em 0;padding:1ex}#http-server-module-list{display:flex;flex-flow:column}#http-server-module-list div{display:flex}#http-server-module-list dt{min-width:10%}#http-server-module-list p{margin-top:0}.toc ul,#index{list-style-type:none;margin:0;padding:0}#index code{background:transparent}#index h3{border-bottom:1px solid #ddd}#index ul{padding:0}#index h4{margin-top:.6em;font-weight:bold}@media (min-width:200ex){#index .two-column{column-count:2}}@media (min-width:300ex){#index .two-column{column-count:3}}dl{margin-bottom:2em}dl dl:last-child{margin-bottom:4em}dd{margin:0 0 1em 3em}#header-classes + dl > dd{margin-bottom:3em}dd dd{margin-left:2em}dd p{margin:10px 0}.name{background:#eee;font-weight:bold;font-size:.85em;padding:5px 10px;display:inline-block;min-width:40%}.name:hover{background:#e0e0e0}dt:target .name{background:var(--highlight-color)}.name > span:first-child{white-space:nowrap}.name.class > span:nth-child(2){margin-left:.4em}.inherited{color:#999;border-left:5px solid #eee;padding-left:1em}.inheritance em{font-style:normal;font-weight:bold}.desc h2{font-weight:400;font-size:1.25em}.desc h3{font-size:1em}.desc dt code{background:inherit}.source summary,.git-link-div{color:#666;text-align:right;font-weight:400;font-size:.8em;text-transform:uppercase}.source summary > *{white-space:nowrap;cursor:pointer}.git-link{color:inherit;margin-left:1em}.source pre{max-height:500px;overflow:auto;margin:0}.source pre code{font-size:12px;overflow:visible}.hlist{list-style:none}.hlist li{display:inline}.hlist li:after{content:',\2002'}.hlist li:last-child:after{content:none}.hlist .hlist{display:inline;padding-left:1em}img{max-width:100%}td{padding:0 .5em}.admonition{padding:.1em .5em;margin-bottom:1em}.admonition-title{font-weight:bold}.admonition.note,.admonition.info,.admonition.important{background:#aef}.admonition.todo,.admonition.versionadded,.admonition.tip,.admonition.hint{background:#dfd}.admonition.warning,.admonition.versionchanged,.admonition.deprecated{background:#fd4}.admonition.error,.admonition.danger,.admonition.caution{background:lightpink}</style>
+<style media="screen and (min-width: 700px)">@media screen and (min-width:700px){#sidebar{width:30%;height:100vh;overflow:auto;position:sticky;top:0}#content{width:70%;max-width:100ch;padding:3em 4em;border-left:1px solid #ddd}pre code{font-size:1em}.item .name{font-size:1em}main{display:flex;flex-direction:row-reverse;justify-content:flex-end}.toc ul ul,#index ul{padding-left:1.5em}.toc > ul > li{margin-top:.5em}}</style>
 <style media="print">@media print{#sidebar h1{page-break-before:always}.source{display:none}}@media print{*{background:transparent !important;color:#000 !important;box-shadow:none !important;text-shadow:none !important}a[href]:after{content:" (" attr(href) ")";font-size:90%}a[href][title]:after{content:none}abbr[title]:after{content:" (" attr(title) ")"}.ir a:after,a[href^="javascript:"]:after,a[href^="#"]:after{content:""}pre,blockquote{border:1px solid #999;page-break-inside:avoid}thead{display:table-header-group}tr,img{page-break-inside:avoid}img{max-width:100% !important}@page{margin:0.5cm}p,h2,h3{orphans:3;widows:3}h1,h2,h3,h4,h5,h6{page-break-after:avoid}}</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/10.1.1/highlight.min.js" integrity="sha256-Uv3H6lx7dJmRfRvH8TH6kJD1TSK1aFcwgx+mdg3epi8=" crossorigin></script>
+<script>window.addEventListener('DOMContentLoaded', () => hljs.initHighlighting())</script>
 <style type="text/css">
 a:link { color: #46641e; text-decoration: none}
 .ident { color: #46641e }
@@ -50,7 +52,7 @@ Print both intermediate solutions and objective values.</li>
 <p>Additional methods for solving CP-SAT models:</p>
 <ul>
 <li><a href="#cp_model.Constraint"><code>Constraint</code></a>: A few utility methods for modifying
-contraints created by <a title="cp_model.CpModel" href="#cp_model.CpModel"><code>CpModel</code></a>.</li>
+constraints created by <code><a title="cp_model.CpModel" href="#cp_model.CpModel">CpModel</a></code>.</li>
 <li><a href="#lineacp_model.LinearExpr"><code>LinearExpr</code></a>: Methods for creating constraints
 and the objective from large arrays of coefficients.</li>
 </ul>
@@ -60,7 +62,7 @@ rather than for solving specific optimization problems.</p>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python"># Copyright 2010-2018 Google LLC
+<pre><code class="python"># Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the &#34;License&#34;);
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -98,7 +100,7 @@ solver calls each time it finds a new solution.
 Additional methods for solving CP-SAT models:
 
 * [`Constraint`](#cp_model.Constraint): A few utility methods for modifying
-  contraints created by `CpModel`.
+  constraints created by `CpModel`.
 * [`LinearExpr`](#lineacp_model.LinearExpr): Methods for creating constraints
   and the objective from large arrays of coefficients.
 
@@ -112,8 +114,8 @@ from __future__ import print_function
 
 import collections
 import numbers
+import threading
 import time
-from six import iteritems
 
 from ortools.sat import cp_model_pb2
 from ortools.sat import sat_parameters_pb2
@@ -315,8 +317,40 @@ class LinearExpr(object):
             &#39;calling %% on a linear expression is not supported, &#39;
             &#39;please use CpModel.AddModuloEquality&#39;)
 
+    def __pow__(self, _):
+        raise NotImplementedError(
+            &#39;calling ** on a linear expression is not supported, &#39;
+            &#39;please use CpModel.AddMultiplicationEquality&#39;)
+
+    def __lshift__(self, _):
+        raise NotImplementedError(
+            &#39;calling left shift on a linear expression is not supported&#39;)
+
+    def __rshift__(self, _):
+        raise NotImplementedError(
+            &#39;calling right shift on a linear expression is not supported&#39;)
+
+    def __and__(self, _):
+        raise NotImplementedError(
+            &#39;calling and on a linear expression is not supported, &#39;
+            &#39;please use CpModel.AddBoolAnd&#39;)
+
+    def __or__(self, _):
+        raise NotImplementedError(
+            &#39;calling or on a linear expression is not supported, &#39;
+            &#39;please use CpModel.AddBoolOr&#39;)
+
+    def __xor__(self, _):
+        raise NotImplementedError(
+            &#39;calling xor on a linear expression is not supported, &#39;
+            &#39;please use CpModel.AddBoolXor&#39;)
+
     def __neg__(self):
         return _ProductCst(self, -1)
+
+    def __bool__(self):
+        raise NotImplementedError(
+            &#39;Evaluating a LinearExpr instance as a Boolean is not implemented.&#39;)
 
     def __eq__(self, arg):
         if arg is None:
@@ -346,8 +380,7 @@ class LinearExpr(object):
             cp_model_helper.AssertIsInt64(arg)
             if arg == INT_MIN:
                 raise ArithmeticError(&#39;&lt; INT_MIN is not supported&#39;)
-            return BoundedLinearExpression(
-                self, [INT_MIN, cp_model_helper.CapInt64(arg - 1)])
+            return BoundedLinearExpression(self, [INT_MIN, arg - 1])
         else:
             return BoundedLinearExpression(self - arg, [INT_MIN, -1])
 
@@ -356,8 +389,7 @@ class LinearExpr(object):
             cp_model_helper.AssertIsInt64(arg)
             if arg == INT_MAX:
                 raise ArithmeticError(&#39;&gt; INT_MAX is not supported&#39;)
-            return BoundedLinearExpression(
-                self, [cp_model_helper.CapInt64(arg + 1), INT_MAX])
+            return BoundedLinearExpression(self, [arg + 1, INT_MAX])
         else:
             return BoundedLinearExpression(self - arg, [1, INT_MAX])
 
@@ -371,11 +403,8 @@ class LinearExpr(object):
             elif arg == INT_MIN:
                 return BoundedLinearExpression(self, [INT_MIN + 1, INT_MAX])
             else:
-                return BoundedLinearExpression(self, [
-                    INT_MIN,
-                    cp_model_helper.CapInt64(arg - 1),
-                    cp_model_helper.CapInt64(arg + 1), INT_MAX
-                ])
+                return BoundedLinearExpression(
+                    self, [INT_MIN, arg - 1, arg + 1, INT_MAX])
         else:
             return BoundedLinearExpression(self - arg,
                                            [INT_MIN, -1, 1, INT_MAX])
@@ -522,11 +551,22 @@ class IntVar(LinearExpr):
     def __init__(self, model, domain, name):
         &#34;&#34;&#34;See CpModel.NewIntVar below.&#34;&#34;&#34;
         self.__model = model
-        self.__index = len(model.variables)
-        self.__var = model.variables.add()
-        self.__var.domain.extend(domain.FlattenedIntervals())
-        self.__var.name = name
         self.__negation = None
+        # Python do not support multiple __init__ methods.
+        # This method is only called from the CpModel class.
+        # We hack the parameter to support the two cases:
+        # case 1:
+        #     model is a CpModelProto, domain is a Domain, and name is a string.
+        # case 2:
+        #     model is a CpModelProto, domain is an index (int), and name is None.
+        if isinstance(domain, numbers.Integral) and name is None:
+            self.__index = domain
+            self.__var = model.variables[domain]
+        else:
+            self.__index = len(model.variables)
+            self.__var = model.variables.add()
+            self.__var.domain.extend(domain.FlattenedIntervals())
+            self.__var.name = name
 
     def Index(self):
         &#34;&#34;&#34;Returns the index of the variable in the model.&#34;&#34;&#34;
@@ -535,6 +575,12 @@ class IntVar(LinearExpr):
     def Proto(self):
         &#34;&#34;&#34;Returns the variable protobuf.&#34;&#34;&#34;
         return self.__var
+
+    def IsEqualTo(self, other):
+        &#34;&#34;&#34;Returns true if self == other in the python sense.&#34;&#34;&#34;
+        if not isinstance(other, IntVar):
+            return False
+        return self.Index() == other.Index()
 
     def __str__(self):
         if not self.__var.name:
@@ -565,7 +611,7 @@ class IntVar(LinearExpr):
             if bound &lt; 0 or bound &gt; 1:
                 raise TypeError(
                     &#39;Cannot call Not on a non boolean variable: %s&#39; % self)
-        if not self.__negation:
+        if self.__negation is None:
             self.__negation = _NotBooleanVariable(self)
         return self.__negation
 
@@ -584,6 +630,10 @@ class _NotBooleanVariable(LinearExpr):
 
     def __str__(self):
         return &#39;not(%s)&#39; % str(self.__boolvar)
+
+    def __bool__(self):
+        raise NotImplementedError(
+            &#39;Evaluating a literal as a Boolean value is not implemented.&#39;)
 
 
 class BoundedLinearExpression(object):
@@ -625,6 +675,30 @@ class BoundedLinearExpression(object):
     def Bounds(self):
         return self.__bounds
 
+    def __bool__(self):
+        # Check for x == y
+        if self.__bounds == [0, 0]:
+            coeffs_map, constant = self.__expr.GetVarValueMap()
+            if constant != 0:
+                return False
+            for coeff in coeffs_map.values():
+                if coeff != 0:
+                    return False
+            return True
+        elif self.__bounds == [INT_MIN, -1, 1, INT_MAX]:
+            # Check for x != y
+            coeffs_map, constant = self.__expr.GetVarValueMap()
+            if constant != 0:
+                return True
+            for coeff in coeffs_map.values():
+                if coeff != 0:
+                    return True
+            return False
+
+        raise NotImplementedError(
+            &#39;Evaluating a BoundedLinearExpr as a Boolean value is not supported.&#39;
+        )
+
 
 class Constraint(object):
     &#34;&#34;&#34;Base class for constraints.
@@ -634,9 +708,9 @@ class Constraint(object):
   The purpose of this class is to allow specification of enforcement literals
   for this constraint.
 
-      b = model.BoolVar(&#39;b&#39;)
-      x = model.IntVar(0, 10, &#39;x&#39;)
-      y = model.IntVar(0, 10, &#39;y&#39;)
+      b = model.NewBoolVar(&#39;b&#39;)
+      x = model.NewIntVar(0, 10, &#39;x&#39;)
+      y = model.NewIntVar(0, 10, &#39;y&#39;)
 
       model.Add(x + 2 * y == 5).OnlyEnforceIf(b.Not())
   &#34;&#34;&#34;
@@ -706,15 +780,28 @@ class IntervalVar(object):
     def __init__(self, model, start_index, size_index, end_index,
                  is_present_index, name):
         self.__model = model
-        self.__index = len(model.constraints)
-        self.__ct = self.__model.constraints.add()
-        self.__ct.interval.start = start_index
-        self.__ct.interval.size = size_index
-        self.__ct.interval.end = end_index
-        if is_present_index is not None:
-            self.__ct.enforcement_literal.append(is_present_index)
-        if name:
-            self.__ct.name = name
+        # As with the IntVar::__init__ method, we hack the __init__ method to
+        # support two use cases:
+        #   case 1: called when creating a new interval variable.
+        #      {start|size|end}_index are indices of integer variables
+        #      is_present_index is either None or the index of a Boolean literal.
+        #      name is a string
+        #   case 2: called when querying an existing interval variable.
+        #      start_index is an int, all parameters after are None.
+        if (size_index is None and end_index is None and
+                is_present_index is None and name is None):
+            self.__index = start_index
+            self.__ct = model.constraints[start_index]
+        else:
+            self.__index = len(model.constraints)
+            self.__ct = self.__model.constraints.add()
+            self.__ct.interval.start = start_index
+            self.__ct.interval.size = size_index
+            self.__ct.interval.end = end_index
+            if is_present_index is not None:
+                self.__ct.enforcement_literal.append(is_present_index)
+            if name:
+                self.__ct.name = name
 
     def Index(self):
         &#34;&#34;&#34;Returns the index of the interval constraint in the model.&#34;&#34;&#34;
@@ -745,6 +832,36 @@ class IntervalVar(object):
         return self.__ct.name
 
 
+def ObjectIsATrueLiteral(literal):
+    &#34;&#34;&#34;Checks if literal is either True, or a Boolean literals fixed to True.&#34;&#34;&#34;
+    if isinstance(literal, IntVar):
+        proto = literal.Proto()
+        return (len(proto.domain) == 2 and proto.domain[0] == 1 and
+                proto.domain[1] == 1)
+    if isinstance(literal, _NotBooleanVariable):
+        proto = literal.Not().Proto()
+        return (len(proto.domain) == 2 and proto.domain[0] == 0 and
+                proto.domain[1] == 0)
+    if isinstance(literal, numbers.Integral):
+        return literal == 1
+    return False
+
+
+def ObjectIsAFalseLiteral(literal):
+    &#34;&#34;&#34;Checks if literal is either False, or a Boolean literals fixed to False.&#34;&#34;&#34;
+    if isinstance(literal, IntVar):
+        proto = literal.Proto()
+        return (len(proto.domain) == 2 and proto.domain[0] == 0 and
+                proto.domain[1] == 0)
+    if isinstance(literal, _NotBooleanVariable):
+        proto = literal.Not().Proto()
+        return (len(proto.domain) == 2 and proto.domain[0] == 1 and
+                proto.domain[1] == 1)
+    if isinstance(literal, numbers.Integral):
+        return literal == 0
+    return False
+
+
 class CpModel(object):
     &#34;&#34;&#34;Methods for building a CP model.
 
@@ -757,7 +874,6 @@ class CpModel(object):
     def __init__(self):
         self.__model = cp_model_pb2.CpModelProto()
         self.__constant_map = {}
-        self.__optional_constant_map = {}
 
     # Integer variable.
 
@@ -801,7 +917,8 @@ class CpModel(object):
 
     def NewConstant(self, value):
         &#34;&#34;&#34;Declares a constant integer.&#34;&#34;&#34;
-        return IntVar(self.__model, Domain(value, value), &#39;&#39;)
+        return IntVar(self.__model, self.GetOrMakeIndexFromConstant(value),
+                      None)
 
     # Linear constraints.
 
@@ -815,7 +932,7 @@ class CpModel(object):
             ct = Constraint(self.__model.constraints)
             model_ct = self.__model.constraints[ct.Index()]
             coeffs_map, constant = linear_expr.GetVarValueMap()
-            for t in iteritems(coeffs_map):
+            for t in coeffs_map.items():
                 if not isinstance(t[0], IntVar):
                     raise TypeError(&#39;Wrong argument&#39; + str(t))
                 cp_model_helper.AssertIsInt64(t[1])
@@ -878,6 +995,9 @@ class CpModel(object):
 
         if not variables:
             raise ValueError(&#39;AddElement expects a non-empty variables array&#39;)
+
+        if isinstance(index, numbers.Integral):
+            return self.Add(list(variables)[index] == target)
 
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
@@ -1042,7 +1162,7 @@ class CpModel(object):
             raise ValueError(&#39;AddAutomaton expects some final states&#39;)
 
         if not transition_triples:
-            raise ValueError(&#39;AddAutomaton expects some transtion triples&#39;)
+            raise ValueError(&#39;AddAutomaton expects some transition triples&#39;)
 
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
@@ -1102,37 +1222,47 @@ class CpModel(object):
         &#34;&#34;&#34;Adds Reservoir(times, demands, min_level, max_level).
 
     Maintains a reservoir level within bounds. The water level starts at 0, and
-    at any time &gt;= 0, it must be between min_level and max_level. Furthermore,
-    this constraint expects all times variables to be &gt;= 0.
+    at any time, it must be between min_level and max_level.
+
     If the variable `times[i]` is assigned a value t, then the current level
     changes by `demands[i]`, which is constant, at time t.
 
-    Note that level min can be &gt; 0, or level max can be &lt; 0. It just forces
-    some demands to be executed at time 0 to make sure that we are within those
-    bounds with the executed demands. Therefore, at any time t &gt;= 0:
+     Note that min level must be &lt;= 0, and the max level must be &gt;= 0. Please
+     use fixed demands to simulate initial state.
 
-        sum(demands[i] if times[i] &lt;= t) in [min_level, max_level]
+     Therefore, at any time:
+         sum(demands[i] if times[i] &lt;= t) in [min_level, max_level]
 
     Args:
-      times: A list of positive integer variables which specify the time of the
+      times: A list of integer variables which specify the time of the
         filling or emptying the reservoir.
       demands: A list of integer values that specifies the amount of the
         emptying or filling.
-      min_level: At any time &gt;= 0, the level of the reservoir must be greater of
+      min_level: At any time, the level of the reservoir must be greater or
         equal than the min level.
-      max_level: At any time &gt;= 0, the level of the reservoir must be less or
-        equal than the max level.
+      max_level: At any time, the level of the reservoir must be less or equal
+        than the max level.
 
     Returns:
       An instance of the `Constraint` class.
 
     Raises:
       ValueError: if max_level &lt; min_level.
+
+      ValueError: if max_level &lt; 0.
+
+      ValueError: if min_level &gt; 0
     &#34;&#34;&#34;
 
         if max_level &lt; min_level:
             return ValueError(
                 &#39;Reservoir constraint must have a max_level &gt;= min_level&#39;)
+
+        if max_level &lt; 0:
+            return ValueError(&#39;Reservoir constraint must have a max_level &gt;= 0&#39;)
+
+        if min_level &gt; 0:
+            return ValueError(&#39;Reservoir constraint must have a min_level &lt;= 0&#39;)
 
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
@@ -1146,45 +1276,55 @@ class CpModel(object):
                                          min_level, max_level):
         &#34;&#34;&#34;Adds Reservoir(times, demands, actives, min_level, max_level).
 
-    Maintain a reservoir level within bounds. The water level starts at 0, and
-    at
-    any time &gt;= 0, it must be within min_level, and max_level. Furthermore, this
-    constraints expect all times variables to be &gt;= 0.
-    If `actives[i]` is true, and if `times[i]` is assigned a value t, then the
-    level of the reservoir changes by `demands[i]`, which is constant, at
-    time t.
+    Maintains a reservoir level within bounds. The water level starts at 0, and
+    at any time, it must be between min_level and max_level.
 
-    Note that level_min can be &gt; 0, or level_max can be &lt; 0. It just forces
-    some demands to be executed at time 0 to make sure that we are within those
-    bounds with the executed demands. Therefore, at any time t &gt;= 0:
+    If the variable `times[i]` is assigned a value t, and `actives[i]` is
+    `True`, then the current level changes by `demands[i]`, which is constant,
+    at time t.
 
-        sum(demands[i] * actives[i] if times[i] &lt;= t) in [min_level, max_level]
+     Note that min level must be &lt;= 0, and the max level must be &gt;= 0. Please
+     use fixed demands to simulate initial state.
+
+     Therefore, at any time:
+         sum(demands[i] * actives[i] if times[i] &lt;= t) in [min_level, max_level]
+
 
     The array of boolean variables &#39;actives&#39;, if defined, indicates which
     actions are actually performed.
 
     Args:
-      times: A list of positive integer variables which specify the time of the
+      times: A list of integer variables which specify the time of the
         filling or emptying the reservoir.
       demands: A list of integer values that specifies the amount of the
         emptying or filling.
       actives: a list of boolean variables. They indicates if the
         emptying/refilling events actually take place.
-      min_level: At any time &gt;= 0, the level of the reservoir must be greater of
+      min_level: At any time, the level of the reservoir must be greater or
         equal than the min level.
-      max_level: At any time &gt;= 0, the level of the reservoir must be less or
-        equal than the max level.
+      max_level: At any time, the level of the reservoir must be less or equal
+        than the max level.
 
     Returns:
       An instance of the `Constraint` class.
 
     Raises:
       ValueError: if max_level &lt; min_level.
+
+      ValueError: if max_level &lt; 0.
+
+      ValueError: if min_level &gt; 0
     &#34;&#34;&#34;
 
         if max_level &lt; min_level:
             return ValueError(
                 &#39;Reservoir constraint must have a max_level &gt;= min_level&#39;)
+
+        if max_level &lt; 0:
+            return ValueError(&#39;Reservoir constraint must have a max_level &gt;= 0&#39;)
+
+        if min_level &gt; 0:
+            return ValueError(&#39;Reservoir constraint must have a min_level &lt;= 0&#39;)
 
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
@@ -1437,6 +1577,50 @@ class CpModel(object):
         model_ct.cumulative.capacity = self.GetOrMakeIndex(capacity)
         return ct
 
+    # Support for deep copy.
+    def CopyFrom(self, other_model):
+        &#34;&#34;&#34;Reset the model, and creates a new one from a CpModelProto instance.&#34;&#34;&#34;
+        self.__model.CopyFrom(other_model.Proto())
+
+        # Rebuild constant map.
+        self.__constant_map.clear()
+        for i, var in enumerate(self.__model.variables):
+            if len(var.domain) == 2 and var.domain[0] == var.domain[1]:
+                self.__constant_map[var.domain[0]] = i
+
+    def GetBoolVarFromProtoIndex(self, index):
+        &#34;&#34;&#34;Returns an already created Boolean variable from its index.&#34;&#34;&#34;
+        if index &lt; 0 or index &gt;= len(self.__model.variables):
+            raise ValueError(
+                f&#39;GetBoolVarFromProtoIndex: out of bound index {index}&#39;)
+        var = self.__model.variables[index]
+        if len(var.domain) != 2 or var.domain[0] &lt; 0 or var.domain[1] &gt; 1:
+            raise ValueError(
+                f&#39;GetBoolVarFromProtoIndex: index {index} does not reference&#39; +
+                &#39; a Boolean variable&#39;)
+
+        return IntVar(self.__model, index, None)
+
+    def GetIntVarFromProtoIndex(self, index):
+        &#34;&#34;&#34;Returns an already created integer variable from its index.&#34;&#34;&#34;
+        if index &lt; 0 or index &gt;= len(self.__model.variables):
+            raise ValueError(
+                f&#39;GetIntVarFromProtoIndex: out of bound index {index}&#39;)
+        return IntVar(self.__model, index, None)
+
+    def GetIntervalVarFromProtoIndex(self, index):
+        &#34;&#34;&#34;Returns an already created interval variable from its index.&#34;&#34;&#34;
+        if index &lt; 0 or index &gt;= len(self.__model.constraints):
+            raise ValueError(
+                f&#39;GetIntervalVarFromProtoIndex: out of bound index {index}&#39;)
+        ct = self.__model.constraints[index]
+        if not ct.HasField(&#39;interval&#39;):
+            raise ValueError(
+                f&#39;GetIntervalVarFromProtoIndex: index {index} does not reference an&#39;
+                + &#39; interval variable&#39;)
+
+        return IntervalVar(self.__model, index, None, None, None, None)
+
     # Helpers.
 
     def __str__(self):
@@ -1493,7 +1677,7 @@ class CpModel(object):
         return index
 
     def VarIndexToVarProto(self, var_index):
-        if var_index &gt; 0:
+        if var_index &gt;= 0:
             return self.__model.variables[var_index]
         else:
             return self.__model.variables[-var_index - 1]
@@ -1519,7 +1703,7 @@ class CpModel(object):
             else:
                 self.__model.objective.scaling_factor = -1
                 self.__model.objective.offset = -constant
-            for v, c, in iteritems(coeffs_map):
+            for v, c, in coeffs_map.items():
                 self.__model.objective.coeffs.append(c)
                 if minimize:
                     self.__model.objective.vars.append(v.Index())
@@ -1563,11 +1747,25 @@ class CpModel(object):
 
     def ModelStats(self):
         &#34;&#34;&#34;Returns a string containing some model statistics.&#34;&#34;&#34;
-        return pywrapsat.SatHelper.ModelStats(self.__model)
+        return pywrapsat.CpSatHelper.ModelStats(self.__model)
 
     def Validate(self):
         &#34;&#34;&#34;Returns a string indicating that the model is invalid.&#34;&#34;&#34;
-        return pywrapsat.SatHelper.ValidateModel(self.__model)
+        return pywrapsat.CpSatHelper.ValidateModel(self.__model)
+
+    def ExportToFile(self, file):
+        &#34;&#34;&#34;Write the model as a protocol buffer to &#39;file&#39;.
+
+    Args:
+      file: file to write the model to. If the filename ends with &#39;txt&#39;, the
+            model will be written as a text file, otherwise, the binary format
+            will be used.
+
+
+    Returns:
+      True if the model was correctly written.
+    &#34;&#34;&#34;
+        return pywrapsat.CpSatHelper.WriteModelToFile(self.__model, file)
 
     def AssertIsBooleanVariable(self, x):
         if isinstance(x, IntVar):
@@ -1580,14 +1778,36 @@ class CpModel(object):
                             &#39; is not a boolean variable&#39;)
 
     def AddHint(self, var, value):
+        &#34;&#34;&#34;Adds &#39;var == value&#39; as a hint to the solver.&#34;&#34;&#34;
         self.__model.solution_hint.vars.append(self.GetOrMakeIndex(var))
         self.__model.solution_hint.values.append(value)
+
+    def ClearHints(self):
+        &#34;&#34;&#34;Remove any solution hint from the model.&#34;&#34;&#34;
+        self.__model.ClearField(&#39;solution_hint&#39;)
+
+    def AddAssumption(self, lit):
+        &#34;&#34;&#34;Add the literal &#39;lit&#39; to the model as assumptions.&#34;&#34;&#34;
+        self.__model.assumptions.append(self.GetOrMakeBooleanIndex(lit))
+
+    def AddAssumptions(self, literals):
+        &#34;&#34;&#34;Add the literals to the model as assumptions.&#34;&#34;&#34;
+        for lit in literals:
+            self.AddAssumption(lit)
+
+    def ClearAssumptions(self):
+        &#34;&#34;&#34;Remove all assumptions from the model.&#34;&#34;&#34;
+        self.__model.ClearField(&#39;assumptions&#39;)
 
 
 def EvaluateLinearExpr(expression, solution):
     &#34;&#34;&#34;Evaluate a linear expression against a solution.&#34;&#34;&#34;
     if isinstance(expression, numbers.Integral):
         return expression
+    if not isinstance(expression, LinearExpr):
+        raise TypeError(&#39;Cannot interpret %s as a linear expression.&#39; %
+                        expression)
+
     value = 0
     to_process = [(expression, 1)]
     while to_process:
@@ -1638,21 +1858,38 @@ class CpSolver(object):
 
     def __init__(self):
         self.__model = None
-        self.__solution = None
+        self.__solution: cp_model_pb2.CpSolverResponse = None
         self.parameters = sat_parameters_pb2.SatParameters()
+        self.log_callback = None
+        self.__solve_wrapper: pywrapsat.SolveWrapper = None
+        self.__lock = threading.Lock()
 
-    def Solve(self, model):
-        &#34;&#34;&#34;Solves the given model and returns the solve status.&#34;&#34;&#34;
-        self.__solution = pywrapsat.SatHelper.SolveWithParameters(
-            model.Proto(), self.parameters)
+    def Solve(self, model, solution_callback=None):
+        &#34;&#34;&#34;Solves a problem and passes each solution to the callback if not null.&#34;&#34;&#34;
+        with self.__lock:
+            solve_wrapper = pywrapsat.SolveWrapper()
+
+        solve_wrapper.SetParameters(self.parameters)
+        if solution_callback is not None:
+            solve_wrapper.AddSolutionCallback(solution_callback)
+
+        if self.log_callback is not None:
+            solve_wrapper.AddLogCallback(self.log_callback)
+
+        self.__solution = solve_wrapper.Solve(model.Proto())
+
+        if solution_callback is not None:
+            solve_wrapper.ClearSolutionCallback(solution_callback)
+
+        with self.__lock:
+            self.__solve_wrapper = None
+
         return self.__solution.status
 
+    # DEPRECATED, just use Solve() with the callback argument.
     def SolveWithSolutionCallback(self, model, callback):
-        &#34;&#34;&#34;Solves a problem and passes each solution found to the callback.&#34;&#34;&#34;
-        self.__solution = (
-            pywrapsat.SatHelper.SolveWithParametersAndSolutionCallback(
-                model.Proto(), self.parameters, callback))
-        return self.__solution.status
+        &#34;&#34;&#34;DEPRECATED Use Solve() with the callback argument.&#34;&#34;&#34;
+        return self.Solve(model, callback)
 
     def SearchForAllSolutions(self, model, callback):
         &#34;&#34;&#34;Search for all solutions of a satisfiability problem.
@@ -1676,15 +1913,21 @@ class CpSolver(object):
         if model.HasObjective():
             raise TypeError(&#39;Search for all solutions is only defined on &#39;
                             &#39;satisfiability problems&#39;)
-        # Store old values.
+        # Store old parameter.
         enumerate_all = self.parameters.enumerate_all_solutions
         self.parameters.enumerate_all_solutions = True
-        self.__solution = (
-            pywrapsat.SatHelper.SolveWithParametersAndSolutionCallback(
-                model.Proto(), self.parameters, callback))
-        # Restore parameters.
+
+        self.Solve(model, callback)
+
+        # Restore parameter.
         self.parameters.enumerate_all_solutions = enumerate_all
         return self.__solution.status
+
+    def StopSearch(self):
+        &#34;&#34;&#34;Stops the current search asynchronously.&#34;&#34;&#34;
+        with self.__lock:
+            if self.__solve_wrapper:
+                self.__solve_wrapper.StopSearch()
 
     def Value(self, expression):
         &#34;&#34;&#34;Returns the value of a linear expression after solve.&#34;&#34;&#34;
@@ -1706,8 +1949,10 @@ class CpSolver(object):
         &#34;&#34;&#34;Returns the best lower (upper) bound found when min(max)imizing.&#34;&#34;&#34;
         return self.__solution.best_objective_bound
 
-    def StatusName(self, status):
+    def StatusName(self, status=None):
         &#34;&#34;&#34;Returns the name of the status returned by Solve().&#34;&#34;&#34;
+        if status is None:
+            status = self.__solution.status
         return cp_model_pb2.CpSolverStatus.Name(status)
 
     def NumBooleans(self):
@@ -1732,11 +1977,15 @@ class CpSolver(object):
 
     def ResponseStats(self):
         &#34;&#34;&#34;Returns some statistics on the solution found as a string.&#34;&#34;&#34;
-        return pywrapsat.SatHelper.SolverResponseStats(self.__solution)
+        return pywrapsat.CpSatHelper.SolverResponseStats(self.__solution)
 
     def ResponseProto(self):
         &#34;&#34;&#34;Returns the response object.&#34;&#34;&#34;
         return self.__solution
+
+    def SufficientAssumptionsForInfeasibility(self):
+        &#34;&#34;&#34;Returns the indices of the infeasible assumptions.&#34;&#34;&#34;
+        return self.__solution.sufficient_assumptions_for_infeasibility
 
 
 class CpSolverSolutionCallback(pywrapsat.SolutionCallback):
@@ -1810,6 +2059,10 @@ class CpSolverSolutionCallback(pywrapsat.SolutionCallback):
             raise RuntimeError(&#39;Solve() has not be called.&#39;)
         if isinstance(expression, numbers.Integral):
             return expression
+        if not isinstance(expression, LinearExpr):
+            raise TypeError(&#39;Cannot interpret %s as a linear expression.&#39; %
+                            expression)
+
         value = 0
         to_process = [(expression, 1)]
         while to_process:
@@ -1908,6 +2161,57 @@ class VarArraySolutionPrinter(CpSolverSolutionCallback):
 <section>
 </section>
 <section>
+<h2 class="section-title" id="header-functions">Functions</h2>
+<dl>
+<dt id="cp_model.ObjectIsAFalseLiteral"><code class="name flex">
+<span>def <span class="ident">ObjectIsAFalseLiteral</span></span>(<span>literal)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Checks if literal is either False, or a Boolean literals fixed to False.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def ObjectIsAFalseLiteral(literal):
+    &#34;&#34;&#34;Checks if literal is either False, or a Boolean literals fixed to False.&#34;&#34;&#34;
+    if isinstance(literal, IntVar):
+        proto = literal.Proto()
+        return (len(proto.domain) == 2 and proto.domain[0] == 0 and
+                proto.domain[1] == 0)
+    if isinstance(literal, _NotBooleanVariable):
+        proto = literal.Not().Proto()
+        return (len(proto.domain) == 2 and proto.domain[0] == 1 and
+                proto.domain[1] == 1)
+    if isinstance(literal, numbers.Integral):
+        return literal == 0
+    return False</code></pre>
+</details>
+</dd>
+<dt id="cp_model.ObjectIsATrueLiteral"><code class="name flex">
+<span>def <span class="ident">ObjectIsATrueLiteral</span></span>(<span>literal)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Checks if literal is either True, or a Boolean literals fixed to True.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def ObjectIsATrueLiteral(literal):
+    &#34;&#34;&#34;Checks if literal is either True, or a Boolean literals fixed to True.&#34;&#34;&#34;
+    if isinstance(literal, IntVar):
+        proto = literal.Proto()
+        return (len(proto.domain) == 2 and proto.domain[0] == 1 and
+                proto.domain[1] == 1)
+    if isinstance(literal, _NotBooleanVariable):
+        proto = literal.Not().Proto()
+        return (len(proto.domain) == 2 and proto.domain[0] == 0 and
+                proto.domain[1] == 0)
+    if isinstance(literal, numbers.Integral):
+        return literal == 1
+    return False</code></pre>
+</details>
+</dd>
+</dl>
 </section>
 <section>
 <h2 class="section-title" id="header-classes">Classes</h2>
@@ -1917,11 +2221,11 @@ class VarArraySolutionPrinter(CpSolverSolutionCallback):
 <span>(</span><span>expr, bounds)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Represents a linear constraint: <code>lb &lt;= linear expression &lt;= ub</code>.</p>
+<div class="desc"><p>Represents a linear constraint: <code>lb &lt;= linear expression &lt;= ub</code>.</p>
 <p>The only use of this class is to be added to the CpModel through
-<code>CpModel.Add(expression)</code>, as in:</p>
+<code><a title="cp_model.CpModel.Add" href="#cp_model.CpModel.Add">CpModel.Add()</a>(expression)</code>, as in:</p>
 <pre><code>model.Add(x + 2 * y -1 &gt;= z)
-</code></pre></section>
+</code></pre></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -1963,7 +2267,31 @@ class VarArraySolutionPrinter(CpSolverSolutionCallback):
         return self.__expr
 
     def Bounds(self):
-        return self.__bounds</code></pre>
+        return self.__bounds
+
+    def __bool__(self):
+        # Check for x == y
+        if self.__bounds == [0, 0]:
+            coeffs_map, constant = self.__expr.GetVarValueMap()
+            if constant != 0:
+                return False
+            for coeff in coeffs_map.values():
+                if coeff != 0:
+                    return False
+            return True
+        elif self.__bounds == [INT_MIN, -1, 1, INT_MAX]:
+            # Check for x != y
+            coeffs_map, constant = self.__expr.GetVarValueMap()
+            if constant != 0:
+                return True
+            for coeff in coeffs_map.values():
+                if coeff != 0:
+                    return True
+            return False
+
+        raise NotImplementedError(
+            &#39;Evaluating a BoundedLinearExpr as a Boolean value is not supported.&#39;
+        )</code></pre>
 </details>
 <h3>Methods</h3>
 <dl>
@@ -1971,7 +2299,7 @@ class VarArraySolutionPrinter(CpSolverSolutionCallback):
 <span>def <span class="ident">Bounds</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"></section>
+<div class="desc"></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -1984,7 +2312,7 @@ class VarArraySolutionPrinter(CpSolverSolutionCallback):
 <span>def <span class="ident">Expression</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"></section>
+<div class="desc"></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -2000,17 +2328,17 @@ class VarArraySolutionPrinter(CpSolverSolutionCallback):
 <span>(</span><span>constraints)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Base class for constraints.</p>
+<div class="desc"><p>Base class for constraints.</p>
 <p>Constraints are built by the CpModel through the Add<XXX> methods.
 Once created by the CpModel class, they are automatically added to the model.
 The purpose of this class is to allow specification of enforcement literals
 for this constraint.</p>
-<pre><code>b = model.BoolVar('b')
-x = model.IntVar(0, 10, 'x')
-y = model.IntVar(0, 10, 'y')
+<pre><code>b = model.NewBoolVar('b')
+x = model.NewIntVar(0, 10, 'x')
+y = model.NewIntVar(0, 10, 'y')
 
 model.Add(x + 2 * y == 5).OnlyEnforceIf(b.Not())
-</code></pre></section>
+</code></pre></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -2023,9 +2351,9 @@ model.Add(x + 2 * y == 5).OnlyEnforceIf(b.Not())
   The purpose of this class is to allow specification of enforcement literals
   for this constraint.
 
-      b = model.BoolVar(&#39;b&#39;)
-      x = model.IntVar(0, 10, &#39;x&#39;)
-      y = model.IntVar(0, 10, &#39;y&#39;)
+      b = model.NewBoolVar(&#39;b&#39;)
+      x = model.NewIntVar(0, 10, &#39;x&#39;)
+      y = model.NewIntVar(0, 10, &#39;y&#39;)
 
       model.Add(x + 2 * y == 5).OnlyEnforceIf(b.Not())
   &#34;&#34;&#34;
@@ -2079,7 +2407,7 @@ model.Add(x + 2 * y == 5).OnlyEnforceIf(b.Not())
 <span>def <span class="ident">Index</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the index of the constraint in the model.</p></section>
+<div class="desc"><p>Returns the index of the constraint in the model.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -2093,7 +2421,7 @@ model.Add(x + 2 * y == 5).OnlyEnforceIf(b.Not())
 <span>def <span class="ident">OnlyEnforceIf</span></span>(<span>self, boolvar)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds an enforcement literal to the constraint.</p>
+<div class="desc"><p>Adds an enforcement literal to the constraint.</p>
 <p>This method adds one or more literals (that is, a boolean variable or its
 negation) as enforcement literals. The conjunction of all these literals
 determines whether the constraint is active or not. It acts as an
@@ -2106,7 +2434,7 @@ must be enforced. If it is false, then the constraint is ignored.</p>
 <dd>A boolean literal or a list of boolean literals.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>self.</p></section>
+<p>self.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -2147,7 +2475,7 @@ Returns:
 <span>def <span class="ident">Proto</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the constraint protobuf.</p></section>
+<div class="desc"><p>Returns the constraint protobuf.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -2163,12 +2491,12 @@ Returns:
 <span>class <span class="ident">CpModel</span></span>
 </code></dt>
 <dd>
-<section class="desc"><p>Methods for building a CP model.</p>
+<div class="desc"><p>Methods for building a CP model.</p>
 <p>Methods beginning with:</p>
 <ul>
 <li><code>New</code> create integer, boolean, or interval variables.</li>
 <li><code>Add</code> create new constraints and add them to the model.</li>
-</ul></section>
+</ul></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -2185,7 +2513,6 @@ Returns:
     def __init__(self):
         self.__model = cp_model_pb2.CpModelProto()
         self.__constant_map = {}
-        self.__optional_constant_map = {}
 
     # Integer variable.
 
@@ -2229,7 +2556,8 @@ Returns:
 
     def NewConstant(self, value):
         &#34;&#34;&#34;Declares a constant integer.&#34;&#34;&#34;
-        return IntVar(self.__model, Domain(value, value), &#39;&#39;)
+        return IntVar(self.__model, self.GetOrMakeIndexFromConstant(value),
+                      None)
 
     # Linear constraints.
 
@@ -2243,7 +2571,7 @@ Returns:
             ct = Constraint(self.__model.constraints)
             model_ct = self.__model.constraints[ct.Index()]
             coeffs_map, constant = linear_expr.GetVarValueMap()
-            for t in iteritems(coeffs_map):
+            for t in coeffs_map.items():
                 if not isinstance(t[0], IntVar):
                     raise TypeError(&#39;Wrong argument&#39; + str(t))
                 cp_model_helper.AssertIsInt64(t[1])
@@ -2306,6 +2634,9 @@ Returns:
 
         if not variables:
             raise ValueError(&#39;AddElement expects a non-empty variables array&#39;)
+
+        if isinstance(index, numbers.Integral):
+            return self.Add(list(variables)[index] == target)
 
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
@@ -2470,7 +2801,7 @@ Returns:
             raise ValueError(&#39;AddAutomaton expects some final states&#39;)
 
         if not transition_triples:
-            raise ValueError(&#39;AddAutomaton expects some transtion triples&#39;)
+            raise ValueError(&#39;AddAutomaton expects some transition triples&#39;)
 
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
@@ -2530,37 +2861,47 @@ Returns:
         &#34;&#34;&#34;Adds Reservoir(times, demands, min_level, max_level).
 
     Maintains a reservoir level within bounds. The water level starts at 0, and
-    at any time &gt;= 0, it must be between min_level and max_level. Furthermore,
-    this constraint expects all times variables to be &gt;= 0.
+    at any time, it must be between min_level and max_level.
+
     If the variable `times[i]` is assigned a value t, then the current level
     changes by `demands[i]`, which is constant, at time t.
 
-    Note that level min can be &gt; 0, or level max can be &lt; 0. It just forces
-    some demands to be executed at time 0 to make sure that we are within those
-    bounds with the executed demands. Therefore, at any time t &gt;= 0:
+     Note that min level must be &lt;= 0, and the max level must be &gt;= 0. Please
+     use fixed demands to simulate initial state.
 
-        sum(demands[i] if times[i] &lt;= t) in [min_level, max_level]
+     Therefore, at any time:
+         sum(demands[i] if times[i] &lt;= t) in [min_level, max_level]
 
     Args:
-      times: A list of positive integer variables which specify the time of the
+      times: A list of integer variables which specify the time of the
         filling or emptying the reservoir.
       demands: A list of integer values that specifies the amount of the
         emptying or filling.
-      min_level: At any time &gt;= 0, the level of the reservoir must be greater of
+      min_level: At any time, the level of the reservoir must be greater or
         equal than the min level.
-      max_level: At any time &gt;= 0, the level of the reservoir must be less or
-        equal than the max level.
+      max_level: At any time, the level of the reservoir must be less or equal
+        than the max level.
 
     Returns:
       An instance of the `Constraint` class.
 
     Raises:
       ValueError: if max_level &lt; min_level.
+
+      ValueError: if max_level &lt; 0.
+
+      ValueError: if min_level &gt; 0
     &#34;&#34;&#34;
 
         if max_level &lt; min_level:
             return ValueError(
                 &#39;Reservoir constraint must have a max_level &gt;= min_level&#39;)
+
+        if max_level &lt; 0:
+            return ValueError(&#39;Reservoir constraint must have a max_level &gt;= 0&#39;)
+
+        if min_level &gt; 0:
+            return ValueError(&#39;Reservoir constraint must have a min_level &lt;= 0&#39;)
 
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
@@ -2574,45 +2915,55 @@ Returns:
                                          min_level, max_level):
         &#34;&#34;&#34;Adds Reservoir(times, demands, actives, min_level, max_level).
 
-    Maintain a reservoir level within bounds. The water level starts at 0, and
-    at
-    any time &gt;= 0, it must be within min_level, and max_level. Furthermore, this
-    constraints expect all times variables to be &gt;= 0.
-    If `actives[i]` is true, and if `times[i]` is assigned a value t, then the
-    level of the reservoir changes by `demands[i]`, which is constant, at
-    time t.
+    Maintains a reservoir level within bounds. The water level starts at 0, and
+    at any time, it must be between min_level and max_level.
 
-    Note that level_min can be &gt; 0, or level_max can be &lt; 0. It just forces
-    some demands to be executed at time 0 to make sure that we are within those
-    bounds with the executed demands. Therefore, at any time t &gt;= 0:
+    If the variable `times[i]` is assigned a value t, and `actives[i]` is
+    `True`, then the current level changes by `demands[i]`, which is constant,
+    at time t.
 
-        sum(demands[i] * actives[i] if times[i] &lt;= t) in [min_level, max_level]
+     Note that min level must be &lt;= 0, and the max level must be &gt;= 0. Please
+     use fixed demands to simulate initial state.
+
+     Therefore, at any time:
+         sum(demands[i] * actives[i] if times[i] &lt;= t) in [min_level, max_level]
+
 
     The array of boolean variables &#39;actives&#39;, if defined, indicates which
     actions are actually performed.
 
     Args:
-      times: A list of positive integer variables which specify the time of the
+      times: A list of integer variables which specify the time of the
         filling or emptying the reservoir.
       demands: A list of integer values that specifies the amount of the
         emptying or filling.
       actives: a list of boolean variables. They indicates if the
         emptying/refilling events actually take place.
-      min_level: At any time &gt;= 0, the level of the reservoir must be greater of
+      min_level: At any time, the level of the reservoir must be greater or
         equal than the min level.
-      max_level: At any time &gt;= 0, the level of the reservoir must be less or
-        equal than the max level.
+      max_level: At any time, the level of the reservoir must be less or equal
+        than the max level.
 
     Returns:
       An instance of the `Constraint` class.
 
     Raises:
       ValueError: if max_level &lt; min_level.
+
+      ValueError: if max_level &lt; 0.
+
+      ValueError: if min_level &gt; 0
     &#34;&#34;&#34;
 
         if max_level &lt; min_level:
             return ValueError(
                 &#39;Reservoir constraint must have a max_level &gt;= min_level&#39;)
+
+        if max_level &lt; 0:
+            return ValueError(&#39;Reservoir constraint must have a max_level &gt;= 0&#39;)
+
+        if min_level &gt; 0:
+            return ValueError(&#39;Reservoir constraint must have a min_level &lt;= 0&#39;)
 
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
@@ -2865,6 +3216,50 @@ Returns:
         model_ct.cumulative.capacity = self.GetOrMakeIndex(capacity)
         return ct
 
+    # Support for deep copy.
+    def CopyFrom(self, other_model):
+        &#34;&#34;&#34;Reset the model, and creates a new one from a CpModelProto instance.&#34;&#34;&#34;
+        self.__model.CopyFrom(other_model.Proto())
+
+        # Rebuild constant map.
+        self.__constant_map.clear()
+        for i, var in enumerate(self.__model.variables):
+            if len(var.domain) == 2 and var.domain[0] == var.domain[1]:
+                self.__constant_map[var.domain[0]] = i
+
+    def GetBoolVarFromProtoIndex(self, index):
+        &#34;&#34;&#34;Returns an already created Boolean variable from its index.&#34;&#34;&#34;
+        if index &lt; 0 or index &gt;= len(self.__model.variables):
+            raise ValueError(
+                f&#39;GetBoolVarFromProtoIndex: out of bound index {index}&#39;)
+        var = self.__model.variables[index]
+        if len(var.domain) != 2 or var.domain[0] &lt; 0 or var.domain[1] &gt; 1:
+            raise ValueError(
+                f&#39;GetBoolVarFromProtoIndex: index {index} does not reference&#39; +
+                &#39; a Boolean variable&#39;)
+
+        return IntVar(self.__model, index, None)
+
+    def GetIntVarFromProtoIndex(self, index):
+        &#34;&#34;&#34;Returns an already created integer variable from its index.&#34;&#34;&#34;
+        if index &lt; 0 or index &gt;= len(self.__model.variables):
+            raise ValueError(
+                f&#39;GetIntVarFromProtoIndex: out of bound index {index}&#39;)
+        return IntVar(self.__model, index, None)
+
+    def GetIntervalVarFromProtoIndex(self, index):
+        &#34;&#34;&#34;Returns an already created interval variable from its index.&#34;&#34;&#34;
+        if index &lt; 0 or index &gt;= len(self.__model.constraints):
+            raise ValueError(
+                f&#39;GetIntervalVarFromProtoIndex: out of bound index {index}&#39;)
+        ct = self.__model.constraints[index]
+        if not ct.HasField(&#39;interval&#39;):
+            raise ValueError(
+                f&#39;GetIntervalVarFromProtoIndex: index {index} does not reference an&#39;
+                + &#39; interval variable&#39;)
+
+        return IntervalVar(self.__model, index, None, None, None, None)
+
     # Helpers.
 
     def __str__(self):
@@ -2921,7 +3316,7 @@ Returns:
         return index
 
     def VarIndexToVarProto(self, var_index):
-        if var_index &gt; 0:
+        if var_index &gt;= 0:
             return self.__model.variables[var_index]
         else:
             return self.__model.variables[-var_index - 1]
@@ -2947,7 +3342,7 @@ Returns:
             else:
                 self.__model.objective.scaling_factor = -1
                 self.__model.objective.offset = -constant
-            for v, c, in iteritems(coeffs_map):
+            for v, c, in coeffs_map.items():
                 self.__model.objective.coeffs.append(c)
                 if minimize:
                     self.__model.objective.vars.append(v.Index())
@@ -2991,11 +3386,25 @@ Returns:
 
     def ModelStats(self):
         &#34;&#34;&#34;Returns a string containing some model statistics.&#34;&#34;&#34;
-        return pywrapsat.SatHelper.ModelStats(self.__model)
+        return pywrapsat.CpSatHelper.ModelStats(self.__model)
 
     def Validate(self):
         &#34;&#34;&#34;Returns a string indicating that the model is invalid.&#34;&#34;&#34;
-        return pywrapsat.SatHelper.ValidateModel(self.__model)
+        return pywrapsat.CpSatHelper.ValidateModel(self.__model)
+
+    def ExportToFile(self, file):
+        &#34;&#34;&#34;Write the model as a protocol buffer to &#39;file&#39;.
+
+    Args:
+      file: file to write the model to. If the filename ends with &#39;txt&#39;, the
+            model will be written as a text file, otherwise, the binary format
+            will be used.
+
+
+    Returns:
+      True if the model was correctly written.
+    &#34;&#34;&#34;
+        return pywrapsat.CpSatHelper.WriteModelToFile(self.__model, file)
 
     def AssertIsBooleanVariable(self, x):
         if isinstance(x, IntVar):
@@ -3008,8 +3417,26 @@ Returns:
                             &#39; is not a boolean variable&#39;)
 
     def AddHint(self, var, value):
+        &#34;&#34;&#34;Adds &#39;var == value&#39; as a hint to the solver.&#34;&#34;&#34;
         self.__model.solution_hint.vars.append(self.GetOrMakeIndex(var))
-        self.__model.solution_hint.values.append(value)</code></pre>
+        self.__model.solution_hint.values.append(value)
+
+    def ClearHints(self):
+        &#34;&#34;&#34;Remove any solution hint from the model.&#34;&#34;&#34;
+        self.__model.ClearField(&#39;solution_hint&#39;)
+
+    def AddAssumption(self, lit):
+        &#34;&#34;&#34;Add the literal &#39;lit&#39; to the model as assumptions.&#34;&#34;&#34;
+        self.__model.assumptions.append(self.GetOrMakeBooleanIndex(lit))
+
+    def AddAssumptions(self, literals):
+        &#34;&#34;&#34;Add the literals to the model as assumptions.&#34;&#34;&#34;
+        for lit in literals:
+            self.AddAssumption(lit)
+
+    def ClearAssumptions(self):
+        &#34;&#34;&#34;Remove all assumptions from the model.&#34;&#34;&#34;
+        self.__model.ClearField(&#39;assumptions&#39;)</code></pre>
 </details>
 <h3>Methods</h3>
 <dl>
@@ -3017,14 +3444,14 @@ Returns:
 <span>def <span class="ident">Add</span></span>(<span>self, ct)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds a <a title="cp_model.BoundedLinearExpression" href="#cp_model.BoundedLinearExpression"><code>BoundedLinearExpression</code></a> to the model.</p>
+<div class="desc"><p>Adds a <code><a title="cp_model.BoundedLinearExpression" href="#cp_model.BoundedLinearExpression">BoundedLinearExpression</a></code> to the model.</p>
 <h2 id="args">Args</h2>
 <dl>
 <dt><strong><code>ct</code></strong></dt>
 <dd>A <a href="#boundedlinearexpression"><code>BoundedLinearExpression</code></a>.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An instance of the <a title="cp_model.Constraint" href="#cp_model.Constraint"><code>Constraint</code></a> class.</p></section>
+<p>An instance of the <code><a title="cp_model.Constraint" href="#cp_model.Constraint">Constraint</a></code> class.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3053,7 +3480,7 @@ Returns:
 <span>def <span class="ident">AddAbsEquality</span></span>(<span>self, target, var)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds <code>target == Abs(var)</code>.</p></section>
+<div class="desc"><p>Adds <code>target == Abs(var)</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3072,7 +3499,7 @@ Returns:
 <span>def <span class="ident">AddAllDifferent</span></span>(<span>self, variables)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds AllDifferent(variables).</p>
+<div class="desc"><p>Adds AllDifferent(variables).</p>
 <p>This constraint forces all variables to have different values.</p>
 <h2 id="args">Args</h2>
 <dl>
@@ -3080,7 +3507,7 @@ Returns:
 <dd>a list of integer variables.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An instance of the <a title="cp_model.Constraint" href="#cp_model.Constraint"><code>Constraint</code></a> class.</p></section>
+<p>An instance of the <code><a title="cp_model.Constraint" href="#cp_model.Constraint">Constraint</a></code> class.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3107,7 +3534,7 @@ Returns:
 <span>def <span class="ident">AddAllowedAssignments</span></span>(<span>self, variables, tuples_list)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds AllowedAssignments(variables, tuples_list).</p>
+<div class="desc"><p>Adds AllowedAssignments(variables, tuples_list).</p>
 <p>An AllowedAssignments constraint is a constraint on an array of variables,
 which requires that when all variables are assigned values, the resulting
 array equals one of the
@@ -3122,15 +3549,15 @@ length as the variables, and the ith value of a tuple corresponds to the
 ith variable.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An instance of the <a title="cp_model.Constraint" href="#cp_model.Constraint"><code>Constraint</code></a> class.</p>
+<p>An instance of the <code><a title="cp_model.Constraint" href="#cp_model.Constraint">Constraint</a></code> class.</p>
 <h2 id="raises">Raises</h2>
 <dl>
-<dt><strong><code>TypeError</code></strong></dt>
+<dt><code>TypeError</code></dt>
 <dd>If a tuple does not have the same size as the list of
 variables.</dd>
-<dt><strong><code>ValueError</code></strong></dt>
+<dt><code>ValueError</code></dt>
 <dd>If the array of variables is empty.</dd>
-</dl></section>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3175,11 +3602,40 @@ Raises:
     return ct</code></pre>
 </details>
 </dd>
+<dt id="cp_model.CpModel.AddAssumption"><code class="name flex">
+<span>def <span class="ident">AddAssumption</span></span>(<span>self, lit)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Add the literal 'lit' to the model as assumptions.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def AddAssumption(self, lit):
+    &#34;&#34;&#34;Add the literal &#39;lit&#39; to the model as assumptions.&#34;&#34;&#34;
+    self.__model.assumptions.append(self.GetOrMakeBooleanIndex(lit))</code></pre>
+</details>
+</dd>
+<dt id="cp_model.CpModel.AddAssumptions"><code class="name flex">
+<span>def <span class="ident">AddAssumptions</span></span>(<span>self, literals)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Add the literals to the model as assumptions.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def AddAssumptions(self, literals):
+    &#34;&#34;&#34;Add the literals to the model as assumptions.&#34;&#34;&#34;
+    for lit in literals:
+        self.AddAssumption(lit)</code></pre>
+</details>
+</dd>
 <dt id="cp_model.CpModel.AddAutomaton"><code class="name flex">
 <span>def <span class="ident">AddAutomaton</span></span>(<span>self, transition_variables, starting_state, final_states, transition_triples)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds an automaton constraint.</p>
+<div class="desc"><p>Adds an automaton constraint.</p>
 <p>An automaton constraint takes a list of variables (of size <em>n</em>), an initial
 state, a set of final states, and a set of transitions. A transition is a
 triplet (<em>tail</em>, <em>transition</em>, <em>head</em>), where <em>tail</em> and <em>head</em> are states,
@@ -3212,13 +3668,13 @@ correspond to the labels of the arcs traversed by the automaton.</dd>
 following format (current_state, variable_value, next_state).</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An instance of the <a title="cp_model.Constraint" href="#cp_model.Constraint"><code>Constraint</code></a> class.</p>
+<p>An instance of the <code><a title="cp_model.Constraint" href="#cp_model.Constraint">Constraint</a></code> class.</p>
 <h2 id="raises">Raises</h2>
 <dl>
-<dt><strong><code>ValueError</code></strong></dt>
+<dt><code>ValueError</code></dt>
 <dd>if <code>transition_variables</code>, <code>final_states</code>, or
 <code>transition_triples</code> are empty.</dd>
-</dl></section>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3273,7 +3729,7 @@ Raises:
         raise ValueError(&#39;AddAutomaton expects some final states&#39;)
 
     if not transition_triples:
-        raise ValueError(&#39;AddAutomaton expects some transtion triples&#39;)
+        raise ValueError(&#39;AddAutomaton expects some transition triples&#39;)
 
     ct = Constraint(self.__model.constraints)
     model_ct = self.__model.constraints[ct.Index()]
@@ -3301,7 +3757,7 @@ Raises:
 <span>def <span class="ident">AddBoolAnd</span></span>(<span>self, literals)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds <code>And(literals) == true</code>.</p></section>
+<div class="desc"><p>Adds <code>And(literals) == true</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3319,7 +3775,7 @@ Raises:
 <span>def <span class="ident">AddBoolOr</span></span>(<span>self, literals)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds <code>Or(literals) == true</code>.</p></section>
+<div class="desc"><p>Adds <code>Or(literals) == true</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3337,7 +3793,7 @@ Raises:
 <span>def <span class="ident">AddBoolXOr</span></span>(<span>self, literals)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds <code>XOr(literals) == true</code>.</p></section>
+<div class="desc"><p>Adds <code>XOr(literals) == true</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3355,7 +3811,7 @@ Raises:
 <span>def <span class="ident">AddCircuit</span></span>(<span>self, arcs)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds Circuit(arcs).</p>
+<div class="desc"><p>Adds Circuit(arcs).</p>
 <p>Adds a circuit constraint from a sparse list of arcs that encode the graph.</p>
 <p>A circuit is a unique Hamiltonian path in a subgraph of the total
 graph. In case a node 'i' is not in the path, then there must be a
@@ -3370,12 +3826,12 @@ Both source_node and destination_node must be integers between 0 and the
 number of nodes - 1.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An instance of the <a title="cp_model.Constraint" href="#cp_model.Constraint"><code>Constraint</code></a> class.</p>
+<p>An instance of the <code><a title="cp_model.Constraint" href="#cp_model.Constraint">Constraint</a></code> class.</p>
 <h2 id="raises">Raises</h2>
 <dl>
-<dt><strong><code>ValueError</code></strong></dt>
+<dt><code>ValueError</code></dt>
 <dd>If the list of arcs is empty.</dd>
-</dl></section>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3420,7 +3876,7 @@ Raises:
 <span>def <span class="ident">AddCumulative</span></span>(<span>self, intervals, demands, capacity)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds Cumulative(intervals, demands, capacity).</p>
+<div class="desc"><p>Adds Cumulative(intervals, demands, capacity).</p>
 <p>This constraint enforces that:</p>
 <pre><code>for all t:
   sum(demands[i]
@@ -3439,7 +3895,7 @@ Each demand can be an integer value, or an integer variable.</dd>
 positive integer value or variable.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An instance of the <a title="cp_model.Constraint" href="#cp_model.Constraint"><code>Constraint</code></a> class.</p></section>
+<p>An instance of the <code><a title="cp_model.Constraint" href="#cp_model.Constraint">Constraint</a></code> class.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3478,7 +3934,7 @@ Returns:
 <span>def <span class="ident">AddDecisionStrategy</span></span>(<span>self, variables, var_strategy, domain_strategy)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds a search strategy to the model.</p>
+<div class="desc"><p>Adds a search strategy to the model.</p>
 <h2 id="args">Args</h2>
 <dl>
 <dt><strong><code>variables</code></strong></dt>
@@ -3490,7 +3946,7 @@ Returns:
 Currently, this is advanced code: the union of all strategies added to
 the model must be complete, i.e. instantiates all variables.
 Otherwise, Solve() will fail.</dd>
-</dl></section>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3518,7 +3974,7 @@ Args:
 <span>def <span class="ident">AddDivisionEquality</span></span>(<span>self, target, num, denom)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds <code>target == num // denom</code> (integer division rounded towards 0).</p></section>
+<div class="desc"><p>Adds <code>target == num // denom</code> (integer division rounded towards 0).</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3538,7 +3994,7 @@ Args:
 <span>def <span class="ident">AddElement</span></span>(<span>self, index, variables, target)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds the element constraint: <code>variables[index] == target</code>.</p></section>
+<div class="desc"><p>Adds the element constraint: <code>variables[index] == target</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3548,6 +4004,9 @@ Args:
 
     if not variables:
         raise ValueError(&#39;AddElement expects a non-empty variables array&#39;)
+
+    if isinstance(index, numbers.Integral):
+        return self.Add(list(variables)[index] == target)
 
     ct = Constraint(self.__model.constraints)
     model_ct = self.__model.constraints[ct.Index()]
@@ -3562,7 +4021,7 @@ Args:
 <span>def <span class="ident">AddForbiddenAssignments</span></span>(<span>self, variables, tuples_list)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds AddForbiddenAssignments(variables, [tuples_list]).</p>
+<div class="desc"><p>Adds AddForbiddenAssignments(variables, [tuples_list]).</p>
 <p>A ForbiddenAssignments constraint is a constraint on an array of variables
 where the list of impossible combinations is provided in the tuples list.</p>
 <h2 id="args">Args</h2>
@@ -3575,15 +4034,15 @@ length as the variables, and the <em>i</em>th value of a tuple corresponds to
 the <em>i</em>th variable.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An instance of the <a title="cp_model.Constraint" href="#cp_model.Constraint"><code>Constraint</code></a> class.</p>
+<p>An instance of the <code><a title="cp_model.Constraint" href="#cp_model.Constraint">Constraint</a></code> class.</p>
 <h2 id="raises">Raises</h2>
 <dl>
-<dt><strong><code>TypeError</code></strong></dt>
+<dt><code>TypeError</code></dt>
 <dd>If a tuple does not have the same size as the list of
 variables.</dd>
-<dt><strong><code>ValueError</code></strong></dt>
+<dt><code>ValueError</code></dt>
 <dd>If the array of variables is empty.</dd>
-</dl></section>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3624,12 +4083,13 @@ Raises:
 <span>def <span class="ident">AddHint</span></span>(<span>self, var, value)</span>
 </code></dt>
 <dd>
-<section class="desc"></section>
+<div class="desc"><p>Adds 'var == value' as a hint to the solver.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def AddHint(self, var, value):
+    &#34;&#34;&#34;Adds &#39;var == value&#39; as a hint to the solver.&#34;&#34;&#34;
     self.__model.solution_hint.vars.append(self.GetOrMakeIndex(var))
     self.__model.solution_hint.values.append(value)</code></pre>
 </details>
@@ -3638,7 +4098,7 @@ Raises:
 <span>def <span class="ident">AddImplication</span></span>(<span>self, a, b)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds <code>a =&gt; b</code> (<code>a</code> implies <code>b</code>).</p></section>
+<div class="desc"><p>Adds <code>a =&gt; b</code> (<code>a</code> implies <code>b</code>).</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3656,7 +4116,7 @@ Raises:
 <span>def <span class="ident">AddInverse</span></span>(<span>self, variables, inverse_variables)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds Inverse(variables, inverse_variables).</p>
+<div class="desc"><p>Adds Inverse(variables, inverse_variables).</p>
 <p>An inverse constraint enforces that if <code>variables[i]</code> is assigned a value
 <code>j</code>, then <code>inverse_variables[j]</code> is assigned a value <code>i</code>. And vice versa.</p>
 <h2 id="args">Args</h2>
@@ -3667,13 +4127,13 @@ Raises:
 <dd>An array of integer variables.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An instance of the <a title="cp_model.Constraint" href="#cp_model.Constraint"><code>Constraint</code></a> class.</p>
+<p>An instance of the <code><a title="cp_model.Constraint" href="#cp_model.Constraint">Constraint</a></code> class.</p>
 <h2 id="raises">Raises</h2>
 <dl>
-<dt><strong><code>TypeError</code></strong></dt>
+<dt><code>TypeError</code></dt>
 <dd>if variables and inverse_variables have different lengths, or
 if they are empty.</dd>
-</dl></section>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3716,7 +4176,7 @@ Raises:
 <span>def <span class="ident">AddLinearConstraint</span></span>(<span>self, linear_expr, lb, ub)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds the constraint: <code>lb &lt;= linear_expr &lt;= ub</code>.</p></section>
+<div class="desc"><p>Adds the constraint: <code>lb &lt;= linear_expr &lt;= ub</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3730,7 +4190,7 @@ Raises:
 <span>def <span class="ident">AddLinearExpressionInDomain</span></span>(<span>self, linear_expr, domain)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds the constraint: <code>linear_expr</code> in <code>domain</code>.</p></section>
+<div class="desc"><p>Adds the constraint: <code>linear_expr</code> in <code>domain</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3741,7 +4201,7 @@ Raises:
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
         coeffs_map, constant = linear_expr.GetVarValueMap()
-        for t in iteritems(coeffs_map):
+        for t in coeffs_map.items():
             if not isinstance(t[0], IntVar):
                 raise TypeError(&#39;Wrong argument&#39; + str(t))
             cp_model_helper.AssertIsInt64(t[1])
@@ -3766,7 +4226,7 @@ Raises:
 <span>def <span class="ident">AddMapDomain</span></span>(<span>self, var, bool_var_array, offset=0)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds <code>var == i + offset &lt;=&gt; bool_var_array[i] == true for all i</code>.</p></section>
+<div class="desc"><p>Adds <code>var == i + offset &lt;=&gt; bool_var_array[i] == true for all i</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3797,7 +4257,7 @@ Raises:
 <span>def <span class="ident">AddMaxEquality</span></span>(<span>self, target, variables)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds <code>target == Max(variables)</code>.</p></section>
+<div class="desc"><p>Adds <code>target == Max(variables)</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3816,7 +4276,7 @@ Raises:
 <span>def <span class="ident">AddMinEquality</span></span>(<span>self, target, variables)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds <code>target == Min(variables)</code>.</p></section>
+<div class="desc"><p>Adds <code>target == Min(variables)</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3835,7 +4295,7 @@ Raises:
 <span>def <span class="ident">AddModuloEquality</span></span>(<span>self, target, var, mod)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds <code>target = var % mod</code>.</p></section>
+<div class="desc"><p>Adds <code>target = var % mod</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3855,7 +4315,7 @@ Raises:
 <span>def <span class="ident">AddMultiplicationEquality</span></span>(<span>self, target, variables)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds <code>target == variables[0] * .. * variables[n]</code>.</p></section>
+<div class="desc"><p>Adds <code>target == variables[0] * .. * variables[n]</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3874,7 +4334,7 @@ Raises:
 <span>def <span class="ident">AddNoOverlap</span></span>(<span>self, interval_vars)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds NoOverlap(interval_vars).</p>
+<div class="desc"><p>Adds NoOverlap(interval_vars).</p>
 <p>A NoOverlap constraint ensures that all present intervals do not overlap
 in time.</p>
 <h2 id="args">Args</h2>
@@ -3883,7 +4343,7 @@ in time.</p>
 <dd>The list of interval variables to constrain.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An instance of the <a title="cp_model.Constraint" href="#cp_model.Constraint"><code>Constraint</code></a> class.</p></section>
+<p>An instance of the <code><a title="cp_model.Constraint" href="#cp_model.Constraint">Constraint</a></code> class.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3911,7 +4371,7 @@ Returns:
 <span>def <span class="ident">AddNoOverlap2D</span></span>(<span>self, x_intervals, y_intervals)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds NoOverlap2D(x_intervals, y_intervals).</p>
+<div class="desc"><p>Adds NoOverlap2D(x_intervals, y_intervals).</p>
 <p>A NoOverlap2D constraint ensures that all present rectangles do not overlap
 on a plane. Each rectangle is aligned with the X and Y axis, and is defined
 by two intervals which represent its projection onto the X and Y axis.</p>
@@ -3923,7 +4383,7 @@ by two intervals which represent its projection onto the X and Y axis.</p>
 <dd>The Y coordinates of the rectangles.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An instance of the <a title="cp_model.Constraint" href="#cp_model.Constraint"><code>Constraint</code></a> class.</p></section>
+<p>An instance of the <code><a title="cp_model.Constraint" href="#cp_model.Constraint">Constraint</a></code> class.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3955,7 +4415,7 @@ Returns:
 <span>def <span class="ident">AddProdEquality</span></span>(<span>self, target, variables)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Deprecated, use AddMultiplicationEquality.</p></section>
+<div class="desc"><p>Deprecated, use AddMultiplicationEquality.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -3969,39 +4429,41 @@ Returns:
 <span>def <span class="ident">AddReservoirConstraint</span></span>(<span>self, times, demands, min_level, max_level)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds Reservoir(times, demands, min_level, max_level).</p>
+<div class="desc"><p>Adds Reservoir(times, demands, min_level, max_level).</p>
 <p>Maintains a reservoir level within bounds. The water level starts at 0, and
-at any time &gt;= 0, it must be between min_level and max_level. Furthermore,
-this constraint expects all times variables to be &gt;= 0.
-If the variable <code>times[i]</code> is assigned a value t, then the current level
+at any time, it must be between min_level and max_level.</p>
+<p>If the variable <code>times[i]</code> is assigned a value t, then the current level
 changes by <code>demands[i]</code>, which is constant, at time t.</p>
-<p>Note that level min can be &gt; 0, or level max can be &lt; 0. It just forces
-some demands to be executed at time 0 to make sure that we are within those
-bounds with the executed demands. Therefore, at any time t &gt;= 0:</p>
-<pre><code>sum(demands[i] if times[i] &lt;= t) in [min_level, max_level]
-</code></pre>
+<p>Note that min level must be &lt;= 0, and the max level must be &gt;= 0. Please
+use fixed demands to simulate initial state.</p>
+<p>Therefore, at any time:
+sum(demands[i] if times[i] &lt;= t) in [min_level, max_level]</p>
 <h2 id="args">Args</h2>
 <dl>
 <dt><strong><code>times</code></strong></dt>
-<dd>A list of positive integer variables which specify the time of the
+<dd>A list of integer variables which specify the time of the
 filling or emptying the reservoir.</dd>
 <dt><strong><code>demands</code></strong></dt>
 <dd>A list of integer values that specifies the amount of the
 emptying or filling.</dd>
 <dt><strong><code>min_level</code></strong></dt>
-<dd>At any time &gt;= 0, the level of the reservoir must be greater of
+<dd>At any time, the level of the reservoir must be greater or
 equal than the min level.</dd>
 <dt><strong><code>max_level</code></strong></dt>
-<dd>At any time &gt;= 0, the level of the reservoir must be less or
-equal than the max level.</dd>
+<dd>At any time, the level of the reservoir must be less or equal
+than the max level.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An instance of the <a title="cp_model.Constraint" href="#cp_model.Constraint"><code>Constraint</code></a> class.</p>
+<p>An instance of the <code><a title="cp_model.Constraint" href="#cp_model.Constraint">Constraint</a></code> class.</p>
 <h2 id="raises">Raises</h2>
 <dl>
-<dt><strong><code>ValueError</code></strong></dt>
+<dt><code>ValueError</code></dt>
 <dd>if max_level &lt; min_level.</dd>
-</dl></section>
+<dt><code>ValueError</code></dt>
+<dd>if max_level &lt; 0.</dd>
+<dt><code>ValueError</code></dt>
+<dd>if min_level &gt; 0</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4010,37 +4472,47 @@ equal than the max level.</dd>
     &#34;&#34;&#34;Adds Reservoir(times, demands, min_level, max_level).
 
 Maintains a reservoir level within bounds. The water level starts at 0, and
-at any time &gt;= 0, it must be between min_level and max_level. Furthermore,
-this constraint expects all times variables to be &gt;= 0.
+at any time, it must be between min_level and max_level.
+
 If the variable `times[i]` is assigned a value t, then the current level
 changes by `demands[i]`, which is constant, at time t.
 
-Note that level min can be &gt; 0, or level max can be &lt; 0. It just forces
-some demands to be executed at time 0 to make sure that we are within those
-bounds with the executed demands. Therefore, at any time t &gt;= 0:
+ Note that min level must be &lt;= 0, and the max level must be &gt;= 0. Please
+ use fixed demands to simulate initial state.
 
-    sum(demands[i] if times[i] &lt;= t) in [min_level, max_level]
+ Therefore, at any time:
+     sum(demands[i] if times[i] &lt;= t) in [min_level, max_level]
 
 Args:
-  times: A list of positive integer variables which specify the time of the
+  times: A list of integer variables which specify the time of the
     filling or emptying the reservoir.
   demands: A list of integer values that specifies the amount of the
     emptying or filling.
-  min_level: At any time &gt;= 0, the level of the reservoir must be greater of
+  min_level: At any time, the level of the reservoir must be greater or
     equal than the min level.
-  max_level: At any time &gt;= 0, the level of the reservoir must be less or
-    equal than the max level.
+  max_level: At any time, the level of the reservoir must be less or equal
+    than the max level.
 
 Returns:
   An instance of the `Constraint` class.
 
 Raises:
   ValueError: if max_level &lt; min_level.
+
+  ValueError: if max_level &lt; 0.
+
+  ValueError: if min_level &gt; 0
 &#34;&#34;&#34;
 
     if max_level &lt; min_level:
         return ValueError(
             &#39;Reservoir constraint must have a max_level &gt;= min_level&#39;)
+
+    if max_level &lt; 0:
+        return ValueError(&#39;Reservoir constraint must have a max_level &gt;= 0&#39;)
+
+    if min_level &gt; 0:
+        return ValueError(&#39;Reservoir constraint must have a min_level &lt;= 0&#39;)
 
     ct = Constraint(self.__model.constraints)
     model_ct = self.__model.constraints[ct.Index()]
@@ -4055,25 +4527,22 @@ Raises:
 <span>def <span class="ident">AddReservoirConstraintWithActive</span></span>(<span>self, times, demands, actives, min_level, max_level)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Adds Reservoir(times, demands, actives, min_level, max_level).</p>
-<p>Maintain a reservoir level within bounds. The water level starts at 0, and
-at
-any time &gt;= 0, it must be within min_level, and max_level. Furthermore, this
-constraints expect all times variables to be &gt;= 0.
-If <code>actives[i]</code> is true, and if <code>times[i]</code> is assigned a value t, then the
-level of the reservoir changes by <code>demands[i]</code>, which is constant, at
-time t.</p>
-<p>Note that level_min can be &gt; 0, or level_max can be &lt; 0. It just forces
-some demands to be executed at time 0 to make sure that we are within those
-bounds with the executed demands. Therefore, at any time t &gt;= 0:</p>
-<pre><code>sum(demands[i] * actives[i] if times[i] &lt;= t) in [min_level, max_level]
-</code></pre>
+<div class="desc"><p>Adds Reservoir(times, demands, actives, min_level, max_level).</p>
+<p>Maintains a reservoir level within bounds. The water level starts at 0, and
+at any time, it must be between min_level and max_level.</p>
+<p>If the variable <code>times[i]</code> is assigned a value t, and <code>actives[i]</code> is
+<code>True</code>, then the current level changes by <code>demands[i]</code>, which is constant,
+at time t.</p>
+<p>Note that min level must be &lt;= 0, and the max level must be &gt;= 0. Please
+use fixed demands to simulate initial state.</p>
+<p>Therefore, at any time:
+sum(demands[i] * actives[i] if times[i] &lt;= t) in [min_level, max_level]</p>
 <p>The array of boolean variables 'actives', if defined, indicates which
 actions are actually performed.</p>
 <h2 id="args">Args</h2>
 <dl>
 <dt><strong><code>times</code></strong></dt>
-<dd>A list of positive integer variables which specify the time of the
+<dd>A list of integer variables which specify the time of the
 filling or emptying the reservoir.</dd>
 <dt><strong><code>demands</code></strong></dt>
 <dd>A list of integer values that specifies the amount of the
@@ -4082,19 +4551,23 @@ emptying or filling.</dd>
 <dd>a list of boolean variables. They indicates if the
 emptying/refilling events actually take place.</dd>
 <dt><strong><code>min_level</code></strong></dt>
-<dd>At any time &gt;= 0, the level of the reservoir must be greater of
+<dd>At any time, the level of the reservoir must be greater or
 equal than the min level.</dd>
 <dt><strong><code>max_level</code></strong></dt>
-<dd>At any time &gt;= 0, the level of the reservoir must be less or
-equal than the max level.</dd>
+<dd>At any time, the level of the reservoir must be less or equal
+than the max level.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An instance of the <a title="cp_model.Constraint" href="#cp_model.Constraint"><code>Constraint</code></a> class.</p>
+<p>An instance of the <code><a title="cp_model.Constraint" href="#cp_model.Constraint">Constraint</a></code> class.</p>
 <h2 id="raises">Raises</h2>
 <dl>
-<dt><strong><code>ValueError</code></strong></dt>
+<dt><code>ValueError</code></dt>
 <dd>if max_level &lt; min_level.</dd>
-</dl></section>
+<dt><code>ValueError</code></dt>
+<dd>if max_level &lt; 0.</dd>
+<dt><code>ValueError</code></dt>
+<dd>if min_level &gt; 0</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4103,45 +4576,55 @@ equal than the max level.</dd>
                                      min_level, max_level):
     &#34;&#34;&#34;Adds Reservoir(times, demands, actives, min_level, max_level).
 
-Maintain a reservoir level within bounds. The water level starts at 0, and
-at
-any time &gt;= 0, it must be within min_level, and max_level. Furthermore, this
-constraints expect all times variables to be &gt;= 0.
-If `actives[i]` is true, and if `times[i]` is assigned a value t, then the
-level of the reservoir changes by `demands[i]`, which is constant, at
-time t.
+Maintains a reservoir level within bounds. The water level starts at 0, and
+at any time, it must be between min_level and max_level.
 
-Note that level_min can be &gt; 0, or level_max can be &lt; 0. It just forces
-some demands to be executed at time 0 to make sure that we are within those
-bounds with the executed demands. Therefore, at any time t &gt;= 0:
+If the variable `times[i]` is assigned a value t, and `actives[i]` is
+`True`, then the current level changes by `demands[i]`, which is constant,
+at time t.
 
-    sum(demands[i] * actives[i] if times[i] &lt;= t) in [min_level, max_level]
+ Note that min level must be &lt;= 0, and the max level must be &gt;= 0. Please
+ use fixed demands to simulate initial state.
+
+ Therefore, at any time:
+     sum(demands[i] * actives[i] if times[i] &lt;= t) in [min_level, max_level]
+
 
 The array of boolean variables &#39;actives&#39;, if defined, indicates which
 actions are actually performed.
 
 Args:
-  times: A list of positive integer variables which specify the time of the
+  times: A list of integer variables which specify the time of the
     filling or emptying the reservoir.
   demands: A list of integer values that specifies the amount of the
     emptying or filling.
   actives: a list of boolean variables. They indicates if the
     emptying/refilling events actually take place.
-  min_level: At any time &gt;= 0, the level of the reservoir must be greater of
+  min_level: At any time, the level of the reservoir must be greater or
     equal than the min level.
-  max_level: At any time &gt;= 0, the level of the reservoir must be less or
-    equal than the max level.
+  max_level: At any time, the level of the reservoir must be less or equal
+    than the max level.
 
 Returns:
   An instance of the `Constraint` class.
 
 Raises:
   ValueError: if max_level &lt; min_level.
+
+  ValueError: if max_level &lt; 0.
+
+  ValueError: if min_level &gt; 0
 &#34;&#34;&#34;
 
     if max_level &lt; min_level:
         return ValueError(
             &#39;Reservoir constraint must have a max_level &gt;= min_level&#39;)
+
+    if max_level &lt; 0:
+        return ValueError(&#39;Reservoir constraint must have a max_level &gt;= 0&#39;)
+
+    if min_level &gt; 0:
+        return ValueError(&#39;Reservoir constraint must have a min_level &lt;= 0&#39;)
 
     ct = Constraint(self.__model.constraints)
     model_ct = self.__model.constraints[ct.Index()]
@@ -4158,7 +4641,7 @@ Raises:
 <span>def <span class="ident">AssertIsBooleanVariable</span></span>(<span>self, x)</span>
 </code></dt>
 <dd>
-<section class="desc"></section>
+<div class="desc"></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4174,11 +4657,132 @@ Raises:
                         &#39; is not a boolean variable&#39;)</code></pre>
 </details>
 </dd>
+<dt id="cp_model.CpModel.ClearAssumptions"><code class="name flex">
+<span>def <span class="ident">ClearAssumptions</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Remove all assumptions from the model.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def ClearAssumptions(self):
+    &#34;&#34;&#34;Remove all assumptions from the model.&#34;&#34;&#34;
+    self.__model.ClearField(&#39;assumptions&#39;)</code></pre>
+</details>
+</dd>
+<dt id="cp_model.CpModel.ClearHints"><code class="name flex">
+<span>def <span class="ident">ClearHints</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Remove any solution hint from the model.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def ClearHints(self):
+    &#34;&#34;&#34;Remove any solution hint from the model.&#34;&#34;&#34;
+    self.__model.ClearField(&#39;solution_hint&#39;)</code></pre>
+</details>
+</dd>
+<dt id="cp_model.CpModel.CopyFrom"><code class="name flex">
+<span>def <span class="ident">CopyFrom</span></span>(<span>self, other_model)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Reset the model, and creates a new one from a CpModelProto instance.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def CopyFrom(self, other_model):
+    &#34;&#34;&#34;Reset the model, and creates a new one from a CpModelProto instance.&#34;&#34;&#34;
+    self.__model.CopyFrom(other_model.Proto())
+
+    # Rebuild constant map.
+    self.__constant_map.clear()
+    for i, var in enumerate(self.__model.variables):
+        if len(var.domain) == 2 and var.domain[0] == var.domain[1]:
+            self.__constant_map[var.domain[0]] = i</code></pre>
+</details>
+</dd>
+<dt id="cp_model.CpModel.ExportToFile"><code class="name flex">
+<span>def <span class="ident">ExportToFile</span></span>(<span>self, file)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Write the model as a protocol buffer to 'file'.</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>file</code></strong></dt>
+<dd>file to write the model to. If the filename ends with 'txt', the
+model will be written as a text file, otherwise, the binary format
+will be used.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<p>True if the model was correctly written.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def ExportToFile(self, file):
+    &#34;&#34;&#34;Write the model as a protocol buffer to &#39;file&#39;.
+
+Args:
+  file: file to write the model to. If the filename ends with &#39;txt&#39;, the
+        model will be written as a text file, otherwise, the binary format
+        will be used.
+
+
+Returns:
+  True if the model was correctly written.
+&#34;&#34;&#34;
+    return pywrapsat.CpSatHelper.WriteModelToFile(self.__model, file)</code></pre>
+</details>
+</dd>
+<dt id="cp_model.CpModel.GetBoolVarFromProtoIndex"><code class="name flex">
+<span>def <span class="ident">GetBoolVarFromProtoIndex</span></span>(<span>self, index)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Returns an already created Boolean variable from its index.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def GetBoolVarFromProtoIndex(self, index):
+    &#34;&#34;&#34;Returns an already created Boolean variable from its index.&#34;&#34;&#34;
+    if index &lt; 0 or index &gt;= len(self.__model.variables):
+        raise ValueError(
+            f&#39;GetBoolVarFromProtoIndex: out of bound index {index}&#39;)
+    var = self.__model.variables[index]
+    if len(var.domain) != 2 or var.domain[0] &lt; 0 or var.domain[1] &gt; 1:
+        raise ValueError(
+            f&#39;GetBoolVarFromProtoIndex: index {index} does not reference&#39; +
+            &#39; a Boolean variable&#39;)
+
+    return IntVar(self.__model, index, None)</code></pre>
+</details>
+</dd>
+<dt id="cp_model.CpModel.GetIntVarFromProtoIndex"><code class="name flex">
+<span>def <span class="ident">GetIntVarFromProtoIndex</span></span>(<span>self, index)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Returns an already created integer variable from its index.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def GetIntVarFromProtoIndex(self, index):
+    &#34;&#34;&#34;Returns an already created integer variable from its index.&#34;&#34;&#34;
+    if index &lt; 0 or index &gt;= len(self.__model.variables):
+        raise ValueError(
+            f&#39;GetIntVarFromProtoIndex: out of bound index {index}&#39;)
+    return IntVar(self.__model, index, None)</code></pre>
+</details>
+</dd>
 <dt id="cp_model.CpModel.GetIntervalIndex"><code class="name flex">
 <span>def <span class="ident">GetIntervalIndex</span></span>(<span>self, arg)</span>
 </code></dt>
 <dd>
-<section class="desc"></section>
+<div class="desc"></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4189,11 +4793,34 @@ Raises:
     return arg.Index()</code></pre>
 </details>
 </dd>
+<dt id="cp_model.CpModel.GetIntervalVarFromProtoIndex"><code class="name flex">
+<span>def <span class="ident">GetIntervalVarFromProtoIndex</span></span>(<span>self, index)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Returns an already created interval variable from its index.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def GetIntervalVarFromProtoIndex(self, index):
+    &#34;&#34;&#34;Returns an already created interval variable from its index.&#34;&#34;&#34;
+    if index &lt; 0 or index &gt;= len(self.__model.constraints):
+        raise ValueError(
+            f&#39;GetIntervalVarFromProtoIndex: out of bound index {index}&#39;)
+    ct = self.__model.constraints[index]
+    if not ct.HasField(&#39;interval&#39;):
+        raise ValueError(
+            f&#39;GetIntervalVarFromProtoIndex: index {index} does not reference an&#39;
+            + &#39; interval variable&#39;)
+
+    return IntervalVar(self.__model, index, None, None, None, None)</code></pre>
+</details>
+</dd>
 <dt id="cp_model.CpModel.GetOrMakeBooleanIndex"><code class="name flex">
 <span>def <span class="ident">GetOrMakeBooleanIndex</span></span>(<span>self, arg)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns an index from a boolean expression.</p></section>
+<div class="desc"><p>Returns an index from a boolean expression.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4218,7 +4845,7 @@ Raises:
 <span>def <span class="ident">GetOrMakeIndex</span></span>(<span>self, arg)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the index of a variable, its negation, or a number.</p></section>
+<div class="desc"><p>Returns the index of a variable, its negation, or a number.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4242,7 +4869,7 @@ Raises:
 <span>def <span class="ident">GetOrMakeIndexFromConstant</span></span>(<span>self, value)</span>
 </code></dt>
 <dd>
-<section class="desc"></section>
+<div class="desc"></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4261,7 +4888,7 @@ Raises:
 <span>def <span class="ident">HasObjective</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"></section>
+<div class="desc"></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4274,7 +4901,7 @@ Raises:
 <span>def <span class="ident">Maximize</span></span>(<span>self, obj)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Sets the objective of the model to maximize(obj).</p></section>
+<div class="desc"><p>Sets the objective of the model to maximize(obj).</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4288,7 +4915,7 @@ Raises:
 <span>def <span class="ident">Minimize</span></span>(<span>self, obj)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Sets the objective of the model to minimize(obj).</p></section>
+<div class="desc"><p>Sets the objective of the model to minimize(obj).</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4302,21 +4929,21 @@ Raises:
 <span>def <span class="ident">ModelStats</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns a string containing some model statistics.</p></section>
+<div class="desc"><p>Returns a string containing some model statistics.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def ModelStats(self):
     &#34;&#34;&#34;Returns a string containing some model statistics.&#34;&#34;&#34;
-    return pywrapsat.SatHelper.ModelStats(self.__model)</code></pre>
+    return pywrapsat.CpSatHelper.ModelStats(self.__model)</code></pre>
 </details>
 </dd>
 <dt id="cp_model.CpModel.Negated"><code class="name flex">
 <span>def <span class="ident">Negated</span></span>(<span>self, index)</span>
 </code></dt>
 <dd>
-<section class="desc"></section>
+<div class="desc"></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4329,7 +4956,7 @@ Raises:
 <span>def <span class="ident">NewBoolVar</span></span>(<span>self, name)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Creates a 0-1 variable with the given name.</p></section>
+<div class="desc"><p>Creates a 0-1 variable with the given name.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4343,21 +4970,22 @@ Raises:
 <span>def <span class="ident">NewConstant</span></span>(<span>self, value)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Declares a constant integer.</p></section>
+<div class="desc"><p>Declares a constant integer.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def NewConstant(self, value):
     &#34;&#34;&#34;Declares a constant integer.&#34;&#34;&#34;
-    return IntVar(self.__model, Domain(value, value), &#39;&#39;)</code></pre>
+    return IntVar(self.__model, self.GetOrMakeIndexFromConstant(value),
+                  None)</code></pre>
 </details>
 </dd>
 <dt id="cp_model.CpModel.NewIntVar"><code class="name flex">
 <span>def <span class="ident">NewIntVar</span></span>(<span>self, lb, ub, name)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Create an integer variable with domain [lb, ub].</p>
+<div class="desc"><p>Create an integer variable with domain [lb, ub].</p>
 <p>The CP-SAT solver is limited to integer variables. If you have fractional
 values, scale them up so that they become integers; if you have strings,
 encode them as integers.</p>
@@ -4371,7 +4999,7 @@ encode them as integers.</p>
 <dd>The name of the variable.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>a variable whose domain is [lb, ub].</p></section>
+<p>a variable whose domain is [lb, ub].</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4399,7 +5027,7 @@ Returns:
 <span>def <span class="ident">NewIntVarFromDomain</span></span>(<span>self, domain, name)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Create an integer variable from a domain.</p>
+<div class="desc"><p>Create an integer variable from a domain.</p>
 <p>A domain is a set of integers specified by a collection of intervals.
 For example, <code>model.NewIntVarFromDomain(cp_model.
 Domain.FromIntervals([[1, 2], [4, 6]]), 'x')</code></p>
@@ -4411,7 +5039,7 @@ Domain.FromIntervals([[1, 2], [4, 6]]), 'x')</code></p>
 <dd>The name of the variable.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>a variable whose domain is the given domain.</p></section>
+<p>a variable whose domain is the given domain.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4437,7 +5065,7 @@ Returns:
 <span>def <span class="ident">NewIntervalVar</span></span>(<span>self, start, size, end, name)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Creates an interval variable from start, size, and end.</p>
+<div class="desc"><p>Creates an interval variable from start, size, and end.</p>
 <p>An interval variable is a constraint, that is itself used in other
 constraints like NoOverlap.</p>
 <p>Internally, it ensures that <code>start + size == end</code>.</p>
@@ -4456,7 +5084,7 @@ variable.</dd>
 <dd>The name of the interval variable.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An <a title="cp_model.IntervalVar" href="#cp_model.IntervalVar"><code>IntervalVar</code></a> object.</p></section>
+<p>An <code><a title="cp_model.IntervalVar" href="#cp_model.IntervalVar">IntervalVar</a></code> object.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4493,7 +5121,7 @@ Returns:
 <span>def <span class="ident">NewOptionalIntervalVar</span></span>(<span>self, start, size, end, is_present, name)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Creates an optional interval var from start, size, end, and is_present.</p>
+<div class="desc"><p>Creates an optional interval var from start, size, end, and is_present.</p>
 <p>An optional interval variable is a constraint, that is itself used in other
 constraints like NoOverlap. This constraint is protected by an is_present
 literal that indicates if it is active or not.</p>
@@ -4516,7 +5144,7 @@ inactive interval is simply ignored by all constraints.</dd>
 <dd>The name of the interval variable.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<p>An <a title="cp_model.IntervalVar" href="#cp_model.IntervalVar"><code>IntervalVar</code></a> object.</p></section>
+<p>An <code><a title="cp_model.IntervalVar" href="#cp_model.IntervalVar">IntervalVar</a></code> object.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4556,7 +5184,7 @@ Returns:
 <span>def <span class="ident">Proto</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the underlying CpModelProto.</p></section>
+<div class="desc"><p>Returns the underlying CpModelProto.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4570,27 +5198,27 @@ Returns:
 <span>def <span class="ident">Validate</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns a string indicating that the model is invalid.</p></section>
+<div class="desc"><p>Returns a string indicating that the model is invalid.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def Validate(self):
     &#34;&#34;&#34;Returns a string indicating that the model is invalid.&#34;&#34;&#34;
-    return pywrapsat.SatHelper.ValidateModel(self.__model)</code></pre>
+    return pywrapsat.CpSatHelper.ValidateModel(self.__model)</code></pre>
 </details>
 </dd>
 <dt id="cp_model.CpModel.VarIndexToVarProto"><code class="name flex">
 <span>def <span class="ident">VarIndexToVarProto</span></span>(<span>self, var_index)</span>
 </code></dt>
 <dd>
-<section class="desc"></section>
+<div class="desc"></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def VarIndexToVarProto(self, var_index):
-    if var_index &gt; 0:
+    if var_index &gt;= 0:
         return self.__model.variables[var_index]
     else:
         return self.__model.variables[-var_index - 1]</code></pre>
@@ -4602,12 +5230,12 @@ Returns:
 <span>class <span class="ident">CpSolver</span></span>
 </code></dt>
 <dd>
-<section class="desc"><p>Main solver class.</p>
+<div class="desc"><p>Main solver class.</p>
 <p>The purpose of this class is to search for a solution to the model provided
 to the Solve() method.</p>
 <p>Once Solve() is called, this class allows inspecting the solution found
 with the Value() and BooleanValue() methods, as well as general statistics
-about the solve procedure.</p></section>
+about the solve procedure.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4625,21 +5253,38 @@ about the solve procedure.</p></section>
 
     def __init__(self):
         self.__model = None
-        self.__solution = None
+        self.__solution: cp_model_pb2.CpSolverResponse = None
         self.parameters = sat_parameters_pb2.SatParameters()
+        self.log_callback = None
+        self.__solve_wrapper: pywrapsat.SolveWrapper = None
+        self.__lock = threading.Lock()
 
-    def Solve(self, model):
-        &#34;&#34;&#34;Solves the given model and returns the solve status.&#34;&#34;&#34;
-        self.__solution = pywrapsat.SatHelper.SolveWithParameters(
-            model.Proto(), self.parameters)
+    def Solve(self, model, solution_callback=None):
+        &#34;&#34;&#34;Solves a problem and passes each solution to the callback if not null.&#34;&#34;&#34;
+        with self.__lock:
+            solve_wrapper = pywrapsat.SolveWrapper()
+
+        solve_wrapper.SetParameters(self.parameters)
+        if solution_callback is not None:
+            solve_wrapper.AddSolutionCallback(solution_callback)
+
+        if self.log_callback is not None:
+            solve_wrapper.AddLogCallback(self.log_callback)
+
+        self.__solution = solve_wrapper.Solve(model.Proto())
+
+        if solution_callback is not None:
+            solve_wrapper.ClearSolutionCallback(solution_callback)
+
+        with self.__lock:
+            self.__solve_wrapper = None
+
         return self.__solution.status
 
+    # DEPRECATED, just use Solve() with the callback argument.
     def SolveWithSolutionCallback(self, model, callback):
-        &#34;&#34;&#34;Solves a problem and passes each solution found to the callback.&#34;&#34;&#34;
-        self.__solution = (
-            pywrapsat.SatHelper.SolveWithParametersAndSolutionCallback(
-                model.Proto(), self.parameters, callback))
-        return self.__solution.status
+        &#34;&#34;&#34;DEPRECATED Use Solve() with the callback argument.&#34;&#34;&#34;
+        return self.Solve(model, callback)
 
     def SearchForAllSolutions(self, model, callback):
         &#34;&#34;&#34;Search for all solutions of a satisfiability problem.
@@ -4663,15 +5308,21 @@ about the solve procedure.</p></section>
         if model.HasObjective():
             raise TypeError(&#39;Search for all solutions is only defined on &#39;
                             &#39;satisfiability problems&#39;)
-        # Store old values.
+        # Store old parameter.
         enumerate_all = self.parameters.enumerate_all_solutions
         self.parameters.enumerate_all_solutions = True
-        self.__solution = (
-            pywrapsat.SatHelper.SolveWithParametersAndSolutionCallback(
-                model.Proto(), self.parameters, callback))
-        # Restore parameters.
+
+        self.Solve(model, callback)
+
+        # Restore parameter.
         self.parameters.enumerate_all_solutions = enumerate_all
         return self.__solution.status
+
+    def StopSearch(self):
+        &#34;&#34;&#34;Stops the current search asynchronously.&#34;&#34;&#34;
+        with self.__lock:
+            if self.__solve_wrapper:
+                self.__solve_wrapper.StopSearch()
 
     def Value(self, expression):
         &#34;&#34;&#34;Returns the value of a linear expression after solve.&#34;&#34;&#34;
@@ -4693,8 +5344,10 @@ about the solve procedure.</p></section>
         &#34;&#34;&#34;Returns the best lower (upper) bound found when min(max)imizing.&#34;&#34;&#34;
         return self.__solution.best_objective_bound
 
-    def StatusName(self, status):
+    def StatusName(self, status=None):
         &#34;&#34;&#34;Returns the name of the status returned by Solve().&#34;&#34;&#34;
+        if status is None:
+            status = self.__solution.status
         return cp_model_pb2.CpSolverStatus.Name(status)
 
     def NumBooleans(self):
@@ -4719,11 +5372,15 @@ about the solve procedure.</p></section>
 
     def ResponseStats(self):
         &#34;&#34;&#34;Returns some statistics on the solution found as a string.&#34;&#34;&#34;
-        return pywrapsat.SatHelper.SolverResponseStats(self.__solution)
+        return pywrapsat.CpSatHelper.SolverResponseStats(self.__solution)
 
     def ResponseProto(self):
         &#34;&#34;&#34;Returns the response object.&#34;&#34;&#34;
-        return self.__solution</code></pre>
+        return self.__solution
+
+    def SufficientAssumptionsForInfeasibility(self):
+        &#34;&#34;&#34;Returns the indices of the infeasible assumptions.&#34;&#34;&#34;
+        return self.__solution.sufficient_assumptions_for_infeasibility</code></pre>
 </details>
 <h3>Methods</h3>
 <dl>
@@ -4731,7 +5388,7 @@ about the solve procedure.</p></section>
 <span>def <span class="ident">BestObjectiveBound</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the best lower (upper) bound found when min(max)imizing.</p></section>
+<div class="desc"><p>Returns the best lower (upper) bound found when min(max)imizing.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4745,7 +5402,7 @@ about the solve procedure.</p></section>
 <span>def <span class="ident">BooleanValue</span></span>(<span>self, literal)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the boolean value of a literal after solve.</p></section>
+<div class="desc"><p>Returns the boolean value of a literal after solve.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4761,7 +5418,7 @@ about the solve procedure.</p></section>
 <span>def <span class="ident">NumBooleans</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the number of boolean variables managed by the SAT solver.</p></section>
+<div class="desc"><p>Returns the number of boolean variables managed by the SAT solver.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4775,7 +5432,7 @@ about the solve procedure.</p></section>
 <span>def <span class="ident">NumBranches</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the number of search branches explored by the solver.</p></section>
+<div class="desc"><p>Returns the number of search branches explored by the solver.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4789,7 +5446,7 @@ about the solve procedure.</p></section>
 <span>def <span class="ident">NumConflicts</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the number of conflicts since the creation of the solver.</p></section>
+<div class="desc"><p>Returns the number of conflicts since the creation of the solver.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4803,7 +5460,7 @@ about the solve procedure.</p></section>
 <span>def <span class="ident">ObjectiveValue</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the value of the objective after solve.</p></section>
+<div class="desc"><p>Returns the value of the objective after solve.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4817,7 +5474,7 @@ about the solve procedure.</p></section>
 <span>def <span class="ident">ResponseProto</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the response object.</p></section>
+<div class="desc"><p>Returns the response object.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4831,21 +5488,21 @@ about the solve procedure.</p></section>
 <span>def <span class="ident">ResponseStats</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns some statistics on the solution found as a string.</p></section>
+<div class="desc"><p>Returns some statistics on the solution found as a string.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def ResponseStats(self):
     &#34;&#34;&#34;Returns some statistics on the solution found as a string.&#34;&#34;&#34;
-    return pywrapsat.SatHelper.SolverResponseStats(self.__solution)</code></pre>
+    return pywrapsat.CpSatHelper.SolverResponseStats(self.__solution)</code></pre>
 </details>
 </dd>
 <dt id="cp_model.CpSolver.SearchForAllSolutions"><code class="name flex">
 <span>def <span class="ident">SearchForAllSolutions</span></span>(<span>self, model, callback)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Search for all solutions of a satisfiability problem.</p>
+<div class="desc"><p>Search for all solutions of a satisfiability problem.</p>
 <p>This method searches for all feasible solutions of a given model.
 Then it feeds the solution to the callback.</p>
 <p>Note that the model cannot contain an objective.</p>
@@ -4857,15 +5514,12 @@ Then it feeds the solution to the callback.</p>
 <dd>The callback that will be called at each solution.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<dl>
-<dt><code>The</code> <code>status</code> of <code>the</code> <code>solve</code>:</dt>
-<dd>&nbsp;</dd>
-</dl>
+<p>The status of the solve:</p>
 <ul>
 <li><em>FEASIBLE</em> if some solutions have been found</li>
 <li><em>INFEASIBLE</em> if the solver has proved there are no solution</li>
 <li><em>OPTIMAL</em> if all solutions have been found</li>
-</ul></section>
+</ul></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4892,30 +5546,46 @@ Returns:
     if model.HasObjective():
         raise TypeError(&#39;Search for all solutions is only defined on &#39;
                         &#39;satisfiability problems&#39;)
-    # Store old values.
+    # Store old parameter.
     enumerate_all = self.parameters.enumerate_all_solutions
     self.parameters.enumerate_all_solutions = True
-    self.__solution = (
-        pywrapsat.SatHelper.SolveWithParametersAndSolutionCallback(
-            model.Proto(), self.parameters, callback))
-    # Restore parameters.
+
+    self.Solve(model, callback)
+
+    # Restore parameter.
     self.parameters.enumerate_all_solutions = enumerate_all
     return self.__solution.status</code></pre>
 </details>
 </dd>
 <dt id="cp_model.CpSolver.Solve"><code class="name flex">
-<span>def <span class="ident">Solve</span></span>(<span>self, model)</span>
+<span>def <span class="ident">Solve</span></span>(<span>self, model, solution_callback=None)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Solves the given model and returns the solve status.</p></section>
+<div class="desc"><p>Solves a problem and passes each solution to the callback if not null.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def Solve(self, model):
-    &#34;&#34;&#34;Solves the given model and returns the solve status.&#34;&#34;&#34;
-    self.__solution = pywrapsat.SatHelper.SolveWithParameters(
-        model.Proto(), self.parameters)
+<pre><code class="python">def Solve(self, model, solution_callback=None):
+    &#34;&#34;&#34;Solves a problem and passes each solution to the callback if not null.&#34;&#34;&#34;
+    with self.__lock:
+        solve_wrapper = pywrapsat.SolveWrapper()
+
+    solve_wrapper.SetParameters(self.parameters)
+    if solution_callback is not None:
+        solve_wrapper.AddSolutionCallback(solution_callback)
+
+    if self.log_callback is not None:
+        solve_wrapper.AddLogCallback(self.log_callback)
+
+    self.__solution = solve_wrapper.Solve(model.Proto())
+
+    if solution_callback is not None:
+        solve_wrapper.ClearSolutionCallback(solution_callback)
+
+    with self.__lock:
+        self.__solve_wrapper = None
+
     return self.__solution.status</code></pre>
 </details>
 </dd>
@@ -4923,38 +5593,67 @@ Returns:
 <span>def <span class="ident">SolveWithSolutionCallback</span></span>(<span>self, model, callback)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Solves a problem and passes each solution found to the callback.</p></section>
+<div class="desc"><p>DEPRECATED Use Solve() with the callback argument.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def SolveWithSolutionCallback(self, model, callback):
-    &#34;&#34;&#34;Solves a problem and passes each solution found to the callback.&#34;&#34;&#34;
-    self.__solution = (
-        pywrapsat.SatHelper.SolveWithParametersAndSolutionCallback(
-            model.Proto(), self.parameters, callback))
-    return self.__solution.status</code></pre>
+    &#34;&#34;&#34;DEPRECATED Use Solve() with the callback argument.&#34;&#34;&#34;
+    return self.Solve(model, callback)</code></pre>
 </details>
 </dd>
 <dt id="cp_model.CpSolver.StatusName"><code class="name flex">
-<span>def <span class="ident">StatusName</span></span>(<span>self, status)</span>
+<span>def <span class="ident">StatusName</span></span>(<span>self, status=None)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the name of the status returned by Solve().</p></section>
+<div class="desc"><p>Returns the name of the status returned by Solve().</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def StatusName(self, status):
+<pre><code class="python">def StatusName(self, status=None):
     &#34;&#34;&#34;Returns the name of the status returned by Solve().&#34;&#34;&#34;
+    if status is None:
+        status = self.__solution.status
     return cp_model_pb2.CpSolverStatus.Name(status)</code></pre>
+</details>
+</dd>
+<dt id="cp_model.CpSolver.StopSearch"><code class="name flex">
+<span>def <span class="ident">StopSearch</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Stops the current search asynchronously.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def StopSearch(self):
+    &#34;&#34;&#34;Stops the current search asynchronously.&#34;&#34;&#34;
+    with self.__lock:
+        if self.__solve_wrapper:
+            self.__solve_wrapper.StopSearch()</code></pre>
+</details>
+</dd>
+<dt id="cp_model.CpSolver.SufficientAssumptionsForInfeasibility"><code class="name flex">
+<span>def <span class="ident">SufficientAssumptionsForInfeasibility</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Returns the indices of the infeasible assumptions.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def SufficientAssumptionsForInfeasibility(self):
+    &#34;&#34;&#34;Returns the indices of the infeasible assumptions.&#34;&#34;&#34;
+    return self.__solution.sufficient_assumptions_for_infeasibility</code></pre>
 </details>
 </dd>
 <dt id="cp_model.CpSolver.UserTime"><code class="name flex">
 <span>def <span class="ident">UserTime</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the user time in seconds since the creation of the solver.</p></section>
+<div class="desc"><p>Returns the user time in seconds since the creation of the solver.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4968,7 +5667,7 @@ Returns:
 <span>def <span class="ident">Value</span></span>(<span>self, expression)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the value of a linear expression after solve.</p></section>
+<div class="desc"><p>Returns the value of a linear expression after solve.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -4984,7 +5683,7 @@ Returns:
 <span>def <span class="ident">WallTime</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the wall time in seconds since the creation of the solver.</p></section>
+<div class="desc"><p>Returns the wall time in seconds since the creation of the solver.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5000,7 +5699,7 @@ Returns:
 <span>class <span class="ident">CpSolverSolutionCallback</span></span>
 </code></dt>
 <dd>
-<section class="desc"><p>Solution callback.</p>
+<div class="desc"><p>Solution callback.</p>
 <p>This class implements a callback that will be called at each new solution
 found during search.</p>
 <p>The method OnSolutionCallback() will be called by the solver, and must be
@@ -5017,7 +5716,7 @@ and Value() methods.</p>
 <li><code>UserTime(self)</code></li>
 </ul>
 <p>These methods returns the same information as their counterpart in the
-<a title="cp_model.CpSolver" href="#cp_model.CpSolver"><code>CpSolver</code></a> class.</p></section>
+<code><a title="cp_model.CpSolver" href="#cp_model.CpSolver">CpSolver</a></code> class.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5093,6 +5792,10 @@ and Value() methods.</p>
             raise RuntimeError(&#39;Solve() has not be called.&#39;)
         if isinstance(expression, numbers.Integral):
             return expression
+        if not isinstance(expression, LinearExpr):
+            raise TypeError(&#39;Cannot interpret %s as a linear expression.&#39; %
+                            expression)
+
         value = 0
         to_process = [(expression, 1)]
         while to_process:
@@ -5131,7 +5834,7 @@ and Value() methods.</p>
 <span>def <span class="ident">BooleanValue</span></span>(<span>self, lit)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the boolean value of a boolean literal.</p>
+<div class="desc"><p>Returns the boolean value of a boolean literal.</p>
 <h2 id="args">Args</h2>
 <dl>
 <dt><strong><code>lit</code></strong></dt>
@@ -5141,9 +5844,9 @@ and Value() methods.</p>
 <p>The Boolean value of the literal in the solution.</p>
 <h2 id="raises">Raises</h2>
 <dl>
-<dt><strong><code>RuntimeError</code></strong></dt>
+<dt><code>RuntimeError</code></dt>
 <dd>if <code>lit</code> is not a boolean variable or its negation.</dd>
-</dl></section>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5176,7 +5879,7 @@ Raises:
 <span>def <span class="ident">OnSolutionCallback</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Proxy for the same method in snake case.</p></section>
+<div class="desc"><p>Proxy for the same method in snake case.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5190,23 +5893,20 @@ Raises:
 <span>def <span class="ident">Value</span></span>(<span>self, expression)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Evaluates an linear expression in the current solution.</p>
+<div class="desc"><p>Evaluates an linear expression in the current solution.</p>
 <h2 id="args">Args</h2>
 <dl>
 <dt><strong><code>expression</code></strong></dt>
 <dd>a linear expression of the model.</dd>
 </dl>
 <h2 id="returns">Returns</h2>
-<dl>
-<dt><code>An</code> <code>integer</code> <code>value</code> <code>equal</code> <code>to</code> <code>the</code> <code>evaluation</code> of <code>the</code> <code>linear</code> <code>expression</code></dt>
-<dd>&nbsp;</dd>
-</dl>
-<p>against the current solution.</p>
+<p>An integer value equal to the evaluation of the linear expression
+against the current solution.</p>
 <h2 id="raises">Raises</h2>
 <dl>
-<dt><strong><code>RuntimeError</code></strong></dt>
+<dt><code>RuntimeError</code></dt>
 <dd>if 'expression' is not a LinearExpr.</dd>
-</dl></section>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5228,6 +5928,10 @@ Raises:
         raise RuntimeError(&#39;Solve() has not be called.&#39;)
     if isinstance(expression, numbers.Integral):
         return expression
+    if not isinstance(expression, LinearExpr):
+        raise TypeError(&#39;Cannot interpret %s as a linear expression.&#39; %
+                        expression)
+
     value = 0
     to_process = [(expression, 1)]
     while to_process:
@@ -5258,7 +5962,7 @@ Raises:
 <span>(</span><span>model, domain, name)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>An integer variable.</p>
+<div class="desc"><p>An integer variable.</p>
 <p>An IntVar is an object that can take on any integer value within defined
 ranges. Variables appear in constraint like:</p>
 <pre><code>x + y &gt;= 5
@@ -5267,7 +5971,7 @@ AllDifferent([x, y, z])
 <p>Solving a model is equivalent to finding, for each variable, a single value
 from the set of initial values (called the initial domain), such that the
 model is feasible, or optimal if you provided an objective function.</p>
-<p>See CpModel.NewIntVar below.</p></section>
+<p>See CpModel.NewIntVar below.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5289,11 +5993,22 @@ model is feasible, or optimal if you provided an objective function.</p>
     def __init__(self, model, domain, name):
         &#34;&#34;&#34;See CpModel.NewIntVar below.&#34;&#34;&#34;
         self.__model = model
-        self.__index = len(model.variables)
-        self.__var = model.variables.add()
-        self.__var.domain.extend(domain.FlattenedIntervals())
-        self.__var.name = name
         self.__negation = None
+        # Python do not support multiple __init__ methods.
+        # This method is only called from the CpModel class.
+        # We hack the parameter to support the two cases:
+        # case 1:
+        #     model is a CpModelProto, domain is a Domain, and name is a string.
+        # case 2:
+        #     model is a CpModelProto, domain is an index (int), and name is None.
+        if isinstance(domain, numbers.Integral) and name is None:
+            self.__index = domain
+            self.__var = model.variables[domain]
+        else:
+            self.__index = len(model.variables)
+            self.__var = model.variables.add()
+            self.__var.domain.extend(domain.FlattenedIntervals())
+            self.__var.name = name
 
     def Index(self):
         &#34;&#34;&#34;Returns the index of the variable in the model.&#34;&#34;&#34;
@@ -5302,6 +6017,12 @@ model is feasible, or optimal if you provided an objective function.</p>
     def Proto(self):
         &#34;&#34;&#34;Returns the variable protobuf.&#34;&#34;&#34;
         return self.__var
+
+    def IsEqualTo(self, other):
+        &#34;&#34;&#34;Returns true if self == other in the python sense.&#34;&#34;&#34;
+        if not isinstance(other, IntVar):
+            return False
+        return self.Index() == other.Index()
 
     def __str__(self):
         if not self.__var.name:
@@ -5332,7 +6053,7 @@ model is feasible, or optimal if you provided an objective function.</p>
             if bound &lt; 0 or bound &gt; 1:
                 raise TypeError(
                     &#39;Cannot call Not on a non boolean variable: %s&#39; % self)
-        if not self.__negation:
+        if self.__negation is None:
             self.__negation = _NotBooleanVariable(self)
         return self.__negation</code></pre>
 </details>
@@ -5346,7 +6067,7 @@ model is feasible, or optimal if you provided an objective function.</p>
 <span>def <span class="ident">Index</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the index of the variable in the model.</p></section>
+<div class="desc"><p>Returns the index of the variable in the model.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5356,11 +6077,27 @@ model is feasible, or optimal if you provided an objective function.</p>
     return self.__index</code></pre>
 </details>
 </dd>
+<dt id="cp_model.IntVar.IsEqualTo"><code class="name flex">
+<span>def <span class="ident">IsEqualTo</span></span>(<span>self, other)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Returns true if self == other in the python sense.</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def IsEqualTo(self, other):
+    &#34;&#34;&#34;Returns true if self == other in the python sense.&#34;&#34;&#34;
+    if not isinstance(other, IntVar):
+        return False
+    return self.Index() == other.Index()</code></pre>
+</details>
+</dd>
 <dt id="cp_model.IntVar.Name"><code class="name flex">
 <span>def <span class="ident">Name</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"></section>
+<div class="desc"></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5373,10 +6110,10 @@ model is feasible, or optimal if you provided an objective function.</p>
 <span>def <span class="ident">Not</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the negation of a Boolean variable.</p>
+<div class="desc"><p>Returns the negation of a Boolean variable.</p>
 <p>This method implements the logical negation of a Boolean variable.
 It is only valid if the variable has a Boolean domain (0 or 1).</p>
-<p>Note that this method is nilpotent: <code>x.Not().Not() == x</code>.</p></section>
+<p>Note that this method is nilpotent: <code>x.Not().Not() == x</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5394,7 +6131,7 @@ Note that this method is nilpotent: `x.Not().Not() == x`.
         if bound &lt; 0 or bound &gt; 1:
             raise TypeError(
                 &#39;Cannot call Not on a non boolean variable: %s&#39; % self)
-    if not self.__negation:
+    if self.__negation is None:
         self.__negation = _NotBooleanVariable(self)
     return self.__negation</code></pre>
 </details>
@@ -5403,7 +6140,7 @@ Note that this method is nilpotent: `x.Not().Not() == x`.
 <span>def <span class="ident">Proto</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the variable protobuf.</p></section>
+<div class="desc"><p>Returns the variable protobuf.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5431,7 +6168,7 @@ Note that this method is nilpotent: `x.Not().Not() == x`.
 <span>(</span><span>model, start_index, size_index, end_index, is_present_index, name)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Represents an Interval variable.</p>
+<div class="desc"><p>Represents an Interval variable.</p>
 <p>An interval variable is both a constraint and a variable. It is defined by
 three integer variables: start, size, and end.</p>
 <p>It is a constraint because, internally, it enforces that start + size == end.</p>
@@ -5441,7 +6178,7 @@ NoOverlap, NoOverlap2D, Cumulative.</p>
 case these scheduling constraints will ignore interval variables with
 enforcement literals assigned to false. Conversely, these constraints will
 also set these enforcement literals to false if they cannot fit these
-intervals into the schedule.</p></section>
+intervals into the schedule.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5467,15 +6204,28 @@ intervals into the schedule.</p></section>
     def __init__(self, model, start_index, size_index, end_index,
                  is_present_index, name):
         self.__model = model
-        self.__index = len(model.constraints)
-        self.__ct = self.__model.constraints.add()
-        self.__ct.interval.start = start_index
-        self.__ct.interval.size = size_index
-        self.__ct.interval.end = end_index
-        if is_present_index is not None:
-            self.__ct.enforcement_literal.append(is_present_index)
-        if name:
-            self.__ct.name = name
+        # As with the IntVar::__init__ method, we hack the __init__ method to
+        # support two use cases:
+        #   case 1: called when creating a new interval variable.
+        #      {start|size|end}_index are indices of integer variables
+        #      is_present_index is either None or the index of a Boolean literal.
+        #      name is a string
+        #   case 2: called when querying an existing interval variable.
+        #      start_index is an int, all parameters after are None.
+        if (size_index is None and end_index is None and
+                is_present_index is None and name is None):
+            self.__index = start_index
+            self.__ct = model.constraints[start_index]
+        else:
+            self.__index = len(model.constraints)
+            self.__ct = self.__model.constraints.add()
+            self.__ct.interval.start = start_index
+            self.__ct.interval.size = size_index
+            self.__ct.interval.end = end_index
+            if is_present_index is not None:
+                self.__ct.enforcement_literal.append(is_present_index)
+            if name:
+                self.__ct.name = name
 
     def Index(self):
         &#34;&#34;&#34;Returns the index of the interval constraint in the model.&#34;&#34;&#34;
@@ -5511,7 +6261,7 @@ intervals into the schedule.</p></section>
 <span>def <span class="ident">Index</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the index of the interval constraint in the model.</p></section>
+<div class="desc"><p>Returns the index of the interval constraint in the model.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5525,7 +6275,7 @@ intervals into the schedule.</p></section>
 <span>def <span class="ident">Name</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"></section>
+<div class="desc"></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5538,7 +6288,7 @@ intervals into the schedule.</p></section>
 <span>def <span class="ident">Proto</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the interval protobuf.</p></section>
+<div class="desc"><p>Returns the interval protobuf.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5552,10 +6302,9 @@ intervals into the schedule.</p></section>
 </dd>
 <dt id="cp_model.LinearExpr"><code class="flex name class">
 <span>class <span class="ident">LinearExpr</span></span>
-<span>(</span><span>*args, **kwargs)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Holds an integer linear expression.</p>
+<div class="desc"><p>Holds an integer linear expression.</p>
 <p>A linear expression is built from integer constants and variables.
 For example, x + 2 * (y - z + 1).</p>
 <p>Linear expressions are used in CP-SAT models in two ways:</p>
@@ -5574,7 +6323,7 @@ model.Add(sum(array_of_vars) == 5)</p>
 from lists of linear expressions or coefficients as follows:</p>
 <pre><code>model.Minimize(cp_model.LinearExpr.Sum(expressions))
 model.Add(cp_model.LinearExpr.ScalProd(expressions, coefficients) &gt;= 0)
-</code></pre></section>
+</code></pre></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5698,8 +6447,40 @@ model.Add(cp_model.LinearExpr.ScalProd(expressions, coefficients) &gt;= 0)
             &#39;calling %% on a linear expression is not supported, &#39;
             &#39;please use CpModel.AddModuloEquality&#39;)
 
+    def __pow__(self, _):
+        raise NotImplementedError(
+            &#39;calling ** on a linear expression is not supported, &#39;
+            &#39;please use CpModel.AddMultiplicationEquality&#39;)
+
+    def __lshift__(self, _):
+        raise NotImplementedError(
+            &#39;calling left shift on a linear expression is not supported&#39;)
+
+    def __rshift__(self, _):
+        raise NotImplementedError(
+            &#39;calling right shift on a linear expression is not supported&#39;)
+
+    def __and__(self, _):
+        raise NotImplementedError(
+            &#39;calling and on a linear expression is not supported, &#39;
+            &#39;please use CpModel.AddBoolAnd&#39;)
+
+    def __or__(self, _):
+        raise NotImplementedError(
+            &#39;calling or on a linear expression is not supported, &#39;
+            &#39;please use CpModel.AddBoolOr&#39;)
+
+    def __xor__(self, _):
+        raise NotImplementedError(
+            &#39;calling xor on a linear expression is not supported, &#39;
+            &#39;please use CpModel.AddBoolXor&#39;)
+
     def __neg__(self):
         return _ProductCst(self, -1)
+
+    def __bool__(self):
+        raise NotImplementedError(
+            &#39;Evaluating a LinearExpr instance as a Boolean is not implemented.&#39;)
 
     def __eq__(self, arg):
         if arg is None:
@@ -5729,8 +6510,7 @@ model.Add(cp_model.LinearExpr.ScalProd(expressions, coefficients) &gt;= 0)
             cp_model_helper.AssertIsInt64(arg)
             if arg == INT_MIN:
                 raise ArithmeticError(&#39;&lt; INT_MIN is not supported&#39;)
-            return BoundedLinearExpression(
-                self, [INT_MIN, cp_model_helper.CapInt64(arg - 1)])
+            return BoundedLinearExpression(self, [INT_MIN, arg - 1])
         else:
             return BoundedLinearExpression(self - arg, [INT_MIN, -1])
 
@@ -5739,8 +6519,7 @@ model.Add(cp_model.LinearExpr.ScalProd(expressions, coefficients) &gt;= 0)
             cp_model_helper.AssertIsInt64(arg)
             if arg == INT_MAX:
                 raise ArithmeticError(&#39;&gt; INT_MAX is not supported&#39;)
-            return BoundedLinearExpression(
-                self, [cp_model_helper.CapInt64(arg + 1), INT_MAX])
+            return BoundedLinearExpression(self, [arg + 1, INT_MAX])
         else:
             return BoundedLinearExpression(self - arg, [1, INT_MAX])
 
@@ -5754,22 +6533,19 @@ model.Add(cp_model.LinearExpr.ScalProd(expressions, coefficients) &gt;= 0)
             elif arg == INT_MIN:
                 return BoundedLinearExpression(self, [INT_MIN + 1, INT_MAX])
             else:
-                return BoundedLinearExpression(self, [
-                    INT_MIN,
-                    cp_model_helper.CapInt64(arg - 1),
-                    cp_model_helper.CapInt64(arg + 1), INT_MAX
-                ])
+                return BoundedLinearExpression(
+                    self, [INT_MIN, arg - 1, arg + 1, INT_MAX])
         else:
             return BoundedLinearExpression(self - arg,
                                            [INT_MIN, -1, 1, INT_MAX])</code></pre>
 </details>
 <h3>Subclasses</h3>
 <ul class="hlist">
-<li>cp_model._ProductCst</li>
-<li>cp_model._SumArray</li>
-<li>cp_model._ScalProd</li>
 <li><a title="cp_model.IntVar" href="#cp_model.IntVar">IntVar</a></li>
 <li>cp_model._NotBooleanVariable</li>
+<li>cp_model._ProductCst</li>
+<li>cp_model._ScalProd</li>
+<li>cp_model._SumArray</li>
 </ul>
 <h3>Static methods</h3>
 <dl>
@@ -5777,7 +6553,7 @@ model.Add(cp_model.LinearExpr.ScalProd(expressions, coefficients) &gt;= 0)
 <span>def <span class="ident">ScalProd</span></span>(<span>expressions, coefficients)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Creates the expression sum(expressions[i] * coefficients[i]).</p></section>
+<div class="desc"><p>Creates the expression sum(expressions[i] * coefficients[i]).</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5792,7 +6568,7 @@ def ScalProd(cls, expressions, coefficients):
 <span>def <span class="ident">Sum</span></span>(<span>expressions)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Creates the expression sum(expressions).</p></section>
+<div class="desc"><p>Creates the expression sum(expressions).</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5807,7 +6583,7 @@ def Sum(cls, expressions):
 <span>def <span class="ident">Term</span></span>(<span>expression, coefficient)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Creates <code>expression * coefficient</code>.</p></section>
+<div class="desc"><p>Creates <code>expression * coefficient</code>.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5825,7 +6601,7 @@ def Term(cls, expression, coefficient):
 <span>def <span class="ident">GetVarValueMap</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Scans the expression, and return a list of (var_coef_map, constant).</p></section>
+<div class="desc"><p>Scans the expression, and return a list of (var_coef_map, constant).</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5865,7 +6641,7 @@ def Term(cls, expression, coefficient):
 <span>class <span class="ident">ObjectiveSolutionPrinter</span></span>
 </code></dt>
 <dd>
-<section class="desc"><p>Display the objective value and time of intermediate solutions.</p></section>
+<div class="desc"><p>Display the objective value and time of intermediate solutions.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5901,7 +6677,7 @@ def Term(cls, expression, coefficient):
 <span>def <span class="ident">on_solution_callback</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Called on each new solution.</p></section>
+<div class="desc"><p>Called on each new solution.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5919,7 +6695,7 @@ def Term(cls, expression, coefficient):
 <span>def <span class="ident">solution_count</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the number of solutions found.</p></section>
+<div class="desc"><p>Returns the number of solutions found.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5946,7 +6722,7 @@ def Term(cls, expression, coefficient):
 <span>(</span><span>variables)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Print intermediate solutions (objective, variable values, time).</p></section>
+<div class="desc"><p>Print intermediate solutions (objective, variable values, time).</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -5986,7 +6762,7 @@ def Term(cls, expression, coefficient):
 <span>def <span class="ident">on_solution_callback</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Called on each new solution.</p></section>
+<div class="desc"><p>Called on each new solution.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -6007,7 +6783,7 @@ def Term(cls, expression, coefficient):
 <span>def <span class="ident">solution_count</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the number of solutions found.</p></section>
+<div class="desc"><p>Returns the number of solutions found.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -6034,7 +6810,7 @@ def Term(cls, expression, coefficient):
 <span>(</span><span>variables)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Print intermediate solutions (variable values, time).</p></section>
+<div class="desc"><p>Print intermediate solutions (variable values, time).</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -6073,7 +6849,7 @@ def Term(cls, expression, coefficient):
 <span>def <span class="ident">on_solution_callback</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Called on each new solution.</p></section>
+<div class="desc"><p>Called on each new solution.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -6093,7 +6869,7 @@ def Term(cls, expression, coefficient):
 <span>def <span class="ident">solution_count</span></span>(<span>self)</span>
 </code></dt>
 <dd>
-<section class="desc"><p>Returns the number of solutions found.</p></section>
+<div class="desc"><p>Returns the number of solutions found.</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
@@ -6129,6 +6905,12 @@ def Term(cls, expression, coefficient):
 <ul></ul>
 </div>
 <ul id="index">
+<li><h3><a href="#header-functions">Functions</a></h3>
+<ul class="">
+<li><code><a title="cp_model.ObjectIsAFalseLiteral" href="#cp_model.ObjectIsAFalseLiteral">ObjectIsAFalseLiteral</a></code></li>
+<li><code><a title="cp_model.ObjectIsATrueLiteral" href="#cp_model.ObjectIsATrueLiteral">ObjectIsATrueLiteral</a></code></li>
+</ul>
+</li>
 <li><h3><a href="#header-classes">Classes</a></h3>
 <ul>
 <li>
@@ -6153,6 +6935,8 @@ def Term(cls, expression, coefficient):
 <li><code><a title="cp_model.CpModel.AddAbsEquality" href="#cp_model.CpModel.AddAbsEquality">AddAbsEquality</a></code></li>
 <li><code><a title="cp_model.CpModel.AddAllDifferent" href="#cp_model.CpModel.AddAllDifferent">AddAllDifferent</a></code></li>
 <li><code><a title="cp_model.CpModel.AddAllowedAssignments" href="#cp_model.CpModel.AddAllowedAssignments">AddAllowedAssignments</a></code></li>
+<li><code><a title="cp_model.CpModel.AddAssumption" href="#cp_model.CpModel.AddAssumption">AddAssumption</a></code></li>
+<li><code><a title="cp_model.CpModel.AddAssumptions" href="#cp_model.CpModel.AddAssumptions">AddAssumptions</a></code></li>
 <li><code><a title="cp_model.CpModel.AddAutomaton" href="#cp_model.CpModel.AddAutomaton">AddAutomaton</a></code></li>
 <li><code><a title="cp_model.CpModel.AddBoolAnd" href="#cp_model.CpModel.AddBoolAnd">AddBoolAnd</a></code></li>
 <li><code><a title="cp_model.CpModel.AddBoolOr" href="#cp_model.CpModel.AddBoolOr">AddBoolOr</a></code></li>
@@ -6179,7 +6963,14 @@ def Term(cls, expression, coefficient):
 <li><code><a title="cp_model.CpModel.AddReservoirConstraint" href="#cp_model.CpModel.AddReservoirConstraint">AddReservoirConstraint</a></code></li>
 <li><code><a title="cp_model.CpModel.AddReservoirConstraintWithActive" href="#cp_model.CpModel.AddReservoirConstraintWithActive">AddReservoirConstraintWithActive</a></code></li>
 <li><code><a title="cp_model.CpModel.AssertIsBooleanVariable" href="#cp_model.CpModel.AssertIsBooleanVariable">AssertIsBooleanVariable</a></code></li>
+<li><code><a title="cp_model.CpModel.ClearAssumptions" href="#cp_model.CpModel.ClearAssumptions">ClearAssumptions</a></code></li>
+<li><code><a title="cp_model.CpModel.ClearHints" href="#cp_model.CpModel.ClearHints">ClearHints</a></code></li>
+<li><code><a title="cp_model.CpModel.CopyFrom" href="#cp_model.CpModel.CopyFrom">CopyFrom</a></code></li>
+<li><code><a title="cp_model.CpModel.ExportToFile" href="#cp_model.CpModel.ExportToFile">ExportToFile</a></code></li>
+<li><code><a title="cp_model.CpModel.GetBoolVarFromProtoIndex" href="#cp_model.CpModel.GetBoolVarFromProtoIndex">GetBoolVarFromProtoIndex</a></code></li>
+<li><code><a title="cp_model.CpModel.GetIntVarFromProtoIndex" href="#cp_model.CpModel.GetIntVarFromProtoIndex">GetIntVarFromProtoIndex</a></code></li>
 <li><code><a title="cp_model.CpModel.GetIntervalIndex" href="#cp_model.CpModel.GetIntervalIndex">GetIntervalIndex</a></code></li>
+<li><code><a title="cp_model.CpModel.GetIntervalVarFromProtoIndex" href="#cp_model.CpModel.GetIntervalVarFromProtoIndex">GetIntervalVarFromProtoIndex</a></code></li>
 <li><code><a title="cp_model.CpModel.GetOrMakeBooleanIndex" href="#cp_model.CpModel.GetOrMakeBooleanIndex">GetOrMakeBooleanIndex</a></code></li>
 <li><code><a title="cp_model.CpModel.GetOrMakeIndex" href="#cp_model.CpModel.GetOrMakeIndex">GetOrMakeIndex</a></code></li>
 <li><code><a title="cp_model.CpModel.GetOrMakeIndexFromConstant" href="#cp_model.CpModel.GetOrMakeIndexFromConstant">GetOrMakeIndexFromConstant</a></code></li>
@@ -6214,6 +7005,8 @@ def Term(cls, expression, coefficient):
 <li><code><a title="cp_model.CpSolver.Solve" href="#cp_model.CpSolver.Solve">Solve</a></code></li>
 <li><code><a title="cp_model.CpSolver.SolveWithSolutionCallback" href="#cp_model.CpSolver.SolveWithSolutionCallback">SolveWithSolutionCallback</a></code></li>
 <li><code><a title="cp_model.CpSolver.StatusName" href="#cp_model.CpSolver.StatusName">StatusName</a></code></li>
+<li><code><a title="cp_model.CpSolver.StopSearch" href="#cp_model.CpSolver.StopSearch">StopSearch</a></code></li>
+<li><code><a title="cp_model.CpSolver.SufficientAssumptionsForInfeasibility" href="#cp_model.CpSolver.SufficientAssumptionsForInfeasibility">SufficientAssumptionsForInfeasibility</a></code></li>
 <li><code><a title="cp_model.CpSolver.UserTime" href="#cp_model.CpSolver.UserTime">UserTime</a></code></li>
 <li><code><a title="cp_model.CpSolver.Value" href="#cp_model.CpSolver.Value">Value</a></code></li>
 <li><code><a title="cp_model.CpSolver.WallTime" href="#cp_model.CpSolver.WallTime">WallTime</a></code></li>
@@ -6231,6 +7024,7 @@ def Term(cls, expression, coefficient):
 <h4><code><a title="cp_model.IntVar" href="#cp_model.IntVar">IntVar</a></code></h4>
 <ul class="">
 <li><code><a title="cp_model.IntVar.Index" href="#cp_model.IntVar.Index">Index</a></code></li>
+<li><code><a title="cp_model.IntVar.IsEqualTo" href="#cp_model.IntVar.IsEqualTo">IsEqualTo</a></code></li>
 <li><code><a title="cp_model.IntVar.Name" href="#cp_model.IntVar.Name">Name</a></code></li>
 <li><code><a title="cp_model.IntVar.Not" href="#cp_model.IntVar.Not">Not</a></code></li>
 <li><code><a title="cp_model.IntVar.Proto" href="#cp_model.IntVar.Proto">Proto</a></code></li>
@@ -6280,9 +7074,7 @@ def Term(cls, expression, coefficient):
 </nav>
 </main>
 <footer id="footer">
-<p>Generated by <a href="https://pdoc3.github.io/pdoc"><cite>pdoc</cite> 0.7.2</a>.</p>
+<p>Generated by <a href="https://pdoc3.github.io/pdoc"><cite>pdoc</cite> 0.9.2</a>.</p>
 </footer>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/highlight.min.js"></script>
-<script>hljs.initHighlightingOnLoad()</script>
 </body>
 </html>

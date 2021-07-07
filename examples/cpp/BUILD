@@ -109,7 +109,7 @@ cc_library(
     deps = [
         "//ortools/base",
         "//ortools/base:file",
-        "//ortools/base:status",
+        "@com_google_absl//absl/status",
         "//ortools/graph:ebert_graph",
         "//ortools/graph:linear_assignment",
     ],
@@ -255,15 +255,6 @@ cc_binary(
 )
 
 cc_binary(
-    name = "knapsack",
-    srcs = ["knapsack.cc"],
-    deps = [
-        "//ortools/algorithms:knapsack_solver_lib",
-        "//ortools/base",
-    ],
-)
-
-cc_binary(
     name = "linear_assignment_api",
     srcs = ["linear_assignment_api.cc"],
     deps = [
@@ -290,6 +281,17 @@ cc_binary(
         "//ortools/base",
         "//ortools/linear_solver",
         "//ortools/linear_solver:linear_solver_cc_proto",
+    ],
+)
+
+cc_binary(
+    name = "magic_sequence_sat",
+    srcs = ["magic_sequence_sat.cc"],
+    deps = [
+        "//ortools/base",
+        "@com_google_absl//absl/strings",
+        "//ortools/sat:cp_model",
+        "//ortools/sat:model",
     ],
 )
 
@@ -334,6 +336,17 @@ cc_binary(
         "//ortools/lp_data:mps_reader",
         "//ortools/util:proto_tools",
         "@com_google_protobuf//:protobuf",
+    ],
+)
+
+cc_binary(
+    name = "multi_knapsack_sat",
+    srcs = ["multi_knapsack_sat.cc"],
+    deps = [
+        "//ortools/base",
+        "@com_google_absl//absl/strings",
+        "//ortools/sat:cp_model",
+        "//ortools/sat:model",
     ],
 )
 
@@ -402,7 +415,7 @@ cc_binary(
         "//ortools/base:file",
         "//ortools/base:filelineiter",
         "//ortools/base:random",
-        "//ortools/base:status",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "//ortools/base:threadpool",
         "//ortools/lp_data:mps_reader",
@@ -419,7 +432,7 @@ cc_binary(
         "//ortools/sat:symmetry",
         "//ortools/util:sigint",
         "//ortools/util:time_limit",
-        "@com_google_protobuf_cc//:protobuf",
+        "@com_google_protobuf//:protobuf",
     ],
 )
 
@@ -490,6 +503,16 @@ cc_binary(
 )
 
 cc_binary(
+    name = "uncapacitated_facility_location",
+    srcs = ["uncapacitated_facility_location.cc"],
+    deps = [
+        "//ortools/base",
+        "//ortools/linear_solver",
+    ],
+)
+
+
+cc_binary(
     name = "variable_intervals_sat",
     srcs = ["variable_intervals_sat.cc"],
     deps = [
@@ -518,6 +541,6 @@ cc_binary(
         "//ortools/sat:optimization",
         "//ortools/sat:precedences",
         "//ortools/sat:sat_solver",
-        "@com_google_protobuf_cc//:protobuf",
+        "@com_google_protobuf//:protobuf",
     ],
 )

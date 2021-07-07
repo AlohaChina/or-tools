@@ -23,12 +23,13 @@ GEN_PATH = $(subst /,$S,$(GEN_DIR))
 OBJ_DIR = $(OR_ROOT)objs
 LIB_DIR = $(OR_ROOT)lib
 BIN_DIR = $(OR_ROOT)bin
-TEST_DIR  = $(OR_ROOT)examples/tests
-TEST_PATH = $(subst /,$S,$(TEST_DIR))
-CC_EX_DIR  = $(OR_ROOT)examples/cpp
-CC_EX_PATH = $(subst /,$S,$(CC_EX_DIR))
 FZ_EX_DIR  = $(OR_ROOT)examples/flatzinc
 FZ_EX_PATH = $(subst /,$S,$(FZ_EX_DIR))
+# C++ relevant directory
+CC_EX_DIR  = $(OR_ROOT)examples/cpp
+CC_GEN_DIR  = $(GEN_DIR)/examples/cpp
+CC_EX_PATH = $(subst /,$S,$(CC_EX_DIR))
+CC_GEN_PATH = $(subst /,$S,$(CC_GEN_DIR))
 # Python relevant directory
 PYTHON_EX_DIR  = $(OR_ROOT)examples/python
 PYTHON_EX_PATH = $(subst /,$S,$(PYTHON_EX_DIR))
@@ -43,6 +44,9 @@ DOTNET_EX_PATH = $(subst /,$S,$(DOTNET_EX_DIR))
 # Contrib examples directory
 CONTRIB_EX_DIR = $(OR_ROOT)examples/contrib
 CONTRIB_EX_PATH = $(subst /,$S,$(CONTRIB_EX_DIR))
+# Test examples directory
+TEST_DIR  = $(OR_ROOT)examples/tests
+TEST_PATH = $(subst /,$S,$(TEST_DIR))
 
 O = obj
 L = lib
@@ -90,6 +94,7 @@ CMAKE := $(shell $(WHICH) cmake)
 ifeq ($(CMAKE),)
 $(error Please add "cmake" to your PATH)
 endif
+MVN_BIN := $(shell $(WHICH) mvn.cmd)
 
 # Add some additional macros
 ATTRIB = attrib
@@ -97,7 +102,7 @@ TASKKILL = taskkill
 
 # Compilation macros.
 DEBUG=/O2 -DNDEBUG
-CCC=cl /EHsc /MD /nologo -nologo $(SYSCFLAGS) /D__WIN32__ /DPSAPI_VERSION=1 \
+CCC=cl /std:c++17 /EHsc /MD /nologo -nologo $(SYSCFLAGS) /D__WIN32__ /DPSAPI_VERSION=1 \
  /DNOMINMAX /DWIN32_LEAN_AND_MEAN=1 /D_CRT_SECURE_NO_WARNINGS
 
 PYTHON_VERSION = $(WINDOWS_PYTHON_VERSION)
@@ -111,41 +116,23 @@ GLPK_SWIG = -I"$(WINDOWS_GLPK_DIR)/include" -DUSE_GLPK
 DYNAMIC_GLPK_LNK = "$(WINDOWS_GLPK_DIR)\\lib\\glpk.lib"
 STATIC_GLPK_LNK = "$(WINDOWS_GLPK_DIR)\\lib\\glpk.lib"
 endif
-# This is needed to find SCIP include files and libraries.
-ifdef WINDOWS_SCIP_DIR
-  SCIP_INC = /I"$(WINDOWS_SCIP_DIR)\\include" /DUSE_SCIP
-  SCIP_SWIG = -I"$(WINDOWS_SCIP_DIR)/include" -DUSE_SCIP
-  STATIC_SCIP_LNK = \
- "$(WINDOWS_SCIP_DIR)\\lib\\scip.lib" \
- "$(WINDOWS_SCIP_DIR)\\lib\\soplex-pic.lib" /ignore:4006
-  DYNAMIC_SCIP_LNK = $(STATIC_SCIP_LNK)
-endif
 # This is needed to find CPLEX include files and libraries.
 ifdef WINDOWS_CPLEX_DIR
-  CPLEX_INC = /I"$(WINDOWS_CPLEX_DIR)\\include" /DUSE_CPLEX
-  CPLEX_SWIG = -I"$(WINDOWS_CPLEX_DIR)/include" -DUSE_CPLEX
-  STATIC_CPLEX_LNK = "$(WINDOWS_CPLEX_DIR)\\cplex1290.lib"
+  CPLEX_INC = /I"$(WINDOWS_CPLEX_DIR)\\cplex\\include" /DUSE_CPLEX
+  CPLEX_SWIG = -I"$(WINDOWS_CPLEX_DIR)/cplex/include" -DUSE_CPLEX
+  STATIC_CPLEX_LNK = "$(WINDOWS_CPLEX_DIR)\\cplex\\lib\\x64_windows_msvc14\\stat_mda\\cplex$(WINDOWS_CPLEX_VERSION).lib"
   DYNAMIC_CPLEX_LNK = $(STATIC_CPLEX_LNK)
 endif
-# This is needed to find Gurobi include files and libraries.
-ifdef WINDOWS_GUROBI_DIR
-  ifeq ($(PTRLENGTH),64)
-    GUROBI_INC = /I"$(WINDOWS_GUROBI_DIR)\win64\include" /DUSE_GUROBI
-    GUROBI_SWIG = -I"$(WINDOWS_GUROBI_DIR)/win64/include" -DUSE_GUROBI
-    DYNAMIC_GUROBI_LNK = "$(WINDOWS_GUROBI_DIR)\win64\lib\gurobi$(GUROBI_LIB_VERSION).lib"
-    STATIC_GUROBI_LNK = $(DYNAMIC_GUROBI_LNK)
-  else
-    GUROBI_INC = /I"$(WINDOWS_GUROBI_DIR)\win32\include" /DUSE_GUROBI
-    GUROBI_SWIG = -I"$(WINDOWS_GUROBI_DIR)/win32/include" -DUSE_GUROBI
-    DYNAMIC_GUROBI_LNK = "$(WINDOWS_GUROBI_DIR)\\win32\lib\gurobi$(GUROBI_LIB_VERSION).lib"
-    STATIC_GUROBI_LNK = $(DYNAMIC_GUROBI_LNK)
-  endif
+ifdef WINDOWS_XPRESS_DIR
+  XPRESS_INC = /I"$(WINDOWS_XPRESS_DIR)\\include" /DUSE_XPRESS /DXPRESS_PATH=\"$(WINDOWS_XPRESS_DIR)\"
+  XPRESS_SWIG = -I"$(WINDOWS_XPRESS_DIR)/include" -DUSE_XPRESS
+  STATIC_XPRESS_LNK = "$(WINDOWS_XPRESS_DIR)\\lib\\xprs.lib"
+  DYNAMIC_XPRESS_LNK = $(STATIC_XPRESS_LNK)
 endif
 
 SWIG_INC = \
- $(ZLIB_SWIG) $(GFLAGS_SWIG) $(GLOG_SWIG) $(PROTOBUF_SWIG) $(CLP_SWIG) $(CBC_SWIG) \
  -DUSE_GLOP -DUSE_BOP -DABSL_MUST_USE_RESULT \
- $(GLPK_SWIG) $(SCIP_SWIG) $(GUROBI_SWIG) $(CPLEX_SWIG)
+ $(GLPK_SWIG) $(GUROBI_SWIG) $(CPLEX_SWIG) $(XPRESS_SWIG)
 
 SYS_LNK = psapi.lib ws2_32.lib shlwapi.lib
 
@@ -155,15 +142,13 @@ JAVA_BIN=$(shell $(WHICH) "$(JAVA_HOME)\bin\java")
 JAR_BIN=$(shell $(WHICH) "$(JAVA_HOME)\bin\jar")
 
 DEPENDENCIES_INC = /I$(INC_DIR) /I$(GEN_DIR) \
- $(ZLIB_INC) $(GFLAGS_INC) $(GLOG_INC) $(PROTOBUF_INC) \
- $(COIN_INC) \
  /DUSE_GLOP /DUSE_BOP \
- $(GLPK_INC) $(SCIP_INC) $(GUROBI_INC) $(CPLEX_INC)
+ $(GLPK_INC) $(GUROBI_INC) $(CPLEX_INC) $(XPRESS_INC)
 
 CFLAGS = $(DEBUG) $(DEPENDENCIES_INC)  /DOR_TOOLS_MAJOR=$(OR_TOOLS_MAJOR) /DOR_TOOLS_MINOR=$(OR_TOOLS_MINOR)
 JNIFLAGS=$(CFLAGS) $(DEPENDENCIES_INC)
 LDFLAGS =
-DEPENDENCIES_LNK = $(SYS_LNK) $(STATIC_GLPK_LNK) $(STATIC_SCIP_LNK) $(STATIC_GUROBI_LNK) $(STATIC_CPLEX_LNK)
+DEPENDENCIES_LNK = $(SYS_LNK) $(STATIC_GLPK_LNK) $(STATIC_CPLEX_LNK) $(STATIC_XPRESS_LNK)
 
-OR_TOOLS_LNK =
+OR_TOOLS_LNK = $(PRE_LIB)ortools$(POST_LIB)
 OR_TOOLS_LDFLAGS =

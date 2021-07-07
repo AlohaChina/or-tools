@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -1056,6 +1056,7 @@ void TriangularMatrix::PermutedLowerSparseSolve(const ColumnView& rhs,
 
   // We clear lower_column first in case upper_column and lower_column point to
   // the same underlying SparseColumn.
+  num_fp_operations_ = 0;
   lower_column->Clear();
 
   // rows_to_consider_ contains the row to process in reverse order. Note in
@@ -1074,6 +1075,7 @@ void TriangularMatrix::PermutedLowerSparseSolve(const ColumnView& rhs,
     DCHECK_GE(row_as_col, 0);
     upper_column->SetCoefficient(permuted_row, pivot);
     DCHECK_EQ(diagonal_coefficients_[row_as_col], 1.0);
+    num_fp_operations_ += 1 + ColumnNumEntries(row_as_col).value();
     for (const auto e : column(row_as_col)) {
       initially_all_zero_scratchpad_[e.row()] -= e.coefficient() * pivot;
     }

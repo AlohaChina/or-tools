@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,6 +12,8 @@
 // limitations under the License.
 
 #include "ortools/data/rcpsp_parser.h"
+
+#include <cstdint>
 
 #include "absl/strings/match.h"
 #include "absl/strings/numbers.h"
@@ -596,8 +598,8 @@ int RcpspParser::strtoint32(const std::string& word) {
   return result;
 }
 
-int64 RcpspParser::strtoint64(const std::string& word) {
-  int64 result;
+int64_t RcpspParser::strtoint64(const std::string& word) {
+  int64_t result;
   CHECK(absl::SimpleAtoi(word, &result));
   return result;
 }

@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -36,8 +36,14 @@ CpSolverResponse SolveWithParameters(const CpModelProto& model_proto,
 /// Returns a string with some statistics on the given CpModelProto.
 std::string CpModelStats(const CpModelProto& model);
 
-/// Returns a string with some statistics on the solver response.
-std::string CpSolverResponseStats(const CpSolverResponse& response);
+/** Returns a string with some statistics on the solver response.
+ *
+ * If the second argument is false, we will just display NA for the objective
+ * value instead of zero. It is not really needed but it makes things a bit
+ * clearer to see that there is no objective.
+ */
+std::string CpSolverResponseStats(const CpSolverResponse& response,
+                                  bool has_objective = true);
 
 /**
  * Solves the given CpModelProto.
@@ -71,20 +77,6 @@ CpSolverResponse SolveWithParameters(const CpModelProto& model_proto,
  */
 std::function<void(Model*)> NewFeasibleSolutionObserver(
     const std::function<void(const CpSolverResponse& response)>& observer);
-
-/**
- * If set, the underlying solver will call this function regularly in a
- * deterministic way. It will then wait until this function returns with the
- * current best information about the current problem.
- *
- * This is meant to be used in a multi-threaded environment with many parallel
- * solving process. If the returned current "best" response only uses
- * information derived at a lower deterministic time (possibly with offset)
- * than the deterministic time of the current thread, the whole process can
- * be made deterministic.
- */
-void SetSynchronizationFunction(std::function<CpSolverResponse()> f,
-                                Model* model);
 
 /**
  * Creates parameters for the solver, which you can add to the model with

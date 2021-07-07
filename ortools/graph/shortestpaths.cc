@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <utility>
@@ -24,5 +25,5 @@
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
 
-DEFINE_int32(shortestpaths_disconnected_distance, 200000,
-             "Distance returned when two node are disconnected");
+ABSL_FLAG(int, shortestpaths_disconnected_distance, 200000,
+          "Distance returned when two node are disconnected");

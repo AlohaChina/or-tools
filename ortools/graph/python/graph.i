@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -25,8 +25,7 @@
 // API to be exposed here.
 //
 // TODO(user): test all the APIs that are currently marked as 'untested'.
-
-%include "stdint.i"
+//swiglint: disable full-signature
 
 %include "ortools/base/base.i"
 
@@ -47,9 +46,6 @@
 #include "ortools/graph/min_cost_flow.h"
 #include "ortools/graph/shortestpaths.h"
 %}
-
-typedef int64_t int64;
-typedef uint64_t uint64;
 
 // ############ max_flow.h ############
 
@@ -151,7 +147,13 @@ typedef uint64_t uint64;
 
 %include "ortools/graph/assignment.h"
 
+%unignoreall
 
+// ############ shortestpaths.h ############
+
+%ignoreall
+
+%unignore operations_research;
 %unignore operations_research::DijkstraShortestPath;
 %unignore operations_research::BellmanFordShortestPath;
 %unignore operations_research::AStarShortestPath;

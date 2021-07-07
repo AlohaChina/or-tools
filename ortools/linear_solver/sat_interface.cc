@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,9 +12,12 @@
 // limitations under the License.
 
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "ortools/base/hash.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
@@ -65,9 +68,8 @@ class SatInterface : public MPSolverInterface {
   bool AddIndicatorConstraint(MPConstraint* const ct) override { return true; }
 
   // ------ Query statistics on the solution and the solve ------
-  int64 iterations() const override;
-  int64 nodes() const override;
-  double best_objective_bound() const override;
+  int64_t iterations() const override;
+  int64_t nodes() const override;
   MPSolver::BasisStatus row_status(int constraint_index) const override;
   MPSolver::BasisStatus column_status(int variable_index) const override;
 
@@ -92,7 +94,7 @@ class SatInterface : public MPSolverInterface {
   void SetLpAlgorithm(int value) override;
   bool SetSolverSpecificParametersAsString(
       const std::string& parameters) override;
-  util::Status SetNumThreads(int num_threads) override;
+  absl::Status SetNumThreads(int num_threads) override;
 
  private:
   void NonIncrementalChange();
@@ -100,7 +102,6 @@ class SatInterface : public MPSolverInterface {
   std::atomic<bool> interrupt_solve_;
   sat::SatParameters parameters_;
   int num_threads_ = 8;
-  double best_objective_bound_ = 0.0;
 };
 
 SatInterface::SatInterface(MPSolver* const solver)
@@ -136,21 +137,14 @@ MPSolver::ResultStatus SatInterface::Solve(const MPSolverParameters& param) {
 
   MPModelRequest request;
   solver_->ExportModelToProto(request.mutable_model());
-  // If sat::SatParameters is compiled with proto-lite (go/mobile-cpp-protos),
-  // then serialize as non-human readable string. This is because proto-lite
-  // does not support reflection mechanism, which is a prerequisite for method
-  // like `ShortDebugString`.
-  if (!std::is_base_of<Message, sat::SatParameters>::value) {
-    request.set_solver_specific_parameters(parameters_.SerializeAsString());
-  } else {
-    request.set_solver_specific_parameters(parameters_.ShortDebugString());
-  }
+  request.set_solver_specific_parameters(
+      EncodeSatParametersAsString(parameters_));
   request.set_enable_internal_solver_output(!quiet_);
-  const util::StatusOr<MPSolutionResponse> status_or =
+  const absl::StatusOr<MPSolutionResponse> status_or =
       SatSolveProto(std::move(request), &interrupt_solve_);
 
   if (!status_or.ok()) return MPSolver::ABNORMAL;
-  const MPSolutionResponse response = status_or.ValueOrDie();
+  const MPSolutionResponse& response = status_or.value();
 
   // The solution must be marked as synchronized even when no solution exists.
   sync_status_ = SOLUTION_SYNCHRONIZED;
@@ -238,18 +232,11 @@ void SatInterface::SetObjectiveOffset(double value) { NonIncrementalChange(); }
 
 void SatInterface::ClearObjective() { NonIncrementalChange(); }
 
-int64 SatInterface::iterations() const {
+int64_t SatInterface::iterations() const {
   return 0;  // FIXME
 }
 
-int64 SatInterface::nodes() const { return 0; }
-
-double SatInterface::best_objective_bound() const {
-  if (!CheckSolutionIsSynchronized() || !CheckBestObjectiveBoundExists()) {
-    return trivial_worst_objective_bound();
-  }
-  return best_objective_bound_;
-}
+int64_t SatInterface::nodes() const { return 0; }
 
 MPSolver::BasisStatus SatInterface::row_status(int constraint_index) const {
   return MPSolver::BasisStatus::FREE;  // FIXME
@@ -283,9 +270,9 @@ void SatInterface::SetParameters(const MPSolverParameters& param) {
   SetCommonParameters(param);
 }
 
-util::Status SatInterface::SetNumThreads(int num_threads) {
+absl::Status SatInterface::SetNumThreads(int num_threads) {
   num_threads_ = num_threads;
-  return util::OkStatus();
+  return absl::OkStatus();
 }
 
 // All these have no effect.

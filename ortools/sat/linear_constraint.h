@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,6 +16,7 @@
 
 #include <vector>
 
+#include "ortools/base/strong_vector.h"
 #include "ortools/sat/integer.h"
 #include "ortools/sat/model.h"
 
@@ -50,6 +51,11 @@ struct LinearConstraint {
     coeffs.push_back(coeff);
   }
 
+  void ClearTerms() {
+    vars.clear();
+    coeffs.clear();
+  }
+
   std::string DebugString() const {
     std::string result;
     if (lb.value() > kMinIntegerValue) {
@@ -76,6 +82,48 @@ struct LinearConstraint {
   }
 };
 
+// Helper struct to model linear expression for lin_min/lin_max constraints. The
+// canonical expression should only contain positive coefficients.
+struct LinearExpression {
+  std::vector<IntegerVariable> vars;
+  std::vector<IntegerValue> coeffs;
+  IntegerValue offset = IntegerValue(0);
+  // Return the evaluation of the linear expression using the values from
+  // lp_values.
+  double LpValue(
+      const absl::StrongVector<IntegerVariable, double>& lp_values) const;
+};
+
+// Returns the same expression in the canonical form (all positive
+// coefficients).
+LinearExpression CanonicalizeExpr(const LinearExpression& expr);
+
+// Returns lower bound of linear expression using variable bounds of the
+// variables in expression. Assumes Canonical expression (all positive
+// coefficients).
+IntegerValue LinExprLowerBound(const LinearExpression& expr,
+                               const IntegerTrail& integer_trail);
+
+// Returns upper bound of linear expression using variable bounds of the
+// variables in expression. Assumes Canonical expression (all positive
+// coefficients).
+IntegerValue LinExprUpperBound(const LinearExpression& expr,
+                               const IntegerTrail& integer_trail);
+
+// Preserves canonicality.
+LinearExpression NegationOf(const LinearExpression& expr);
+
+// Returns the same expression with positive variables.
+LinearExpression PositiveVarExpr(const LinearExpression& expr);
+
+// Returns the coefficient of the variable in the expression. Works in linear
+// time.
+// Note: GetCoefficient(NegationOf(var, expr)) == -GetCoefficient(var, expr).
+IntegerValue GetCoefficient(const IntegerVariable var,
+                            const LinearExpression& expr);
+IntegerValue GetCoefficientOfPositiveVar(const IntegerVariable var,
+                                         const LinearExpression& expr);
+
 // Allow to build a LinearConstraint while making sure there is no duplicate
 // variables. Note that we do not simplify literal/variable that are currently
 // fixed here.
@@ -83,11 +131,33 @@ class LinearConstraintBuilder {
  public:
   // We support "sticky" kMinIntegerValue for lb and kMaxIntegerValue for ub
   // for one-sided constraints.
+  //
+  // Assumes that the 'model' has IntegerEncoder.
   LinearConstraintBuilder(const Model* model, IntegerValue lb, IntegerValue ub)
       : encoder_(*model->Get<IntegerEncoder>()), lb_(lb), ub_(ub) {}
 
   // Adds var * coeff to the constraint.
   void AddTerm(IntegerVariable var, IntegerValue coeff);
+  void AddTerm(AffineExpression expr, IntegerValue coeff);
+  void AddLinearExpression(const LinearExpression& expr);
+
+  // Add an under linearization of the product of two affine expressions.
+  // If at least one of them is fixed, then we add the exact product (which is
+  // linear). Otherwise, we use McCormick relaxation:
+  //     left * right = (left_min + delta_left) * (right_min + delta_right) =
+  //         left_min * right_min + delta_left * right_min +
+  //          delta_right * left_min + delta_left * delta_right
+  //     which is >= (by ignoring the quatratic term)
+  //         right_min * left + left_min * right - right_min * left_min
+  //
+  // TODO(user): We could use (max - delta) instead of (min + delta) for each
+  // expression instead. This would depend on the LP value of the left and
+  // right.
+  void AddQuadraticLowerBound(AffineExpression left, AffineExpression right,
+                              IntegerTrail* integer_trail);
+
+  // Add value as a constant term to the linear equation.
+  void AddConstant(IntegerValue value);
 
   // Add literal * coeff to the constaint. Returns false and do nothing if the
   // given literal didn't have an integer view.
@@ -106,7 +176,6 @@ class LinearConstraintBuilder {
   const IntegerEncoder& encoder_;
   IntegerValue lb_;
   IntegerValue ub_;
-  IntegerValue offset_;
 
   // Initially we push all AddTerm() here, and during Build() we merge terms
   // on the same variable.
@@ -115,8 +184,9 @@ class LinearConstraintBuilder {
 
 // Returns the activity of the given constraint. That is the current value of
 // the linear terms.
-double ComputeActivity(const LinearConstraint& constraint,
-                       const gtl::ITIVector<IntegerVariable, double>& values);
+double ComputeActivity(
+    const LinearConstraint& constraint,
+    const absl::StrongVector<IntegerVariable, double>& values);
 
 // Returns sqrt(sum square(coeff)).
 double ComputeL2Norm(const LinearConstraint& constraint);
@@ -147,6 +217,15 @@ void MakeAllVariablesPositive(LinearConstraint* constraint);
 void CleanTermsAndFillConstraint(
     std::vector<std::pair<IntegerVariable, IntegerValue>>* terms,
     LinearConstraint* constraint);
+
+// Sorts the terms and makes all IntegerVariable positive. This assumes that a
+// variable or its negation only appear once.
+//
+// Note that currently this allocates some temporary memory.
+void CanonicalizeConstraint(LinearConstraint* ct);
+
+// Returns false if duplicate variables are found in ct.
+bool NoDuplicateVariable(const LinearConstraint& ct);
 
 }  // namespace sat
 }  // namespace operations_research

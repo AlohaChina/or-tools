@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,40 +14,36 @@
 #ifndef OR_TOOLS_BASE_STATUS_MACROS_H_
 #define OR_TOOLS_BASE_STATUS_MACROS_H_
 
-#include "ortools/base/status.h"
-#include "ortools/base/statusor.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "ortools/base/status_builder.h"
 
-namespace util {
+namespace absl {
 
-// Run a command that returns a util::Status.  If the called code returns an
+// Run a command that returns a absl::Status.  If the called code returns an
 // error status, return that status up out of this method too.
 //
 // Example:
 //   RETURN_IF_ERROR(DoThings(4));
-#define RETURN_IF_ERROR(expr)                                                \
-  do {                                                                       \
-    /* Using _status below to avoid capture problems if expr is "status". */ \
-    const ::util::Status _status = (expr);                                   \
-    if (!_status.ok()) return _status;                                       \
-  } while (0)
+//   RETURN_IF_ERROR(DoThings(5)) << "Additional error context";
+#define RETURN_IF_ERROR(expr)                                \
+  switch (0)                                                 \
+  case 0:                                                    \
+  default:                                                   \
+    if (const ::absl::Status status = (expr); status.ok()) { \
+    } else /* NOLINT */                                      \
+      return ::util::StatusBuilder(status)
 
 // Internal helper for concatenating macro values.
 #define STATUS_MACROS_CONCAT_NAME_INNER(x, y) x##y
 #define STATUS_MACROS_CONCAT_NAME(x, y) STATUS_MACROS_CONCAT_NAME_INNER(x, y)
 
-template <typename T>
-::util::Status DoAssignOrReturn(T& lhs, ::util::StatusOr<T> result) {  // NOLINT
-  if (result.ok()) {
-    lhs = result.ValueOrDie();
-  }
-  return result.status();
-}
+#define ASSIGN_OR_RETURN_IMPL(statusor, lhs, rexpr) \
+  auto statusor = (rexpr);                          \
+  RETURN_IF_ERROR(statusor.status());               \
+  lhs = *std::move(statusor)
 
-#define ASSIGN_OR_RETURN_IMPL(status, lhs, rexpr)         \
-  ::util::Status status = DoAssignOrReturn(lhs, (rexpr)); \
-  if (!status.ok()) return status;
-
-// Executes an expression that returns a util::StatusOr, extracting its value
+// Executes an expression that returns an absl::StatusOr, extracting its value
 // into the variable defined by lhs (or returning on error).
 //
 // Example: Assigning to an existing value
@@ -60,6 +56,6 @@ template <typename T>
   ASSIGN_OR_RETURN_IMPL(             \
       STATUS_MACROS_CONCAT_NAME(_status_or_value, __COUNTER__), lhs, rexpr);
 
-}  // namespace util
+}  // namespace absl
 
 #endif  // OR_TOOLS_BASE_STATUS_MACROS_H_

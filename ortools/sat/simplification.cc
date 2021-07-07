@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,6 +14,7 @@
 #include "ortools/sat/simplification.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <set>
 #include <utility>
@@ -24,8 +25,11 @@
 #include "ortools/base/logging.h"
 #include "ortools/base/random.h"
 #include "ortools/base/stl_util.h"
+#include "ortools/base/strong_vector.h"
 #include "ortools/base/timer.h"
 #include "ortools/graph/strongly_connected_components.h"
+#include "ortools/sat/probing.h"
+#include "ortools/sat/sat_inprocessing.h"
 #include "ortools/sat/util.h"
 #include "ortools/util/time_limit.h"
 
@@ -57,8 +61,8 @@ void SatPostsolver::FixVariable(Literal x) {
 }
 
 void SatPostsolver::ApplyMapping(
-    const gtl::ITIVector<BooleanVariable, BooleanVariable>& mapping) {
-  gtl::ITIVector<BooleanVariable, BooleanVariable> new_mapping;
+    const absl::StrongVector<BooleanVariable, BooleanVariable>& mapping) {
+  absl::StrongVector<BooleanVariable, BooleanVariable> new_mapping;
   if (reverse_mapping_.size() < mapping.size()) {
     // We have new variables.
     while (reverse_mapping_.size() < mapping.size()) {
@@ -239,9 +243,9 @@ void SatPresolver::AddClauseInternal(std::vector<Literal>* clause) {
   DCHECK_EQ(signatures_.size(), clauses_.size());
 }
 
-gtl::ITIVector<BooleanVariable, BooleanVariable> SatPresolver::VariableMapping()
-    const {
-  gtl::ITIVector<BooleanVariable, BooleanVariable> result;
+absl::StrongVector<BooleanVariable, BooleanVariable>
+SatPresolver::VariableMapping() const {
+  absl::StrongVector<BooleanVariable, BooleanVariable> result;
   BooleanVariable new_var(0);
   for (BooleanVariable var(0); var < NumVariables(); ++var) {
     if (literal_to_clause_sizes_[Literal(var, true).Index()] > 0 ||
@@ -265,7 +269,7 @@ void SatPresolver::LoadProblemIntoSatSolver(SatSolver* solver) {
   literal_to_clauses_.clear();
   signatures_.clear();
 
-  const gtl::ITIVector<BooleanVariable, BooleanVariable> mapping =
+  const absl::StrongVector<BooleanVariable, BooleanVariable> mapping =
       VariableMapping();
   int new_size = 0;
   for (BooleanVariable index : mapping) {
@@ -301,7 +305,7 @@ bool SatPresolver::ProcessAllClauses() {
     clause_to_process_.pop_front();
     if (!ProcessClauseToSimplifyOthers(ci)) return false;
     if (++num_skipped_checks >= kCheckFrequency) {
-      if (num_inspected_signatures_ > 1e9) {
+      if (num_inspected_signatures_ + num_inspected_literals_ > 1e9) {
         VLOG(1) << "Aborting ProcessAllClauses() because work limit has been "
                    "reached";
         return true;
@@ -323,15 +327,27 @@ bool SatPresolver::Presolve() {
 bool SatPresolver::Presolve(const std::vector<bool>& can_be_removed) {
   WallTimer timer;
   timer.Start();
-  VLOG(1) << "num trivial clauses: " << num_trivial_clauses_;
-  DisplayStats(0);
+
+  if (logger_->LoggingIsEnabled()) {
+    int64_t num_removable = 0;
+    for (const bool b : can_be_removed) {
+      if (b) ++num_removable;
+    }
+    SOLVER_LOG(logger_,
+               "[SAT presolve] num removable Booleans: ", num_removable, " / ",
+               can_be_removed.size());
+    SOLVER_LOG(logger_,
+               "[SAT presolve] num trivial clauses: ", num_trivial_clauses_);
+    DisplayStats(0);
+  }
 
   // TODO(user): When a clause is strengthened, add it to a queue so it can
   // be processed again?
   if (!ProcessAllClauses()) return false;
-  DisplayStats(timer.Get());
+  if (logger_->LoggingIsEnabled()) DisplayStats(timer.Get());
 
   if (time_limit_ != nullptr && time_limit_->LimitReached()) return true;
+  if (num_inspected_signatures_ + num_inspected_literals_ > 1e9) return true;
 
   InitializePriorityQueue();
   while (var_pq_.Size() > 0) {
@@ -341,13 +357,15 @@ bool SatPresolver::Presolve(const std::vector<bool>& can_be_removed) {
     if (CrossProduct(Literal(var, true))) {
       if (!ProcessAllClauses()) return false;
     }
+    if (time_limit_ != nullptr && time_limit_->LimitReached()) return true;
+    if (num_inspected_signatures_ + num_inspected_literals_ > 1e9) return true;
   }
-  DisplayStats(timer.Get());
+  if (logger_->LoggingIsEnabled()) DisplayStats(timer.Get());
 
   // We apply BVA after a pass of the other algorithms.
   if (parameters_.presolve_use_bva()) {
     PresolveWithBva();
-    DisplayStats(timer.Get());
+    if (logger_->LoggingIsEnabled()) DisplayStats(timer.Get());
   }
 
   return true;
@@ -519,10 +537,10 @@ void SatPresolver::SimpleBva(LiteralIndex l) {
   AddToBvaPriorityQueue(l);
 }
 
-uint64 SatPresolver::ComputeSignatureOfClauseVariables(ClauseIndex ci) {
-  uint64 signature = 0;
+uint64_t SatPresolver::ComputeSignatureOfClauseVariables(ClauseIndex ci) {
+  uint64_t signature = 0;
   for (const Literal l : clauses_[ci]) {
-    signature |= (uint64{1} << (l.Variable().value() % 64));
+    signature |= (uint64_t{1} << (l.Variable().value() % 64));
   }
   DCHECK_EQ(signature == 0, clauses_[ci].empty());
   return signature;
@@ -534,7 +552,7 @@ uint64 SatPresolver::ComputeSignatureOfClauseVariables(ClauseIndex ci) {
 bool SatPresolver::ProcessClauseToSimplifyOthersUsingLiteral(
     ClauseIndex clause_index, Literal lit) {
   const std::vector<Literal>& clause = clauses_[clause_index];
-  const uint64 clause_signature = signatures_[clause_index];
+  const uint64_t clause_signature = signatures_[clause_index];
   LiteralIndex opposite_literal;
 
   // Try to simplify the clauses containing 'lit'. We take advantage of this
@@ -543,7 +561,7 @@ bool SatPresolver::ProcessClauseToSimplifyOthersUsingLiteral(
   bool need_cleaning = false;
   num_inspected_signatures_ += literal_to_clauses_[lit.Index()].size();
   for (const ClauseIndex ci : literal_to_clauses_[lit.Index()]) {
-    const uint64 ci_signature = signatures_[ci];
+    const uint64_t ci_signature = signatures_[ci];
 
     // This allows to check for empty clause without fetching the memory at
     // clause_[ci]. It can have a huge time impact on large problems.
@@ -557,7 +575,8 @@ bool SatPresolver::ProcessClauseToSimplifyOthersUsingLiteral(
     // 'a' are a subset of the one in 'b'. We use the signatures to abort
     // early as a speed optimization.
     if (ci != clause_index && (clause_signature & ~ci_signature) == 0 &&
-        SimplifyClause(clause, &clauses_[ci], &opposite_literal)) {
+        SimplifyClause(clause, &clauses_[ci], &opposite_literal,
+                       &num_inspected_literals_)) {
       if (opposite_literal == kNoLiteralIndex) {
         need_cleaning = true;
         Remove(ci);
@@ -630,9 +649,9 @@ bool SatPresolver::ProcessClauseToSimplifyOthers(ClauseIndex clause_index) {
     int new_index = 0;
     bool something_removed = false;
     auto& occurrence_list_ref = literal_to_clauses_[lit.NegatedIndex()];
-    const uint64 clause_signature = signatures_[clause_index];
+    const uint64_t clause_signature = signatures_[clause_index];
     for (const ClauseIndex ci : occurrence_list_ref) {
-      const uint64 ci_signature = signatures_[ci];
+      const uint64_t ci_signature = signatures_[ci];
       DCHECK_EQ(ci_signature, ComputeSignatureOfClauseVariables(ci));
       if (ci_signature == 0) continue;
 
@@ -641,7 +660,8 @@ bool SatPresolver::ProcessClauseToSimplifyOthers(ClauseIndex clause_index) {
       // applies to the second call to
       // ProcessClauseToSimplifyOthersUsingLiteral() above too.
       if ((clause_signature & ~ci_signature) == 0 &&
-          SimplifyClause(clause, &clauses_[ci], &opposite_literal)) {
+          SimplifyClause(clause, &clauses_[ci], &opposite_literal,
+                         &num_inspected_literals_)) {
         DCHECK_EQ(opposite_literal, lit.NegatedIndex());
         if (clauses_[ci].empty()) return false;  // UNSAT.
         if (drat_proof_handler_ != nullptr) {
@@ -683,7 +703,7 @@ bool SatPresolver::CrossProduct(Literal x) {
   const int s1 = literal_to_clause_sizes_[x.Index()];
   const int s2 = literal_to_clause_sizes_[x.NegatedIndex()];
 
-  // Note that if s1 or s2 is equal to 0, this function will implicitely just
+  // Note that if s1 or s2 is equal to 0, this function will implicitly just
   // fix the variable x.
   if (s1 == 0 && s2 == 0) return false;
 
@@ -902,18 +922,23 @@ void SatPresolver::DisplayStats(double elapsed_seconds) {
       num_simple_definition++;
     }
   }
-  VLOG(1) << " [" << elapsed_seconds << "s]"
-          << " clauses:" << num_clauses << " literals:" << num_literals
-          << " vars:" << num_vars << " one_side_vars:" << num_one_side
-          << " simple_definition:" << num_simple_definition
-          << " singleton_clauses:" << num_singleton_clauses;
+  SOLVER_LOG(logger_, "[SAT presolve] [", elapsed_seconds, "s]",
+             " clauses:", num_clauses, " literals:", num_literals,
+             " vars:", num_vars, " one_side_vars:", num_one_side,
+             " simple_definition:", num_simple_definition,
+             " singleton_clauses:", num_singleton_clauses);
 }
 
 bool SimplifyClause(const std::vector<Literal>& a, std::vector<Literal>* b,
-                    LiteralIndex* opposite_literal) {
+                    LiteralIndex* opposite_literal,
+                    int64_t* num_inspected_literals) {
   if (b->size() < a.size()) return false;
   DCHECK(std::is_sorted(a.begin(), a.end()));
   DCHECK(std::is_sorted(b->begin(), b->end()));
+  if (num_inspected_literals != nullptr) {
+    *num_inspected_literals += a.size();
+    *num_inspected_literals += b->size();
+  }
 
   *opposite_literal = LiteralIndex(-1);
 
@@ -1066,7 +1091,7 @@ class PropagationGraph {
   // Returns the set of node adjacent to the given one.
   // Interface needed by FindStronglyConnectedComponents(), note that it needs
   // to be const.
-  const std::vector<int32>& operator[](int32 index) const {
+  const std::vector<int32_t>& operator[](int32_t index) const {
     scratchpad_.clear();
     solver_->Backtrack(0);
 
@@ -1095,7 +1120,7 @@ class PropagationGraph {
   }
 
  private:
-  mutable std::vector<int32> scratchpad_;
+  mutable std::vector<int32_t> scratchpad_;
   SatSolver* const solver_;
   const double deterministic_time_limit;
 
@@ -1105,15 +1130,18 @@ class PropagationGraph {
 void ProbeAndFindEquivalentLiteral(
     SatSolver* solver, SatPostsolver* postsolver,
     DratProofHandler* drat_proof_handler,
-    gtl::ITIVector<LiteralIndex, LiteralIndex>* mapping) {
+    absl::StrongVector<LiteralIndex, LiteralIndex>* mapping) {
+  WallTimer timer;
+  timer.Start();
+
   solver->Backtrack(0);
   mapping->clear();
   const int num_already_fixed_vars = solver->LiteralTrail().Index();
 
   PropagationGraph graph(
       solver->parameters().presolve_probing_deterministic_time_limit(), solver);
-  const int32 size = solver->NumVariables() * 2;
-  std::vector<std::vector<int32>> scc;
+  const int32_t size = solver->NumVariables() * 2;
+  std::vector<std::vector<int32_t>> scc;
   FindStronglyConnectedComponents(size, graph, &scc);
 
   // We have no guarantee that the cycle of x and not(x) touch the same
@@ -1126,7 +1154,7 @@ void ProbeAndFindEquivalentLiteral(
   //
   // Because of this, we "merge" the cycles.
   MergingPartition partition(size);
-  for (const std::vector<int32>& component : scc) {
+  for (const std::vector<int32_t>& component : scc) {
     if (component.size() > 1) {
       if (mapping->empty()) mapping->resize(size, LiteralIndex(-1));
       const Literal representative((LiteralIndex(component[0])));
@@ -1208,62 +1236,47 @@ void ProbeAndFindEquivalentLiteral(
     }
   }
 
-  VLOG(1) << "Probing. fixed " << num_already_fixed_vars << " + "
-          << solver->LiteralTrail().Index() - num_already_fixed_vars
-          << " equiv " << num_equiv / 2 << " total " << solver->NumVariables();
+  const bool log_info =
+      solver->parameters().log_search_progress() || VLOG_IS_ON(1);
+  LOG_IF(INFO, log_info) << "Probing. fixed " << num_already_fixed_vars << " + "
+                         << solver->LiteralTrail().Index() -
+                                num_already_fixed_vars
+                         << " equiv " << num_equiv / 2 << " total "
+                         << solver->NumVariables() << " wtime: " << timer.Get();
 }
 
 SatSolver::Status SolveWithPresolve(std::unique_ptr<SatSolver>* solver,
                                     TimeLimit* time_limit,
                                     std::vector<bool>* solution,
-                                    DratProofHandler* drat_proof_handler) {
+                                    DratProofHandler* drat_proof_handler,
+                                    SolverLogger* logger) {
   // We save the initial parameters.
   const SatParameters parameters = (*solver)->parameters();
   SatPostsolver postsolver((*solver)->NumVariables());
+
+  const bool log_info = parameters.log_search_progress() || VLOG_IS_ON(1);
 
   // Some problems are formulated in such a way that our SAT heuristics
   // simply works without conflict. Get them out of the way first because it
   // is possible that the presolve lose this "lucky" ordering. This is in
   // particular the case on the SAT14.crafted.complete-xxx-... problems.
   {
-    MTRandom random("A random seed.");
-    SatParameters new_params = parameters;
-    new_params.set_log_search_progress(false);
-    new_params.set_max_number_of_conflicts(1);
-    const int num_times = 1000;
-    for (int i = 0; i < num_times && !time_limit->LimitReached(); ++i) {
-      (*solver)->SetParameters(new_params);
-      const SatSolver::Status result =
-          (*solver)->SolveWithTimeLimit(time_limit);
-      if (result != SatSolver::LIMIT_REACHED) {
-        if (result == SatSolver::FEASIBLE) {
-          VLOG(1) << "Problem solved by trivial heuristic!";
-          solution->clear();
-          for (int i = 0; i < (*solver)->NumVariables(); ++i) {
-            solution->push_back((*solver)->Assignment().LiteralIsTrue(
-                Literal(BooleanVariable(i), true)));
-          }
-        }
-        return result;
-      }
-
-      // We randomize at the end so that the default params is executed
-      // at least once.
-      (*solver)->RestoreSolverToAssumptionLevel();
-      if ((*solver)->IsModelUnsat()) {
-        VLOG(1) << "UNSAT during random decision heuritics.";
-        return SatSolver::INFEASIBLE;
-      }
-
-      RandomizeDecisionHeuristic(&random, &new_params);
-      new_params.set_random_seed(i);
-      (*solver)->SetParameters(new_params);
-      (*solver)->ResetDecisionHeuristic();
+    Model* model = (*solver)->model();
+    const double dtime = std::min(1.0, time_limit->GetDeterministicTimeLeft());
+    if (!LookForTrivialSatSolution(dtime, model)) {
+      VLOG(1) << "UNSAT during probing.";
+      return SatSolver::INFEASIBLE;
     }
-
-    // Restore the initial parameters.
-    (*solver)->SetParameters(parameters);
-    (*solver)->ResetDecisionHeuristic();
+    const int num_variables = (*solver)->NumVariables();
+    if ((*solver)->LiteralTrail().Index() == num_variables) {
+      VLOG(1) << "Problem solved by trivial heuristic!";
+      solution->clear();
+      for (int i = 0; i < (*solver)->NumVariables(); ++i) {
+        solution->push_back((*solver)->Assignment().LiteralIsTrue(
+            Literal(BooleanVariable(i), true)));
+      }
+      return SatSolver::FEASIBLE;
+    }
   }
 
   // We use a new block so the memory used by the presolver can be
@@ -1272,9 +1285,33 @@ SatSolver::Status SolveWithPresolve(std::unique_ptr<SatSolver>* solver,
   for (int i = 0; i < max_num_passes && !time_limit->LimitReached(); ++i) {
     const int saved_num_variables = (*solver)->NumVariables();
 
+    // Run the new preprocessing code. Note that the probing that it does is
+    // faster than the ProbeAndFindEquivalentLiteral() call below, but does not
+    // do equivalence detection as completely, so we still apply the other
+    // "probing" code afterwards even if it will not fix more literals, but it
+    // will do one pass of proper equivalence detection.
+    {
+      Model* model = (*solver)->model();
+      model->GetOrCreate<TimeLimit>()->MergeWithGlobalTimeLimit(time_limit);
+      SatPresolveOptions options;
+      options.log_info = log_info;
+      options.extract_binary_clauses_in_probing = false;
+      options.use_transitive_reduction = false;
+      options.deterministic_time_limit =
+          parameters.presolve_probing_deterministic_time_limit();
+
+      if (!model->GetOrCreate<Inprocessing>()->PresolveLoop(options)) {
+        VLOG(1) << "UNSAT during probing.";
+        return SatSolver::INFEASIBLE;
+      }
+      for (const auto& c : model->GetOrCreate<PostsolveClauses>()->clauses) {
+        postsolver.Add(c[0], c);
+      }
+    }
+
     // Probe + find equivalent literals.
     // TODO(user): Use a derived time limit in the probing phase.
-    gtl::ITIVector<LiteralIndex, LiteralIndex> equiv_map;
+    absl::StrongVector<LiteralIndex, LiteralIndex> equiv_map;
     ProbeAndFindEquivalentLiteral((*solver).get(), &postsolver,
                                   drat_proof_handler, &equiv_map);
     if ((*solver)->IsModelUnsat()) {
@@ -1289,7 +1326,7 @@ SatSolver::Status SolveWithPresolve(std::unique_ptr<SatSolver>* solver,
       break;
     }
 
-    // Register the fixed variables with the presolver.
+    // Register the fixed variables with the postsolver.
     // TODO(user): Find a better place for this?
     (*solver)->Backtrack(0);
     for (int i = 0; i < (*solver)->LiteralTrail().Index(); ++i) {
@@ -1297,17 +1334,26 @@ SatSolver::Status SolveWithPresolve(std::unique_ptr<SatSolver>* solver,
     }
 
     // TODO(user): Pass the time_limit to the presolver.
-    SatPresolver presolver(&postsolver);
+    SatPresolver presolver(&postsolver, logger);
     presolver.SetParameters(parameters);
     presolver.SetDratProofHandler(drat_proof_handler);
     presolver.SetEquivalentLiteralMapping(equiv_map);
     (*solver)->ExtractClauses(&presolver);
     (*solver)->AdvanceDeterministicTime(time_limit);
+
+    // Tricky: the model local time limit is updated by the new functions, but
+    // the old ones update time_limit directly.
+    time_limit->AdvanceDeterministicTime((*solver)
+                                             ->model()
+                                             ->GetOrCreate<TimeLimit>()
+                                             ->GetElapsedDeterministicTime());
+
     (*solver).reset(nullptr);
-    if (!presolver.Presolve()) {
+    std::vector<bool> can_be_removed(presolver.NumVariables(), true);
+    if (!presolver.Presolve(can_be_removed)) {
       VLOG(1) << "UNSAT during presolve.";
 
-      // This is just here to reset the SatSolver::Solve() satistics.
+      // This is just here to reset the SatSolver::Solve() statistics.
       (*solver) = absl::make_unique<SatSolver>();
       return SatSolver::INFEASIBLE;
     }
@@ -1325,6 +1371,33 @@ SatSolver::Status SolveWithPresolve(std::unique_ptr<SatSolver>* solver,
 
     // Stop if a fixed point has been reached.
     if ((*solver)->NumVariables() == saved_num_variables) break;
+  }
+
+  // Before solving, we use the new probing code that adds all new binary
+  // implication it can find to the binary implication graph. This gives good
+  // benefits. Note that we currently do not do it before presolve because then
+  // the current presolve code does not work too well with the potential huge
+  // number of binary clauses added.
+  //
+  // TODO(user): Revisit the situation when we simplify better all the clauses
+  // using binary ones. Or if/when we support at most one better in pure SAT
+  // solving and presolve.
+  {
+    Model* model = (*solver)->model();
+    model->GetOrCreate<TimeLimit>()->MergeWithGlobalTimeLimit(time_limit);
+    SatPresolveOptions options;
+    options.log_info = log_info;
+    options.use_transitive_reduction = true;
+    options.extract_binary_clauses_in_probing = true;
+    options.deterministic_time_limit =
+        model->GetOrCreate<SatParameters>()
+            ->presolve_probing_deterministic_time_limit();
+    if (!model->GetOrCreate<Inprocessing>()->PresolveLoop(options)) {
+      return SatSolver::INFEASIBLE;
+    }
+    for (const auto& c : model->GetOrCreate<PostsolveClauses>()->clauses) {
+      postsolver.Add(c[0], c);
+    }
   }
 
   // Solve.

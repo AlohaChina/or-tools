@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -196,6 +196,7 @@
 #define OR_TOOLS_GRAPH_LINEAR_ASSIGNMENT_H_
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <deque>
 #include <limits>
@@ -214,9 +215,9 @@
 #include "ortools/util/zvector.h"
 
 #ifndef SWIG
-DECLARE_int64(assignment_alpha);
-DECLARE_int32(assignment_progress_logging_period);
-DECLARE_bool(assignment_stack_order);
+ABSL_DECLARE_FLAG(int64_t, assignment_alpha);
+ABSL_DECLARE_FLAG(int, assignment_progress_logging_period);
+ABSL_DECLARE_FLAG(bool, assignment_stack_order);
 #endif
 
 namespace operations_research {
@@ -396,10 +397,10 @@ class LinearSumAssignment {
           "%d double pushes; %d pushes",
           refinements_, relabelings_, double_pushes_, pushes_);
     }
-    int64 pushes_;
-    int64 double_pushes_;
-    int64 relabelings_;
-    int64 refinements_;
+    int64_t pushes_;
+    int64_t double_pushes_;
+    int64_t relabelings_;
+    int64_t refinements_;
   };
 
 #ifndef SWIG
@@ -790,7 +791,7 @@ class LinearSumAssignment {
   //
   // Proof: Suppose the price decrease of every node in the iteration
   // with epsilon_ == x is bounded by B(x) which is proportional to x
-  // (not surpisingly, this will be the same function B() as
+  // (not surprisingly, this will be the same function B() as
   // above). Assume for simplicity that C, the largest cost magnitude,
   // is a power of alpha. Then the price of each node, tallied across
   // all iterations is bounded
@@ -966,7 +967,7 @@ LinearSumAssignment<GraphType>::LinearSumAssignment(
       num_left_nodes_(num_left_nodes),
       success_(false),
       cost_scaling_factor_(1 + num_left_nodes),
-      alpha_(FLAGS_assignment_alpha),
+      alpha_(absl::GetFlag(FLAGS_assignment_alpha)),
       epsilon_(0),
       price_lower_bound_(0),
       slack_relabeling_price_(0),
@@ -976,7 +977,7 @@ LinearSumAssignment<GraphType>::LinearSumAssignment(
       matched_arc_(num_left_nodes, 0),
       matched_node_(num_left_nodes, 2 * num_left_nodes - 1),
       scaled_arc_cost_(graph.max_end_arc_index(), 0),
-      active_nodes_(FLAGS_assignment_stack_order
+      active_nodes_(absl::GetFlag(FLAGS_assignment_stack_order)
                         ? static_cast<ActiveNodeContainerInterface*>(
                               new ActiveNodeStack())
                         : static_cast<ActiveNodeContainerInterface*>(
@@ -989,7 +990,7 @@ LinearSumAssignment<GraphType>::LinearSumAssignment(
       num_left_nodes_(num_left_nodes),
       success_(false),
       cost_scaling_factor_(1 + num_left_nodes),
-      alpha_(FLAGS_assignment_alpha),
+      alpha_(absl::GetFlag(FLAGS_assignment_alpha)),
       epsilon_(0),
       price_lower_bound_(0),
       slack_relabeling_price_(0),
@@ -999,7 +1000,7 @@ LinearSumAssignment<GraphType>::LinearSumAssignment(
       matched_arc_(num_left_nodes, 0),
       matched_node_(num_left_nodes, 2 * num_left_nodes - 1),
       scaled_arc_cost_(num_arcs, 0),
-      active_nodes_(FLAGS_assignment_stack_order
+      active_nodes_(absl::GetFlag(FLAGS_assignment_stack_order)
                         ? static_cast<ActiveNodeContainerInterface*>(
                               new ActiveNodeStack())
                         : static_cast<ActiveNodeContainerInterface*>(

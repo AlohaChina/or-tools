@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -169,6 +169,7 @@
 #define OR_TOOLS_GRAPH_MIN_COST_FLOW_H_
 
 #include <algorithm>
+#include <cstdint>
 #include <stack>
 #include <string>
 #include <vector>
@@ -212,10 +213,14 @@ class MinCostFlowBase {
 // GenericMinCostFlow<> interface.
 class SimpleMinCostFlow : public MinCostFlowBase {
  public:
-  // The constructor takes no size. New node indices will be created lazily by
-  // AddArcWithCapacityAndUnitCost() or SetNodeSupply() such that the set of
-  // valid nodes will always be [0, NumNodes()).
-  SimpleMinCostFlow();
+  // By default, the constructor takes no size. New node indices are created
+  // lazily by AddArcWithCapacityAndUnitCost() or SetNodeSupply() such that the
+  // set of valid nodes will always be [0, NumNodes()).
+  //
+  // You may pre-reserve the internal data structures with a given expected
+  // number of nodes and arcs, to potentially gain performance.
+  explicit SimpleMinCostFlow(NodeIndex reserve_num_nodes = 0,
+                             ArcIndex reserve_num_arcs = 0);
 
   // Adds a directed arc from tail to head to the underlying graph with
   // a given capacity and cost per unit of flow.
@@ -440,7 +445,7 @@ class GenericMinCostFlow : public MinCostFlowBase {
   // To be used in a DCHECK.
   bool CheckResult() const;
 
-  // Checks that the cost range fits in the range of int64's.
+  // Checks that the cost range fits in the range of int64_t's.
   // To be used in a DCHECK.
   bool CheckCostRange() const;
 
@@ -560,7 +565,7 @@ class GenericMinCostFlow : public MinCostFlowBase {
 
   // alpha_ is the factor by which epsilon_ is divided at each iteration of
   // Refine().
-  const int64 alpha_;
+  const int64_t alpha_;
 
   // cost_scaling_factor_ is the scaling factor for cost.
   CostValue cost_scaling_factor_;

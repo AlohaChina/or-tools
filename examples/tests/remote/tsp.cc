@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2021 Google
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -24,22 +24,19 @@
 // Optionally one can randomly forbid a set of random connections between nodes
 // (forbidden arcs).
 
-#include "base/unique_ptr.h"
-
 #include "base/callback.h"
-#include "base/commandlineflags.h"
 #include "base/commandlineflags.h"
 #include "base/integral_types.h"
 #include "base/join.h"
-#include "constraint_solver/routing.h"
 #include "base/random.h"
+#include "base/unique_ptr.h"
+#include "constraint_solver/routing.h"
 
+using operations_research::ACMRandom;
 using operations_research::Assignment;
 using operations_research::RoutingModel;
-using operations_research::ACMRandom;
-using operations_research::StrCat;
 using operations_research::scoped_ptr;
-
+using operations_research::StrCat;
 
 DEFINE_int32(tsp_size, 10, "Size of Traveling Salesman Problem instance.");
 DEFINE_bool(tsp_use_random_matrix, true, "Use random cost matrix.");
@@ -51,8 +48,8 @@ DECLARE_string(routing_first_solution);
 DECLARE_bool(routing_no_lns);
 
 // Random seed generator.
-int32 GetSeed() {
-  if (FLAGS_tsp_use_deterministic_random_seed) {
+int32_t GetSeed() {
+  if (absl::GetFlag(FLAGS_tsp_use_deterministic_random_seed)) {
     return ACMRandom::DeterministicSeed();
   } else {
     return ACMRandom::HostnamePidTimeSeed();
@@ -62,7 +59,7 @@ int32 GetSeed() {
 // Cost/distance functions.
 
 // Sample function.
-int64 MyDistance(RoutingModel::NodeIndex from, RoutingModel::NodeIndex to) {
+int64_t MyDistance(RoutingModel::NodeIndex from, RoutingModel::NodeIndex to) {
   // Put your distance code here.
   return (from + to).value();  // for instance
 }
@@ -72,8 +69,8 @@ class RandomMatrix {
  public:
   explicit RandomMatrix(int size) : size_(size) {}
   void Initialize() {
-    matrix_.reset(new int64[size_ * size_]);
-    const int64 kDistanceMax = 100;
+    matrix_.reset(new int64_t[size_ * size_]);
+    const int64_t kDistanceMax = 100;
     ACMRandom randomizer(GetSeed());
     for (RoutingModel::NodeIndex from = RoutingModel::kFirstNode; from < size_;
          ++from) {
@@ -87,39 +84,39 @@ class RandomMatrix {
       }
     }
   }
-  int64 Distance(RoutingModel::NodeIndex from,
+  int64_t Distance(RoutingModel::NodeIndex from,
                  RoutingModel::NodeIndex to) const {
     return matrix_[MatrixIndex(from, to)];
   }
 
  private:
-  int64 MatrixIndex(RoutingModel::NodeIndex from,
+  int64_t MatrixIndex(RoutingModel::NodeIndex from,
                     RoutingModel::NodeIndex to) const {
     return (from * size_ + to).value();
   }
-  std::unique_ptr<int64[]> matrix_;
+  std::unique_ptr<int64_t[]> matrix_;
   const int size_;
 };
 
 int main(int argc, char** argv) {
-  google::ParseCommandLineFlags( &argc, &argv, true);
-  if (FLAGS_tsp_size > 0) {
-    // TSP of size FLAGS_tsp_size.
+  google::ParseCommandLineFlags(&argc, &argv, true);
+  if (absl::GetFlag(FLAGS_tsp_size) > 0) {
+    // TSP of size absl::GetFlag(FLAGS_tsp_size).
     // Second argument = 1 to build a single tour (it's a TSP).
-    // Nodes are indexed from 0 to FLAGS_tsp_size - 1, by default the start of
-    // the route is node 0.
-    RoutingModel routing(FLAGS_tsp_size, 1);
+    // Nodes are indexed from 0 to absl::GetFlag(FLAGS_tsp_size) - 1, by default
+    // the start of the route is node 0.
+    RoutingModel routing(absl::GetFlag(FLAGS_tsp_size), 1);
     // Setting first solution heuristic (cheapest addition).
-    FLAGS_routing_first_solution = "PathCheapestArc";
+    absl::GetFlag(FLAGS_routing_first_solution) = "PathCheapestArc";
     // Disabling Large Neighborhood Search, comment out to activate it.
-    FLAGS_routing_no_lns = true;
+    absl::GetFlag(FLAGS_routing_no_lns) = true;
 
     // Setting the cost function.
     // Put a permanent callback to the distance accessor here. The callback
-    // has the following signature: ResultCallback2<int64, int64, int64>.
+    // has the following signature: ResultCallback2<int64_t, int64_t, int64_t>.
     // The two arguments are the from and to node inidices.
-    RandomMatrix matrix(FLAGS_tsp_size);
-    if (FLAGS_tsp_use_random_matrix) {
+    RandomMatrix matrix(absl::GetFlag(FLAGS_tsp_size));
+    if (absl::GetFlag(FLAGS_tsp_use_random_matrix)) {
       matrix.Initialize();
       routing.SetArcCostEvaluatorOfAllVehicles(
           NewPermanentCallback(&matrix, &RandomMatrix::Distance));
@@ -129,10 +126,12 @@ int main(int argc, char** argv) {
     }
     // Forbid node connections (randomly).
     ACMRandom randomizer(GetSeed());
-    int64 forbidden_connections = 0;
-    while (forbidden_connections < FLAGS_tsp_random_forbidden_connections) {
-      const int64 from = randomizer.Uniform(FLAGS_tsp_size - 1);
-      const int64 to = randomizer.Uniform(FLAGS_tsp_size - 1) + 1;
+    int64_t forbidden_connections = 0;
+    while (forbidden_connections <
+           absl::GetFlag(FLAGS_tsp_random_forbidden_connections)) {
+      const int64_t from = randomizer.Uniform(absl::GetFlag(FLAGS_tsp_size) - 1);
+      const int64_t to =
+          randomizer.Uniform(absl::GetFlag(FLAGS_tsp_size) - 1) + 1;
       if (routing.NextVar(from)->Contains(to)) {
         LOG(INFO) << "Forbidding connection " << from << " -> " << to;
         routing.NextVar(from)->RemoveValue(to);
@@ -148,7 +147,7 @@ int main(int argc, char** argv) {
       // Only one route here; otherwise iterate from 0 to routing.vehicles() - 1
       const int route_number = 0;
       std::string route;
-      for (int64 node = routing.Start(route_number); !routing.IsEnd(node);
+      for (int64_t node = routing.Start(route_number); !routing.IsEnd(node);
            node = solution->Value(routing.NextVar(node))) {
         route = StrCat(route, StrCat(node, " -> "));
       }

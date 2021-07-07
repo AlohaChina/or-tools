@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,20 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-namespace Google.OrTools {
-
-using System;
-using Google.Protobuf;
-
-public static class ProtoHelper
+namespace Google.OrTools
 {
-  public static byte[] ProtoToByteArray(IMessage message)
-  {
-    int size = message.CalculateSize();
-    byte[] buffer = new byte[size];
-    CodedOutputStream output = new CodedOutputStream(buffer);
-    message.WriteTo(output);
-    return buffer;
-  }
-}
-}  // namespace Google.OrTools
+
+    using System;
+    using Google.Protobuf;
+
+    public static class ProtoHelper
+    {
+        public static byte[] ProtoToByteArray(IMessage message)
+        {
+            int size = message.CalculateSize();
+            byte[] buffer = new byte[size];
+            CodedOutputStream output = new CodedOutputStream(buffer);
+            message.WriteTo(output);
+            return buffer;
+        }
+    }
+} // namespace Google.OrTools

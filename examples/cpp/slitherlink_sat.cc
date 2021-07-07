@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -21,18 +21,18 @@
 #include "ortools/sat/cp_model.h"
 #include "ortools/sat/model.h"
 
-const std::vector<std::vector<int>> tiny = {{3, 3, 1}};
+const std::vector<std::vector<int> > tiny = {{3, 3, 1}};
 
-const std::vector<std::vector<int>> small = {
+const std::vector<std::vector<int> > small = {
     {3, 2, -1, 3}, {-1, -1, -1, 2}, {3, -1, -1, -1}, {3, -1, 3, 1}};
 
-const std::vector<std::vector<int>> medium = {
+const std::vector<std::vector<int> > medium = {
     {-1, 0, -1, 1, -1, -1, 1, -1},  {-1, 3, -1, -1, 2, 3, -1, 2},
     {-1, -1, 0, -1, -1, -1, -1, 0}, {-1, 3, -1, -1, 0, -1, -1, -1},
     {-1, -1, -1, 3, -1, -1, 0, -1}, {1, -1, -1, -1, -1, 3, -1, -1},
     {3, -1, 1, 3, -1, -1, 3, -1},   {-1, 0, -1, -1, 3, -1, 3, -1}};
 
-const std::vector<std::vector<int>> big = {
+const std::vector<std::vector<int> > big = {
     {3, -1, -1, -1, 2, -1, 1, -1, 1, 2},
     {1, -1, 0, -1, 3, -1, 2, 0, -1, -1},
     {-1, 3, -1, -1, -1, -1, -1, -1, 3, -1},
@@ -47,9 +47,9 @@ const std::vector<std::vector<int>> big = {
 namespace operations_research {
 namespace sat {
 
-void PrintSolution(const std::vector<std::vector<int>> &data,
-                   const std::vector<std::vector<bool>> &h_arcs,
-                   const std::vector<std::vector<bool>> &v_arcs) {
+void PrintSolution(const std::vector<std::vector<int> >& data,
+                   const std::vector<std::vector<bool> >& h_arcs,
+                   const std::vector<std::vector<bool> >& v_arcs) {
   const int num_rows = data.size();
   const int num_columns = data[0].size();
 
@@ -63,7 +63,8 @@ void PrintSolution(const std::vector<std::vector<int>> &data,
       const int sum = data[i][j];
       first_line += h_arc ? " -----" : "      ";
       second_line += v_arc ? "|" : " ";
-      second_line += sum == -1 ? "     " : absl::StrFormat("  %d  ", sum).c_str();
+      second_line +=
+          sum == -1 ? "     " : absl::StrFormat("  %d  ", sum).c_str();
       third_line += v_arc ? "|     " : "      ";
     }
     const bool termination = v_arcs[num_columns][i];
@@ -82,7 +83,7 @@ void PrintSolution(const std::vector<std::vector<int>> &data,
   std::cout << last_line << std::endl;
 }
 
-void SlitherLink(const std::vector<std::vector<int>> &data) {
+void SlitherLink(const std::vector<std::vector<int> >& data) {
   const int num_rows = data.size();
   const int num_columns = data[0].size();
 
@@ -153,8 +154,7 @@ void SlitherLink(const std::vector<std::vector<int>> &data) {
 
   for (int x = 0; x < num_columns; ++x) {
     for (int y = 0; y < num_rows; ++y) {
-      if (data[y][x] == -1)
-        continue;
+      if (data[y][x] == -1) continue;
       std::vector<BoolVar> neighbors;
       const int top_arc = undirected_horizontal_arc(x, y);
       neighbors.push_back(horizontal_arcs[2 * top_arc]);
@@ -219,7 +219,7 @@ void SlitherLink(const std::vector<std::vector<int>> &data) {
 
   const CpSolverResponse response = Solve(builder.Build());
 
-  std::vector<std::vector<bool>> h_arcs(num_rows + 1);
+  std::vector<std::vector<bool> > h_arcs(num_rows + 1);
   for (int y = 0; y < num_rows + 1; ++y) {
     for (int x = 0; x < num_columns; ++x) {
       const int arc = undirected_horizontal_arc(x, y);
@@ -229,7 +229,7 @@ void SlitherLink(const std::vector<std::vector<int>> &data) {
     }
   }
 
-  std::vector<std::vector<bool>> v_arcs(num_columns + 1);
+  std::vector<std::vector<bool> > v_arcs(num_columns + 1);
   for (int y = 0; y < num_rows; ++y) {
     for (int x = 0; x < num_columns + 1; ++x) {
       const int arc = undirected_vertical_arc(x, y);
@@ -243,8 +243,8 @@ void SlitherLink(const std::vector<std::vector<int>> &data) {
   LOG(INFO) << CpSolverResponseStats(response);
 }
 
-} // namespace sat
-} // namespace operations_research
+}  // namespace sat
+}  // namespace operations_research
 
 int main() {
   std::cout << "Tiny problem" << std::endl;

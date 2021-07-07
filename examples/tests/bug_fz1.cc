@@ -13,10 +13,10 @@
 
 #include "ortools/base/hash.h"
 #include "ortools/base/map_util.h"
-#include "ortools/base/stl_util.h"
 #include "ortools/base/random.h"
-#include "ortools/constraint_solver/constraint_solveri.h"
+#include "ortools/base/stl_util.h"
 #include "ortools/constraint_solver/constraint_solver.h"
+#include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/string_array.h"
 
 namespace operations_research {
@@ -28,12 +28,12 @@ void ShoppingBasketBug() {
   IntVar* const is2 = s.MakeIsEqualCstVar(x18, 2);
   IntVar* const is_less = s.MakeIsLessOrEqualCstVar(
       s.MakeSum(s.MakeProd(is1, 2), s.MakeProd(is2, 2)), 1);
-  std::vector<int64> values1;
+  std::vector<int64_t> values1;
   values1.push_back(10);
   values1.push_back(2);
   values1.push_back(12);
   IntVar* const elem1 = s.MakeElement(values1, x15)->Var();
-  std::vector<int64> values2;
+  std::vector<int64_t> values2;
   values2.push_back(2);
   values2.push_back(10);
   values2.push_back(5);
@@ -42,7 +42,7 @@ void ShoppingBasketBug() {
   vars.push_back(elem1);
   vars.push_back(is_less);
   vars.push_back(elem2);
-  std::vector<int64> coefs;
+  std::vector<int64_t> coefs;
   coefs.push_back(1);
   coefs.push_back(90);
   coefs.push_back(1);
@@ -59,8 +59,8 @@ void ShoppingBasketBug() {
   collector->Add(is2);
   DecisionBuilder* const db1 =
       s.MakePhase(x15, x18, Solver::CHOOSE_MAX_SIZE, Solver::ASSIGN_MIN_VALUE);
-  DecisionBuilder* const db2 = s.MakePhase(obj, Solver::CHOOSE_FIRST_UNBOUND,
-                                           Solver::ASSIGN_MIN_VALUE);
+  DecisionBuilder* const db2 =
+      s.MakePhase(obj, Solver::CHOOSE_FIRST_UNBOUND, Solver::ASSIGN_MIN_VALUE);
   DecisionBuilder* const db = s.Compose(db1, db2);
   s.Solve(db, optimize, log, collector);
   LOG(INFO) << collector->solution(0)->DebugString();
@@ -68,7 +68,7 @@ void ShoppingBasketBug() {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  absl::ParseCommandLine(argc, argv);
   operations_research::ShoppingBasketBug();
   return 0;
 }

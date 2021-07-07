@@ -10,7 +10,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package com.google.ortools.contrib;
 
+import com.google.ortools.Loader;
 import com.google.ortools.constraintsolver.DecisionBuilder;
 import com.google.ortools.constraintsolver.IntVar;
 import com.google.ortools.constraintsolver.Solver;
@@ -19,11 +21,6 @@ import java.text.*;
 import java.util.*;
 
 public class DeBruijn {
-
-  static {
-    System.loadLibrary("jniortools");
-  }
-
   /**
    * toNum(solver, a, num, base)
    *
@@ -44,7 +41,6 @@ public class DeBruijn {
    * http://www.hakank.org/google_or_tools/debruijn_binary.py
    */
   private static void solve(int base, int n, int m) {
-
     Solver solver = new Solver("DeBruijn");
 
     System.out.println("base: " + base + " n: " + n + " m: " + m);
@@ -167,7 +163,6 @@ public class DeBruijn {
       }
       System.out.println();
       */
-
     }
 
     solver.endSearch();
@@ -181,6 +176,7 @@ public class DeBruijn {
   }
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
 
     int base = 2;
     int n = 3;

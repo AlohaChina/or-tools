@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,6 +12,9 @@
 // limitations under the License.
 
 // [START program]
+package com.google.ortools.sat.samples;
+
+import com.google.ortools.Loader;
 import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.CpSolver;
 import com.google.ortools.sat.CpSolverStatus;
@@ -19,11 +22,8 @@ import com.google.ortools.sat.IntVar;
 
 /** Minimal CP-SAT example to showcase calling the solver. */
 public class SimpleSatProgram {
-  static {
-    System.loadLibrary("jniortools");
-  }
-
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     // Create the model.
     // [START model]
     CpModel model = new CpModel();
@@ -49,7 +49,7 @@ public class SimpleSatProgram {
     CpSolverStatus status = solver.solve(model);
     // [END solve]
 
-    if (status == CpSolverStatus.FEASIBLE) {
+    if (status == CpSolverStatus.OPTIMAL) {
       System.out.println("x = " + solver.value(x));
       System.out.println("y = " + solver.value(y));
       System.out.println("z = " + solver.value(z));

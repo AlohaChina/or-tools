@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,13 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #include <fstream>
 #include <iostream>
 #include <vector>
 
-#include "solution_checker.h"
 #include "ortools/base/status.h"
+#include "solution_checker.h"
 
 namespace {
 
@@ -43,7 +42,6 @@ void FileToVector(const char* const filename, std::vector<int>* values) {
 }  // anonymous namespace
 
 int main(int argc, char** argv) {
-
   const int kExpectedArgc = 4;
   if (argc != kExpectedArgc) {
     LOG(INFO) << "Wrong number of files to read." << std::endl
@@ -76,7 +74,7 @@ int main(int argc, char** argv) {
       data.new_assignments());
 
   if (solution_checker.Check()) {
-    const int64 objective_cost = solution_checker.GetObjectiveCost();
+    const int64_t objective_cost = solution_checker.GetObjectiveCost();
     LOG(INFO) << "Solution is valid. Total objective cost is " << objective_cost
               << std::endl;
   } else {

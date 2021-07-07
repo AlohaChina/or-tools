@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2021 Google
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,7 +16,7 @@ open Google.OrTools.FSharp
 open Google.OrTools.LinearSolver
 
 let solver solverType =
-  let svr = Solver.CreateSolver("IntegerProgramming", solverType.ToString())
+  let svr = Solver.CreateSolver(solverType.ToString())
 
   // x1 and x2 are integer non-negative variables.
   let x1 = svr.MakeIntVar(0.0, Double.PositiveInfinity, "x1")

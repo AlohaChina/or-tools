@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,7 +12,11 @@
 // limitations under the License.
 
 // [START program]
+package com.google.ortools.constraintsolver.samples;
 // [START import]
+import static java.lang.Math.max;
+
+import com.google.ortools.Loader;
 import com.google.ortools.constraintsolver.Assignment;
 import com.google.ortools.constraintsolver.FirstSolutionStrategy;
 import com.google.ortools.constraintsolver.LocalSearchMetaheuristic;
@@ -25,17 +29,16 @@ import com.google.protobuf.Duration;
 import java.util.logging.Logger;
 // [END import]
 
-/** Minimal VRP.*/
-public class VrpWithTimeLimit {
-  static {
-    System.loadLibrary("jniortools");
-  }
-
+/** Minimal VRP. */
+public final class VrpWithTimeLimit {
   private static final Logger logger = Logger.getLogger(VrpWithTimeLimit.class.getName());
 
   // [START solution_printer]
   /// @brief Print the solution.
-  static void printSolution(RoutingIndexManager manager, RoutingModel routing, Assignment solution) {
+  static void printSolution(
+      RoutingIndexManager manager, RoutingModel routing, Assignment solution) {
+    // Solution cost.
+    logger.info("Objective : " + solution.objectiveValue());
     // Inspect solution.
     long maxRouteDistance = 0;
     for (int i = 0; i < manager.getNumberOfVehicles(); ++i) {
@@ -51,13 +54,14 @@ public class VrpWithTimeLimit {
       }
       logger.info(route + manager.indexToNode(index));
       logger.info("Distance of the route: " + routeDistance + "m");
-      maxRouteDistance = Math.max(routeDistance, maxRouteDistance);
+      maxRouteDistance = max(routeDistance, maxRouteDistance);
     }
     logger.info("Maximum of the route distances: " + maxRouteDistance + "m");
   }
   // [END solution_printer]
 
-  public static void main(String[] args) throws Exception {
+  public static void main(String[] args) {
+    Loader.loadNativeLibraries();
     // Instantiate the data problem.
     // [START data]
     final int locationNumber = 20;
@@ -67,8 +71,7 @@ public class VrpWithTimeLimit {
 
     // Create Routing Index Manager
     // [START index_manager]
-    RoutingIndexManager manager =
-        new RoutingIndexManager(locationNumber, vehicleNumber, depot);
+    RoutingIndexManager manager = new RoutingIndexManager(locationNumber, vehicleNumber, depot);
     // [END index_manager]
 
     // Create Routing Model.
@@ -79,12 +82,7 @@ public class VrpWithTimeLimit {
     // Create and register a transit callback.
     // [START transit_callback]
     final int transitCallbackIndex =
-        routing.registerTransitCallback((long fromIndex, long toIndex) -> {
-          // Convert from routing variable Index to user NodeIndex.
-          int fromNode = manager.indexToNode(fromIndex);
-          int toNode = manager.indexToNode(toIndex);
-          return 1;
-        });
+        routing.registerTransitCallback((long fromIndex, long toIndex) -> 1);
     // [END transit_callback]
 
     // Define cost of each arc.
@@ -94,12 +92,10 @@ public class VrpWithTimeLimit {
 
     // Add Distance constraint.
     // [START distance_constraint]
-    routing.addDimension(
-        transitCallbackIndex,
-        /*slack=*/0,
-        /*horizon=*/3000,
-        /*start_cumul_to_zero=*/true,
-        "Distance");
+    routing.addDimension(transitCallbackIndex,
+        /*slack_max=*/0,
+        /*capacity=*/3000,
+        /*fix_start_cumul_to_zero=*/true, "Distance");
     RoutingDimension distanceDimension = routing.getMutableDimension("Distance");
     distanceDimension.setGlobalSpanCostCoefficient(100);
     // [END distance_constraint]
@@ -126,5 +122,7 @@ public class VrpWithTimeLimit {
     printSolution(manager, routing, solution);
     // [END print_solution]
   }
+
+  private VrpWithTimeLimit() {}
 }
 // [END program]

@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#if defined(USE_GUROBI)
-
 #include "ortools/linear_solver/gurobi_proto_solver.h"
 
 #include <limits>
@@ -21,15 +19,16 @@
 #include <string>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
 #include "absl/types/optional.h"
-#include "ortools/base/canonical_errors.h"
 #include "ortools/base/cleanup.h"
-#include "ortools/base/status.h"
 #include "ortools/base/status_macros.h"
-#include "ortools/linear_solver/gurobi_environment.h"
+#include "ortools/gurobi/environment.h"
 #include "ortools/linear_solver/linear_solver.pb.h"
 #include "ortools/linear_solver/model_validator.h"
 #include "ortools/util/lazy_mutable_copy.h"
@@ -39,43 +38,15 @@ namespace operations_research {
 namespace {
 constexpr int GRB_OK = 0;
 
-inline util::Status GurobiCodeToUtilStatus(int error_code,
+inline absl::Status GurobiCodeToUtilStatus(int error_code,
                                            const char* source_file,
                                            int source_line,
                                            const char* statement,
                                            GRBenv* const env) {
-  if (error_code == GRB_OK) return util::OkStatus();
-  return util::InvalidArgumentError(absl::StrFormat(
+  if (error_code == GRB_OK) return absl::OkStatus();
+  return absl::InvalidArgumentError(absl::StrFormat(
       "Gurobi error code %d (file '%s', line %d) on '%s': %s", error_code,
       source_file, source_line, statement, GRBgeterrormsg(env)));
-}
-
-util::Status SetSolverSpecificParameters(const std::string& parameters,
-                                         GRBenv* gurobi) {
-  for (const auto parameter :
-       absl::StrSplit(parameters, '\n', absl::SkipWhitespace())) {
-    if (parameter.empty()) return util::OkStatus();
-    if (*parameter.begin() == '#') return util::OkStatus();
-    std::vector<std::string> key_value =
-        absl::StrSplit(parameter, ' ', absl::SkipWhitespace());
-    if (key_value.size() != 2) {
-      return util::InvalidArgumentError(
-          absl::StrFormat("Cannot parse parameter '%s'. Expected format is "
-                          "'ParameterName value'",
-                          parameter));
-    }
-
-    std::string name = key_value[0];
-    std::string value = key_value[1];
-
-    if (GRBsetparam(gurobi, name.c_str(), value.c_str()) != GRB_OK) {
-      return util::InvalidArgumentError(
-          absl::StrFormat("Error setting parameter '%s' to value '%s': %s",
-                          name, value, GRBgeterrormsg(gurobi)));
-    }
-  }
-
-  return util::OkStatus();
 }
 
 int AddIndicatorConstraint(const MPGeneralConstraintProto& gen_cst,
@@ -248,39 +219,82 @@ int AddMaxConstraint(const MPGeneralConstraintProto& gen_cst,
 }
 }  // namespace
 
-util::StatusOr<MPSolutionResponse> GurobiSolveProto(
-    const MPModelRequest& request) {
+absl::Status SetSolverSpecificParameters(const std::string& parameters,
+                                         GRBenv* gurobi) {
+  if (parameters.empty()) return absl::OkStatus();
+  std::vector<std::string> error_messages;
+  for (absl::string_view line : absl::StrSplit(parameters, '\n')) {
+    // Comment tokens end at the next new-line, or the end of the string.
+    // The first character must be '#'
+    if (line[0] == '#') continue;
+    for (absl::string_view token :
+         absl::StrSplit(line, ',', absl::SkipWhitespace())) {
+      if (token.empty()) continue;
+      std::vector<std::string> key_value =
+          absl::StrSplit(token, absl::ByAnyChar(" ="), absl::SkipWhitespace());
+      // If one parameter fails, we keep processing the list of parameters.
+      if (key_value.size() != 2) {
+        const std::string current_message =
+            absl::StrCat("Cannot parse parameter '", token,
+                         "'. Expected format is 'ParameterName value' or "
+                         "'ParameterName=value'");
+        error_messages.push_back(current_message);
+        continue;
+      }
+      const int gurobi_code =
+          GRBsetparam(gurobi, key_value[0].c_str(), key_value[1].c_str());
+      if (gurobi_code != GRB_OK) {
+        const std::string current_message = absl::StrCat(
+            "Error setting parameter '", key_value[0], "' to value '",
+            key_value[1], "': ", GRBgeterrormsg(gurobi));
+        error_messages.push_back(current_message);
+        continue;
+      }
+      VLOG(2) << absl::StrCat("Set parameter '", key_value[0], "' to value '",
+                              key_value[1]);
+    }
+  }
+
+  if (error_messages.empty()) return absl::OkStatus();
+  return absl::InvalidArgumentError(absl::StrJoin(error_messages, "\n"));
+}
+
+absl::StatusOr<MPSolutionResponse> GurobiSolveProto(
+    const MPModelRequest& request, GRBenv* gurobi_env) {
   MPSolutionResponse response;
   const absl::optional<LazyMutableCopy<MPModelProto>> optional_model =
       ExtractValidMPModelOrPopulateResponseStatus(request, &response);
   if (!optional_model) return response;
   const MPModelProto& model = optional_model->get();
 
-  if (model.has_solution_hint()) {
-    // TODO(user): Support solution hints.
-    return util::UnimplementedError("Solution hint not supported.");
+  // We set `gurobi_env` to point to a new environment if no existing one is
+  // provided. We must make sure that we free this environment when we exit this
+  // function.
+  bool gurobi_env_was_created = false;
+  auto gurobi_env_deleter = absl::MakeCleanup([&]() {
+    if (gurobi_env_was_created && gurobi_env != nullptr) {
+      GRBfreeenv(gurobi_env);
+    }
+  });
+  if (gurobi_env == nullptr) {
+    ASSIGN_OR_RETURN(gurobi_env, GetGurobiEnv());
+    gurobi_env_was_created = true;
   }
 
-  GRBenv* gurobi = nullptr;
   GRBmodel* gurobi_model = nullptr;
-
-// `gurobi` references ther GRBenv variable defined above.
-#define RETURN_IF_GUROBI_ERROR(x) \
-  RETURN_IF_ERROR(GurobiCodeToUtilStatus(x, __FILE__, __LINE__, #x, gurobi));
-
-  auto delete_gurobi_objects = [&]() -> util::Status {
-    // Release all created pointers.
-    if (gurobi_model) RETURN_IF_GUROBI_ERROR(GRBfreemodel(gurobi_model));
-    if (gurobi) GRBfreeenv(gurobi);
-    return util::OkStatus();
-  };
-  auto gurobi_deleter = gtl::MakeCleanup([delete_gurobi_objects]() {
-    const util::Status deleter_status = delete_gurobi_objects();
-    LOG_IF(DFATAL, !deleter_status.ok()) << deleter_status;
+  auto gurobi_model_deleter = absl::MakeCleanup([&]() {
+    const int error_code = GRBfreemodel(gurobi_model);
+    LOG_IF(DFATAL, error_code != GRB_OK)
+        << "GRBfreemodel failed with error " << error_code << ": "
+        << GRBgeterrormsg(gurobi_env);
   });
 
-  RETURN_IF_ERROR(LoadGurobiEnvironment(&gurobi));
-  RETURN_IF_GUROBI_ERROR(GRBnewmodel(gurobi, &gurobi_model,
+// `gurobi_env` references ther GRBenv argument.
+#define RETURN_IF_GUROBI_ERROR(x) \
+  RETURN_IF_ERROR(                \
+      GurobiCodeToUtilStatus(x, __FILE__, __LINE__, #x, gurobi_env));
+
+  RETURN_IF_GUROBI_ERROR(GRBnewmodel(gurobi_env, &gurobi_model,
                                      model.name().c_str(),
                                      /*numvars=*/0,
                                      /*obj=*/nullptr,
@@ -288,23 +302,24 @@ util::StatusOr<MPSolutionResponse> GurobiSolveProto(
                                      /*ub=*/nullptr,
                                      /*vtype=*/nullptr,
                                      /*varnames=*/nullptr));
+  GRBenv* const model_env = GRBgetenv(gurobi_model);
 
   if (request.has_solver_specific_parameters()) {
     const auto parameters_status = SetSolverSpecificParameters(
-        request.solver_specific_parameters(), GRBgetenv(gurobi_model));
+        request.solver_specific_parameters(), model_env);
     if (!parameters_status.ok()) {
       response.set_status(MPSOLVER_MODEL_INVALID_SOLVER_PARAMETERS);
-      response.set_status_str(parameters_status.error_message());
+      response.set_status_str(
+          std::string(parameters_status.message()));  // NOLINT
       return response;
     }
   }
   if (request.solver_time_limit_seconds() > 0) {
-    RETURN_IF_GUROBI_ERROR(GRBsetdblparam(GRBgetenv(gurobi_model),
-                                          GRB_DBL_PAR_TIMELIMIT,
+    RETURN_IF_GUROBI_ERROR(GRBsetdblparam(model_env, GRB_DBL_PAR_TIMELIMIT,
                                           request.solver_time_limit_seconds()));
   }
   RETURN_IF_GUROBI_ERROR(
-      GRBsetintparam(GRBgetenv(gurobi_model), GRB_INT_PAR_OUTPUTFLAG,
+      GRBsetintparam(model_env, GRB_INT_PAR_OUTPUTFLAG,
                      request.enable_internal_solver_output()));
 
   const int variable_size = model.variable_size();
@@ -330,6 +345,13 @@ util::StatusOr<MPSolutionResponse> GurobiSolveProto(
                    /*obj=*/obj_coeffs.data(),
                    /*lb=*/lb.data(), /*ub=*/ub.data(), /*vtype=*/ctype.data(),
                    /*varnames=*/const_cast<char**>(varnames.data())));
+
+    // Set solution hints if any.
+    for (int i = 0; i < model.solution_hint().var_index_size(); ++i) {
+      RETURN_IF_GUROBI_ERROR(GRBsetdblattrelement(
+          gurobi_model, GRB_DBL_ATTR_START, model.solution_hint().var_index(i),
+          model.solution_hint().var_value(i)));
+    }
   }
 
   {
@@ -344,11 +366,36 @@ util::StatusOr<MPSolutionResponse> GurobiSolveProto(
         ct_variables[i] = constraint.var_index(i);
         ct_coefficients[i] = constraint.coefficient(i);
       }
-      RETURN_IF_GUROBI_ERROR(GRBaddrangeconstr(
-          gurobi_model, /*numnz=*/size, /*cind=*/ct_variables.data(),
-          /*cval=*/ct_coefficients.data(), /*lower=*/constraint.lower_bound(),
-          /*upper=*/constraint.upper_bound(),
-          /*constrname=*/constraint.name().c_str()));
+      // Using GRBaddrangeconstr for constraints that don't require it adds
+      // a slack which is not always removed by presolve.
+      if (constraint.lower_bound() == constraint.upper_bound()) {
+        RETURN_IF_GUROBI_ERROR(GRBaddconstr(
+            gurobi_model, /*numnz=*/size, /*cind=*/ct_variables.data(),
+            /*cval=*/ct_coefficients.data(),
+            /*sense=*/GRB_EQUAL, /*rhs=*/constraint.lower_bound(),
+            /*constrname=*/constraint.name().c_str()));
+      } else if (constraint.lower_bound() ==
+                 -std::numeric_limits<double>::infinity()) {
+        RETURN_IF_GUROBI_ERROR(GRBaddconstr(
+            gurobi_model, /*numnz=*/size, /*cind=*/ct_variables.data(),
+            /*cval=*/ct_coefficients.data(),
+            /*sense=*/GRB_LESS_EQUAL, /*rhs=*/constraint.upper_bound(),
+            /*constrname=*/constraint.name().c_str()));
+      } else if (constraint.upper_bound() ==
+                 std::numeric_limits<double>::infinity()) {
+        RETURN_IF_GUROBI_ERROR(GRBaddconstr(
+            gurobi_model, /*numnz=*/size, /*cind=*/ct_variables.data(),
+            /*cval=*/ct_coefficients.data(),
+            /*sense=*/GRB_GREATER_EQUAL, /*rhs=*/constraint.lower_bound(),
+            /*constrname=*/constraint.name().c_str()));
+      } else {
+        RETURN_IF_GUROBI_ERROR(GRBaddrangeconstr(
+            gurobi_model, /*numnz=*/size, /*cind=*/ct_variables.data(),
+            /*cval=*/ct_coefficients.data(),
+            /*lower=*/constraint.lower_bound(),
+            /*upper=*/constraint.upper_bound(),
+            /*constrname=*/constraint.name().c_str()));
+      }
     }
 
     for (const auto& gen_cst : model.general_constraint()) {
@@ -397,7 +444,7 @@ util::StatusOr<MPSolutionResponse> GurobiSolveProto(
           break;
         }
         default:
-          return util::UnimplementedError(
+          return absl::UnimplementedError(
               absl::StrFormat("General constraints of type %i not supported.",
                               gen_cst.general_constraint_case()));
       }
@@ -479,11 +526,37 @@ util::StatusOr<MPSolutionResponse> GurobiSolveProto(
     RETURN_IF_GUROBI_ERROR(
         GRBgetdblattrarray(gurobi_model, GRB_DBL_ATTR_X, 0, variable_size,
                            response.mutable_variable_value()->mutable_data()));
+    // NOTE, GurobiSolveProto() is exposed to external clients via MPSolver API,
+    // which assumes the solution values of integer variables are rounded to
+    // integer values.
+    for (int v = 0; v < variable_size; ++v) {
+      if (model.variable(v).is_integer()) {
+        (*response.mutable_variable_value())[v] =
+            std::round(response.variable_value(v));
+      }
+    }
     if (!has_integer_variables && model.general_constraint_size() == 0) {
       response.mutable_dual_value()->Resize(model.constraint_size(), 0);
       RETURN_IF_GUROBI_ERROR(GRBgetdblattrarray(
           gurobi_model, GRB_DBL_ATTR_PI, 0, model.constraint_size(),
           response.mutable_dual_value()->mutable_data()));
+    }
+    const int additional_solutions = std::min(
+        solution_count,
+        std::min(request.populate_additional_solutions_up_to(), kint32max - 1) +
+            1);
+    for (int i = 1; i < additional_solutions; ++i) {
+      RETURN_IF_GUROBI_ERROR(
+          GRBsetintparam(model_env, GRB_INT_PAR_SOLUTIONNUMBER, i));
+      MPSolution* solution = response.add_additional_solutions();
+      solution->mutable_variable_value()->Resize(variable_size, 0);
+      double objective_value = 0;
+      RETURN_IF_GUROBI_ERROR(GRBgetdblattr(
+          gurobi_model, GRB_DBL_ATTR_POOLOBJVAL, &objective_value));
+      solution->set_objective_value(objective_value);
+      RETURN_IF_GUROBI_ERROR(GRBgetdblattrarray(
+          gurobi_model, GRB_DBL_ATTR_XN, 0, variable_size,
+          solution->mutable_variable_value()->mutable_data()));
     }
   }
 #undef RETURN_IF_GUROBI_ERROR
@@ -492,5 +565,3 @@ util::StatusOr<MPSolutionResponse> GurobiSolveProto(
 }
 
 }  // namespace operations_research
-
-#endif  //  #if defined(USE_GUROBI)

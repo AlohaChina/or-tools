@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -121,6 +121,12 @@ bool RestartPolicy::ShouldRestart() {
           static_cast<int>(parameters_.strategy_change_increase_ratio() *
                            strategy_change_conflicts_);
       conflicts_until_next_strategy_change_ = strategy_change_conflicts_;
+
+      // The LUBY_RESTART strategy is considered the "stable" mode and we change
+      // the polariy heuristic while under it.
+      decision_policy_->SetStablePhase(
+          strategies_[strategy_counter_ % strategies_.size()] ==
+          SatParameters::LUBY_RESTART);
     }
 
     // Reset the various restart strategies.

@@ -1,4 +1,5 @@
-# Copyright 2010-2018 Google LLC
+#!/usr/bin/env python3
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -13,10 +14,6 @@
 """Simple solve."""
 
 # [START program]
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 from ortools.sat.python import cp_model
 
 
@@ -46,7 +43,7 @@ def SimpleSatProgram():
     status = solver.Solve(model)
     # [END solve]
 
-    if status == cp_model.FEASIBLE:
+    if status == cp_model.OPTIMAL:
         print('x = %i' % solver.Value(x))
         print('y = %i' % solver.Value(y))
         print('z = %i' % solver.Value(z))

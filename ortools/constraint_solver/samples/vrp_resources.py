@@ -1,4 +1,5 @@
-# Copyright 2010-2018 Google LLC
+#!/usr/bin/env python3
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -14,7 +15,6 @@
 """Vehicles Routing Problem (VRP) with Resource Constraints."""
 
 # [START import]
-from __future__ import print_function
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 # [END import]
@@ -74,8 +74,9 @@ def create_data_model():
 
 
 # [START solution_printer]
-def print_solution(data, manager, routing, assignment):
-    """Prints assignment on console."""
+def print_solution(data, manager, routing, solution):
+    """Prints solution on console."""
+    print(f'Objective: {solution.ObjectiveValue()}')
     time_dimension = routing.GetDimensionOrDie('Time')
     total_time = 0
     for vehicle_id in range(data['num_vehicles']):
@@ -84,17 +85,17 @@ def print_solution(data, manager, routing, assignment):
         while not routing.IsEnd(index):
             time_var = time_dimension.CumulVar(index)
             plan_output += '{0} Time({1},{2}) -> '.format(
-                manager.IndexToNode(index), assignment.Min(time_var),
-                assignment.Max(time_var))
-            index = assignment.Value(routing.NextVar(index))
+                manager.IndexToNode(index), solution.Min(time_var),
+                solution.Max(time_var))
+            index = solution.Value(routing.NextVar(index))
         time_var = time_dimension.CumulVar(index)
         plan_output += '{0} Time({1},{2})\n'.format(manager.IndexToNode(index),
-                                                    assignment.Min(time_var),
-                                                    assignment.Max(time_var))
+                                                    solution.Min(time_var),
+                                                    solution.Max(time_var))
         plan_output += 'Time of the route: {}min\n'.format(
-            assignment.Min(time_var))
+            solution.Min(time_var))
         print(plan_output)
-        total_time += assignment.Min(time_var)
+        total_time += solution.Min(time_var)
     print('Total time of all routes: {}min'.format(total_time))
     # [END solution_printer]
 
@@ -200,13 +201,13 @@ def main():
 
     # Solve the problem.
     # [START solve]
-    assignment = routing.SolveWithParameters(search_parameters)
+    solution = routing.SolveWithParameters(search_parameters)
     # [END solve]
 
     # Print solution on console.
     # [START print_solution]
-    if assignment:
-        print_solution(data, manager, routing, assignment)
+    if solution:
+        print_solution(data, manager, routing, solution)
     # [END print_solution]
     else:
         print('No solution found !')

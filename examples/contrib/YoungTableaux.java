@@ -10,6 +10,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package com.google.ortools.contrib;
+
+import com.google.ortools.Loader;
 import com.google.ortools.constraintsolver.DecisionBuilder;
 import com.google.ortools.constraintsolver.IntVar;
 import com.google.ortools.constraintsolver.Solver;
@@ -18,17 +21,11 @@ import java.text.*;
 import java.util.*;
 
 public class YoungTableaux {
-
-  static {
-    System.loadLibrary("jniortools");
-  }
-
   /**
    * Implements Young tableaux and partitions. See
    * http://www.hakank.org/google_or_tools/young_tableuax.py
    */
   private static void solve(int n) {
-
     Solver solver = new Solver("YoungTableaux");
 
     System.out.println("n: " + n);
@@ -131,6 +128,7 @@ public class YoungTableaux {
   }
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
 
     int n = 5;
     if (args.length > 0) {

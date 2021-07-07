@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,9 +17,13 @@
 //  unique solutions: http://www.research.att.com/~njas/sequences/A000170
 //  distinct solutions: http://www.research.att.com/~njas/sequences/A002562
 
+#include <cstdint>
 #include <cstdio>
 #include <map>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
 #include "absl/strings/str_format.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/integral_types.h"
@@ -27,15 +31,15 @@
 #include "ortools/base/map_util.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 
-DEFINE_bool(print, false, "If true, print one of the solution.");
-DEFINE_bool(print_all, false, "If true, print all the solutions.");
-DEFINE_int32(nb_loops, 1,
-             "Number of solving loops to perform, for performance timing.");
-DEFINE_int32(
-    size, 0,
+ABSL_FLAG(bool, print, false, "If true, print one of the solution.");
+ABSL_FLAG(bool, print_all, false, "If true, print all the solutions.");
+ABSL_FLAG(int, nb_loops, 1,
+          "Number of solving loops to perform, for performance timing.");
+ABSL_FLAG(
+    int, size, 0,
     "Size of the problem. If equal to 0, will test several increasing sizes.");
-DEFINE_bool(use_symmetry, false, "Use Symmetry Breaking methods");
-DECLARE_bool(cp_disable_solve);
+ABSL_FLAG(bool, use_symmetry, false, "Use Symmetry Breaking methods");
+ABSL_DECLARE_FLAG(bool, cp_disable_solve);
 
 static const int kNumSolutions[] = {
     1, 0, 0, 2, 10, 4, 40, 92, 352, 724, 2680, 14200, 73712, 365596, 2279184};
@@ -74,7 +78,7 @@ class NQueenSymmetry : public SymmetryBreaker {
  private:
   Solver* const solver_;
   const std::vector<IntVar*> vars_;
-  std::map<const IntVar*, int> indices_;
+  absl::flat_hash_map<const IntVar*, int> indices_;
   const int size_;
 };
 
@@ -85,7 +89,7 @@ class SX : public NQueenSymmetry {
       : NQueenSymmetry(s, vars) {}
   ~SX() override {}
 
-  void VisitSetVariableValue(IntVar* const var, int64 value) override {
+  void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     const int index = Index(var);
     IntVar* const other_var = Var(symmetric(index));
     AddIntegerVariableEqualValueClause(other_var, value);
@@ -99,7 +103,7 @@ class SY : public NQueenSymmetry {
       : NQueenSymmetry(s, vars) {}
   ~SY() override {}
 
-  void VisitSetVariableValue(IntVar* const var, int64 value) override {
+  void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     AddIntegerVariableEqualValueClause(var, symmetric(value));
   }
 };
@@ -111,7 +115,7 @@ class SD1 : public NQueenSymmetry {
       : NQueenSymmetry(s, vars) {}
   ~SD1() override {}
 
-  void VisitSetVariableValue(IntVar* const var, int64 value) override {
+  void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     const int index = Index(var);
     IntVar* const other_var = Var(value);
     AddIntegerVariableEqualValueClause(other_var, index);
@@ -125,7 +129,7 @@ class SD2 : public NQueenSymmetry {
       : NQueenSymmetry(s, vars) {}
   ~SD2() override {}
 
-  void VisitSetVariableValue(IntVar* const var, int64 value) override {
+  void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     const int index = Index(var);
     IntVar* const other_var = Var(symmetric(value));
     AddIntegerVariableEqualValueClause(other_var, symmetric(index));
@@ -139,7 +143,7 @@ class R90 : public NQueenSymmetry {
       : NQueenSymmetry(s, vars) {}
   ~R90() override {}
 
-  void VisitSetVariableValue(IntVar* const var, int64 value) override {
+  void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     const int index = Index(var);
     IntVar* const other_var = Var(value);
     AddIntegerVariableEqualValueClause(other_var, symmetric(index));
@@ -153,7 +157,7 @@ class R180 : public NQueenSymmetry {
       : NQueenSymmetry(s, vars) {}
   ~R180() override {}
 
-  void VisitSetVariableValue(IntVar* const var, int64 value) override {
+  void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     const int index = Index(var);
     IntVar* const other_var = Var(symmetric(index));
     AddIntegerVariableEqualValueClause(other_var, symmetric(value));
@@ -167,7 +171,7 @@ class R270 : public NQueenSymmetry {
       : NQueenSymmetry(s, vars) {}
   ~R270() override {}
 
-  void VisitSetVariableValue(IntVar* const var, int64 value) override {
+  void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     const int index = Index(var);
     IntVar* const other_var = Var(symmetric(value));
     AddIntegerVariableEqualValueClause(other_var, index);
@@ -175,16 +179,16 @@ class R270 : public NQueenSymmetry {
 };
 
 void CheckNumberOfSolutions(int size, int num_solutions) {
-  if (FLAGS_use_symmetry) {
+  if (absl::GetFlag(FLAGS_use_symmetry)) {
     if (size - 1 < kKnownUniqueSolutions) {
       CHECK_EQ(num_solutions, kNumUniqueSolutions[size - 1]);
-    } else if (!FLAGS_cp_disable_solve) {
+    } else if (!absl::GetFlag(FLAGS_cp_disable_solve)) {
       CHECK_GT(num_solutions, 0);
     }
   } else {
     if (size - 1 < kKnownSolutions) {
       CHECK_EQ(num_solutions, kNumSolutions[size - 1]);
-    } else if (!FLAGS_cp_disable_solve) {
+    } else if (!absl::GetFlag(FLAGS_cp_disable_solve)) {
       CHECK_GT(num_solutions, 0);
     }
   }
@@ -221,7 +225,7 @@ void NQueens(int size) {
   monitors.push_back(collector);
   DecisionBuilder* const db = s.MakePhase(queens, Solver::CHOOSE_FIRST_UNBOUND,
                                           Solver::ASSIGN_MIN_VALUE);
-  if (FLAGS_use_symmetry) {
+  if (absl::GetFlag(FLAGS_use_symmetry)) {
     std::vector<SymmetryBreaker*> breakers;
     NQueenSymmetry* const sx = s.RevAlloc(new SX(&s, queens));
     breakers.push_back(sx);
@@ -241,34 +245,37 @@ void NQueens(int size) {
     monitors.push_back(symmetry_manager);
   }
 
-  for (int loop = 0; loop < FLAGS_nb_loops; ++loop) {
+  for (int loop = 0; loop < absl::GetFlag(FLAGS_nb_loops); ++loop) {
     s.Solve(db, monitors);  // go!
     CheckNumberOfSolutions(size, solution_counter->solution_count());
   }
 
   const int num_solutions = solution_counter->solution_count();
   if (num_solutions > 0 && size < kKnownSolutions) {
-    int print_max = FLAGS_print_all ? num_solutions : FLAGS_print ? 1 : 0;
+    int print_max = absl::GetFlag(FLAGS_print_all) ? num_solutions
+                    : absl::GetFlag(FLAGS_print)   ? 1
+                                                   : 0;
     for (int n = 0; n < print_max; ++n) {
-      printf("--- solution #%d\n", n);
+      absl::PrintF("--- solution #%d\n", n);
       for (int i = 0; i < size; ++i) {
         const int pos = static_cast<int>(collector->Value(n, queens[i]));
-        for (int k = 0; k < pos; ++k) printf(" . ");
-        printf("%2d ", i);
-        for (int k = pos + 1; k < size; ++k) printf(" . ");
-        printf("\n");
+        for (int k = 0; k < pos; ++k) absl::PrintF(" . ");
+        absl::PrintF("%2d ", i);
+        for (int k = pos + 1; k < size; ++k) absl::PrintF(" . ");
+        absl::PrintF("\n");
       }
     }
   }
-  printf("========= number of solutions:%d\n", num_solutions);
+  absl::PrintF("========= number of solutions:%d\n", num_solutions);
   absl::PrintF("          number of failures: %d\n", s.failures());
 }
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  if (FLAGS_size != 0) {
-    operations_research::NQueens(FLAGS_size);
+  google::InitGoogleLogging(argv[0]);
+  absl::ParseCommandLine(argc, argv);
+  if (absl::GetFlag(FLAGS_size) != 0) {
+    operations_research::NQueens(absl::GetFlag(FLAGS_size));
   } else {
     for (int n = 1; n < 12; ++n) {
       operations_research::NQueens(n);

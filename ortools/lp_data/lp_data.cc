@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -22,6 +23,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "ortools/base/logging.h"
+#include "ortools/base/strong_vector.h"
 #include "ortools/lp_data/lp_print_utils.h"
 #include "ortools/lp_data/lp_utils.h"
 #include "ortools/lp_data/matrix_utils.h"
@@ -55,7 +57,7 @@ bool AreBoundsFreeOrBoxed(Fractional lower_bound, Fractional upper_bound) {
 }
 
 template <class I, class T>
-double Average(const gtl::ITIVector<I, T>& v) {
+double Average(const absl::StrongVector<I, T>& v) {
   const size_t size = v.size();
   DCHECK_LT(0, size);
   double sum = 0.0;
@@ -69,7 +71,7 @@ double Average(const gtl::ITIVector<I, T>& v) {
 }
 
 template <class I, class T>
-double StandardDeviation(const gtl::ITIVector<I, T>& v) {
+double StandardDeviation(const absl::StrongVector<I, T>& v) {
   const size_t size = v.size();
   double n = 0.0;  // n is used in a calculation involving doubles.
   double sigma_square = 0.0;
@@ -86,7 +88,7 @@ double StandardDeviation(const gtl::ITIVector<I, T>& v) {
 
 // Returns 0 when the vector is empty.
 template <class I, class T>
-T GetMaxElement(const gtl::ITIVector<I, T>& v) {
+T GetMaxElement(const absl::StrongVector<I, T>& v) {
   const size_t size = v.size();
   if (size == 0) {
     return T(0);
@@ -227,8 +229,8 @@ RowIndex LinearProgram::FindOrCreateConstraint(
   }
 }
 
-void LinearProgram::SetVariableName(ColIndex col, const std::string& name) {
-  variable_names_[col] = name;
+void LinearProgram::SetVariableName(ColIndex col, absl::string_view name) {
+  variable_names_[col] = std::string(name);
 }
 
 void LinearProgram::SetVariableType(ColIndex col, VariableType type) {
@@ -240,8 +242,8 @@ void LinearProgram::SetVariableType(ColIndex col, VariableType type) {
   }
 }
 
-void LinearProgram::SetConstraintName(RowIndex row, const std::string& name) {
-  constraint_names_[row] = name;
+void LinearProgram::SetConstraintName(RowIndex row, absl::string_view name) {
+  constraint_names_[row] = std::string(name);
 }
 
 void LinearProgram::SetVariableBounds(ColIndex col, Fractional lower_bound,
@@ -421,26 +423,55 @@ Fractional LinearProgram::GetObjectiveCoefficientForMinimizationVersion(
 }
 
 std::string LinearProgram::GetDimensionString() const {
+  Fractional min_magnitude = 0.0;
+  Fractional max_magnitude = 0.0;
+  matrix_.ComputeMinAndMaxMagnitudes(&min_magnitude, &max_magnitude);
   return absl::StrFormat(
-      "%d rows, %d columns, %d entries", num_constraints().value(),
-      num_variables().value(),
-      // static_cast<int64> is needed because the Android port uses int32.
-      static_cast<int64>(num_entries().value()));
+      "%d rows, %d columns, %d entries with magnitude in [%e, %e]",
+      num_constraints().value(), num_variables().value(),
+      // static_cast<int64_t> is needed because the Android port uses int32_t.
+      static_cast<int64_t>(num_entries().value()), min_magnitude,
+      max_magnitude);
 }
 
+namespace {
+
+template <typename FractionalValues>
+void UpdateStats(const FractionalValues& values, int64_t* num_non_zeros,
+                 Fractional* min_value, Fractional* max_value) {
+  for (const Fractional v : values) {
+    if (v == 0 || v == kInfinity || v == -kInfinity) continue;
+    *min_value = std::min(*min_value, v);
+    *max_value = std::max(*max_value, v);
+    ++(*num_non_zeros);
+  }
+}
+
+}  // namespace
+
 std::string LinearProgram::GetObjectiveStatsString() const {
-  int64 num_non_zeros = 0;
+  int64_t num_non_zeros = 0;
   Fractional min_value = +kInfinity;
   Fractional max_value = -kInfinity;
-  for (ColIndex col(0); col < objective_coefficients_.size(); ++col) {
-    const Fractional value = objective_coefficients_[col];
-    if (value == 0) continue;
-    min_value = std::min(min_value, value);
-    max_value = std::max(max_value, value);
-    ++num_non_zeros;
-  }
+  UpdateStats(objective_coefficients_, &num_non_zeros, &min_value, &max_value);
   if (num_non_zeros == 0) {
     return "No objective term. This is a pure feasibility problem.";
+  } else {
+    return absl::StrFormat("%d non-zeros, range [%e, %e]", num_non_zeros,
+                           min_value, max_value);
+  }
+}
+
+std::string LinearProgram::GetBoundsStatsString() const {
+  int64_t num_non_zeros = 0;
+  Fractional min_value = +kInfinity;
+  Fractional max_value = -kInfinity;
+  UpdateStats(variable_lower_bounds_, &num_non_zeros, &min_value, &max_value);
+  UpdateStats(variable_upper_bounds_, &num_non_zeros, &min_value, &max_value);
+  UpdateStats(constraint_lower_bounds_, &num_non_zeros, &min_value, &max_value);
+  UpdateStats(constraint_upper_bounds_, &num_non_zeros, &min_value, &max_value);
+  if (num_non_zeros == 0) {
+    return "All variables/constraints bounds are zero or +/- infinity.";
   } else {
     return absl::StrFormat("%d non-zeros, range [%e, %e]", num_non_zeros,
                            min_value, max_value);
@@ -1119,6 +1150,29 @@ void UpdateMinAndMaxMagnitude(const FractionalRange& range,
   }
 }
 
+Fractional GetMedianScalingFactor(const DenseRow& range) {
+  std::vector<Fractional> median;
+  for (const Fractional value : range) {
+    if (value == 0.0) continue;
+    median.push_back(std::abs(value));
+  }
+  if (median.empty()) return 1.0;
+  std::sort(median.begin(), median.end());
+  return median[median.size() / 2];
+}
+
+Fractional GetMeanScalingFactor(const DenseRow& range) {
+  Fractional mean = 0.0;
+  int num_non_zeros = 0;
+  for (const Fractional value : range) {
+    if (value == 0.0) continue;
+    ++num_non_zeros;
+    mean += std::abs(value);
+  }
+  if (num_non_zeros == 0.0) return 1.0;
+  return mean / static_cast<Fractional>(num_non_zeros);
+}
+
 Fractional ComputeDivisorSoThatRangeContainsOne(Fractional min_magnitude,
                                                 Fractional max_magnitude) {
   if (min_magnitude > 1.0 && min_magnitude < kInfinity) {
@@ -1131,22 +1185,36 @@ Fractional ComputeDivisorSoThatRangeContainsOne(Fractional min_magnitude,
 
 }  // namespace
 
-Fractional LinearProgram::ScaleObjective() {
+Fractional LinearProgram::ScaleObjective(
+    GlopParameters::CostScalingAlgorithm method) {
   Fractional min_magnitude = kInfinity;
   Fractional max_magnitude = 0.0;
   UpdateMinAndMaxMagnitude(objective_coefficients(), &min_magnitude,
                            &max_magnitude);
-  const Fractional cost_scaling_factor =
-      ComputeDivisorSoThatRangeContainsOne(min_magnitude, max_magnitude);
+  Fractional cost_scaling_factor = 1.0;
+  switch (method) {
+    case GlopParameters::NO_COST_SCALING:
+      break;
+    case GlopParameters::CONTAIN_ONE_COST_SCALING:
+      cost_scaling_factor =
+          ComputeDivisorSoThatRangeContainsOne(min_magnitude, max_magnitude);
+      break;
+    case GlopParameters::MEAN_COST_SCALING:
+      cost_scaling_factor = GetMeanScalingFactor(objective_coefficients());
+      break;
+    case GlopParameters::MEDIAN_COST_SCALING:
+      cost_scaling_factor = GetMedianScalingFactor(objective_coefficients());
+      break;
+  }
   if (cost_scaling_factor != 1.0) {
     for (ColIndex col(0); col < num_variables(); ++col) {
+      if (objective_coefficients()[col] == 0.0) continue;
       SetObjectiveCoefficient(
           col, objective_coefficients()[col] / cost_scaling_factor);
     }
     SetObjectiveScalingFactor(objective_scaling_factor() * cost_scaling_factor);
     SetObjectiveOffset(objective_offset() / cost_scaling_factor);
   }
-
   VLOG(1) << "Objective magnitude range is [" << min_magnitude << ", "
           << max_magnitude << "] (dividing by " << cost_scaling_factor << ").";
   return cost_scaling_factor;
@@ -1375,8 +1443,8 @@ std::string LinearProgram::NonZeroStatFormatter(
 
   // To avoid division by 0 if there are no columns or no rows, we set
   // height and width to be at least one.
-  const int64 height = std::max(RowToIntIndex(num_constraints()), 1);
-  const int64 width = std::max(ColToIntIndex(num_variables()), 1);
+  const int64_t height = std::max(RowToIntIndex(num_constraints()), 1);
+  const int64_t width = std::max(ColToIntIndex(num_variables()), 1);
   const double fill_rate = 100.0 * static_cast<double>(num_entries.value()) /
                            static_cast<double>(height * width);
 

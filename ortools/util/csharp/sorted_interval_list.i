@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,10 +17,9 @@ using System.Runtime.InteropServices;
 using System.Collections;
 %}
 
-%include "stdint.i"
-%include "std_vector.i"
 
 %include "ortools/base/base.i"
+
 %include "ortools/util/csharp/vector.i"
 
 %{
@@ -28,11 +27,6 @@ using System.Collections;
 %}
 
 %module(directors="1") operations_research_util
-
-%template(UtilInt64Vector) std::vector<int64>;
-%template(UtilInt64VectorVector) std::vector<std::vector<int64> >;
-VECTOR_AS_CSHARP_ARRAY(int64, int64, long, UtilInt64Vector);
-JAGGED_MATRIX_AS_CSHARP_ARRAY(int64, int64, long, UtilInt64VectorVector);
 
 %ignoreall
 
@@ -63,5 +57,4 @@ JAGGED_MATRIX_AS_CSHARP_ARRAY(int64, int64, long, UtilInt64VectorVector);
 %unignore operations_research::Domain::UnionWith;
 
 %include "ortools/util/sorted_interval_list.h"
-
 %unignoreall

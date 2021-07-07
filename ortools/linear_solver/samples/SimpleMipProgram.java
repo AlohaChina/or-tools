@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,7 +13,9 @@
 
 // Minimal example to call the MIP solver.
 // [START program]
+package com.google.ortools.linearsolver.samples;
 // [START import]
+import com.google.ortools.Loader;
 import com.google.ortools.linearsolver.MPConstraint;
 import com.google.ortools.linearsolver.MPObjective;
 import com.google.ortools.linearsolver.MPSolver;
@@ -21,16 +23,16 @@ import com.google.ortools.linearsolver.MPVariable;
 // [END import]
 
 /** Minimal Mixed Integer Programming example to showcase calling the solver. */
-public class SimpleMipProgram {
-  static {
-    System.loadLibrary("jniortools");
-  }
-
-  public static void main(String[] args) throws Exception {
+public final class SimpleMipProgram {
+  public static void main(String[] args) {
+    Loader.loadNativeLibraries();
     // [START solver]
-    // Create the linear solver with the CBC backend.
-    MPSolver solver = new MPSolver(
-        "SimpleMipProgram", MPSolver.OptimizationProblemType.CBC_MIXED_INTEGER_PROGRAMMING);
+    // Create the linear solver with the SCIP backend.
+    MPSolver solver = MPSolver.createSolver("SCIP");
+    if (solver == null) {
+      System.out.println("Could not create solver SCIP");
+      return;
+    }
     // [END solver]
 
     // [START variables]
@@ -74,17 +76,19 @@ public class SimpleMipProgram {
       System.out.println("Objective value = " + objective.value());
       System.out.println("x = " + x.solutionValue());
       System.out.println("y = " + y.solutionValue());
-      // [END print_solution]
-
-      // [START advanced]
-      System.out.println("\nAdvanced usage:");
-      System.out.println("Problem solved in " + solver.wallTime() + " milliseconds");
-      System.out.println("Problem solved in " + solver.iterations() + " iterations");
-      System.out.println("Problem solved in " + solver.nodes() + " branch-and-bound nodes");
-      // [END advanced]
     } else {
       System.err.println("The problem does not have an optimal solution!");
     }
+    // [END print_solution]
+
+    // [START advanced]
+    System.out.println("\nAdvanced usage:");
+    System.out.println("Problem solved in " + solver.wallTime() + " milliseconds");
+    System.out.println("Problem solved in " + solver.iterations() + " iterations");
+    System.out.println("Problem solved in " + solver.nodes() + " branch-and-bound nodes");
+    // [END advanced]
   }
+
+  private SimpleMipProgram() {}
 }
 // [END program]

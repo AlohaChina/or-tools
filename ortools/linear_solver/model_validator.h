@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -26,11 +26,16 @@ namespace operations_research {
  * Otherwise, returns a description of the first error or trivial infeasibility
  * encountered.
  *
+ * abs_value_threshold is the (exclusive) limit for the abs value of constraint
+ * coefficients, objective coefficients, etc. If unspecified, or 0, it defaults
+ * to FLAGS_model_validator_infinity.
+ *
  * NOTE(user): the code of this method (and the client code too!) is
  * considerably simplified by this string-based, simple API. If clients
  * require it, we could add a formal error status enum.
  */
-std::string FindErrorInMPModelProto(const MPModelProto& model);
+std::string FindErrorInMPModelProto(const MPModelProto& model,
+                                    double abs_value_threshold = 0.0);
 
 /**
  * Like FindErrorInMPModelProto, but for a MPModelDeltaProto applied to a given

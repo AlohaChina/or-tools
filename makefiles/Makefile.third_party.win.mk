@@ -8,14 +8,11 @@ help_third_party:
 WINDOWS_ZLIB_DIR ?= $(OR_ROOT)dependencies/install
 WINDOWS_ZLIB_PATH = $(subst /,$S,$(WINDOWS_ZLIB_DIR))
 WINDOWS_ZLIB_NAME ?= zlib.lib
-WINDOWS_GFLAGS_DIR ?= $(OR_ROOT)dependencies/install
-WINDOWS_GFLAGS_PATH = $(subst /,$S,$(WINDOWS_GFLAGS_DIR))
-WINDOWS_GLOG_DIR ?= $(OR_ROOT)dependencies/install
-WINDOWS_GLOG_PATH = $(subst /,$S,$(WINDOWS_GLOG_DIR))
 WINDOWS_PROTOBUF_DIR ?= $(OR_ROOT)dependencies/install
 WINDOWS_PROTOBUF_PATH = $(subst /,$S,$(WINDOWS_PROTOBUF_DIR))
 WINDOWS_ABSL_DIR ?= $(OR_ROOT)dependencies/install
 WINDOWS_ABSL_PATH = $(subst /,$S,$(WINDOWS_ABSL_DIR))
+USE_COINOR ?= ON
 WINDOWS_CBC_DIR ?= $(OR_ROOT)dependencies/install
 WINDOWS_CBC_PATH = $(subst /,$S,$(WINDOWS_CBC_DIR))
 WINDOWS_CGL_DIR ?= $(WINDOWS_CBC_DIR)
@@ -26,6 +23,9 @@ WINDOWS_OSI_DIR ?= $(WINDOWS_CBC_DIR)
 WINDOWS_OSI_PATH = $(subst /,$S,$(WINDOWS_OSI_DIR))
 WINDOWS_COINUTILS_DIR ?= $(WINDOWS_CBC_DIR)
 WINDOWS_COINUTILS_PATH = $(subst /,$S,$(WINDOWS_COINUTILS_DIR))
+USE_SCIP ?= ON
+WINDOWS_SCIP_DIR ?= $(OR_ROOT)dependencies/install
+WINDOWS_SCIP_PATH = $(subst /,$S,$(WINDOWS_SCIP_DIR))
 WINDOWS_SWIG_BINARY ?= "$(OR_ROOT)dependencies\\install\\swigwin-$(SWIG_TAG)\\swig.exe"
 
 # Variable use in others Makefiles
@@ -35,16 +35,18 @@ SWIG_BINARY = $(WINDOWS_SWIG_BINARY)
 # tags of dependencies to checkout.
 ZLIB_TAG = 1.2.11
 ZLIB_ARCHIVE_TAG = 1211
-GFLAGS_TAG = 2.2.2
-GLOG_TAG = 0.4.0
-PROTOBUF_TAG = 3.10.0
-ABSL_TAG = 8ba96a8
-CBC_TAG = 2.10.3
-CGL_TAG = 0.60.2
-CLP_TAG = 1.17.3
-OSI_TAG = 0.108.4
-COINUTILS_TAG = 2.11.2
-SWIG_TAG = 4.0.0
+PROTOBUF_TAG = v3.17.3
+ABSL_TAG = 20210324.2
+# We are using a CBC archive containing all coin-or project
+# since Clp 2.17.5+ is broken we need to stick with Cbc 2.10.4
+# which is shipped with Clp 1.17.4
+CBC_TAG = 2.10.4
+CGL_TAG = 0.60.3
+CLP_TAG = 1.17.4
+OSI_TAG = 0.108.6
+COINUTILS_TAG = 2.11.4
+SWIG_TAG = 4.0.2
+SCIP_TAG=7.0.1
 
 # Added in support of clean third party targets
 TSVNCACHE_EXE = TSVNCache.exe
@@ -61,16 +63,6 @@ ifeq ($(wildcard $(WINDOWS_ZLIB_DIR)/include/zlib.h),)
 	$(error Third party ZLIB files was not found! did you run 'make third_party' or set WINDOWS_ZLIB_DIR ?)
 else
 	@echo ZLIB: found
-endif
-ifeq ($(wildcard $(WINDOWS_GFLAGS_DIR)/include/gflags/gflags.h),)
-	$(error Third party GFlags files was not found! did you run 'make third_party' or set WINDOWS_GFLAGS_DIR ?)
-else
-	@echo GFLAGS: found
-endif
-ifeq ($(wildcard $(WINDOWS_GLOG_DIR)/include/glog/logging.h),)
-	$(error Third party GLog files was not found! did you run 'make third_party' or set WINDOWS_GLOG_DIR ?)
-else
-	@echo GLOG: found
 endif
 ifeq ($(wildcard $(WINDOWS_PROTOBUF_DIR)/include/google/protobuf/descriptor.h),)
 	$(error Third party Protobuf files was not found! did you run 'make third_party' or set WINDOWS_PROTOBUF_DIR ?)
@@ -97,29 +89,40 @@ ifeq ($(wildcard $(WINDOWS_CGL_DIR)/include/cgl/coin/CglParam.hpp $(WINDOWS_CGL_
 else
 	@echo CGL: found
 endif
+ifeq ($(USE_COINOR),OFF)
+	@echo Coin OR (CLP, CBC): disabled
+else
 ifeq ($(wildcard $(WINDOWS_CBC_DIR)/include/cbc/coin/CbcModel.hpp $(WINDOWS_CBC_DIR)/include/coin/CbcModel.hpp),)
 	$(error Third party Cbc files was not found! did you run 'make third_party' or set WINDOWS_CBC_DIR ?)
 else
 	@echo CBC: found
 endif
+endif  # USE_COINOR
+ifeq ($(USE_SCIP),OFF)
+	@echo SCIP: disabled
+else
+ifeq ($(wildcard $(WINDOWS_SCIP_DIR)/include/scip/scip.h),)
+	$(error Third party SCIP files was not found! did you run 'make third_party' or set WINDOWS_SCIP_DIR ?)
+else
+	@echo SCIP: found
+endif
+endif  # USE_SCIP
 ifndef WINDOWS_CPLEX_DIR
 	@echo CPLEX: not found
+else
+	@echo CPLEX: found
 endif
 ifndef WINDOWS_GLPK_DIR
 	@echo GLPK: not found
-endif
-ifndef WINDOWS_GUROBI_DIR
-	@echo GUROBI: not found
-endif
-ifndef WINDOWS_SCIP_DIR
-	@echo SCIP: not found
 else
-  ifeq ($(wildcard $(WINDOWS_SCIP_DIR)/include/scip/scip.h),)
-	$(error Third party SCIP files was not found! please check the path given to WINDOWS_SCIP_DIR)
-  else
-	@echo SCIP: found
-  endif
+	@echo GLPK: found
 endif
+ifndef WINDOWS_XPRESS_DIR
+	@echo XPRESS: not found
+else
+	@echo XPRESS: found
+endif
+
 	$(TOUCH) dependencies\check.log
 
 .PHONY: build_third_party
@@ -127,19 +130,17 @@ build_third_party: \
  Makefile.local \
  install_deps_directories \
  install_zlib \
- install_gflags \
- install_glog \
  install_protobuf \
  install_absl \
  install_swig \
- install_coin_cbc
+ install_coin_cbc \
+ build_scip
 
 download_third_party: \
  dependencies/archives/zlib$(ZLIB_ARCHIVE_TAG).zip \
- dependencies/sources/gflags/autogen.sh \
  dependencies/sources/protobuf/autogen.sh \
  dependencies/archives/swigwin-$(SWIG_TAG).zip \
- dependencies/sources/Cbc-$(CBC_TAG)/configure
+ dependencies/sources/Cbc-$(CBC_TAG)
 
 # Directories
 .PHONY: install_deps_directories
@@ -175,16 +176,48 @@ Makefile.local: makefiles/Makefile.third_party.$(SYSTEM).mk
 	@echo $(SELECTED_PATH_TO_JDK)>> Makefile.local
 	@echo $(SELECTED_PATH_TO_PYTHON)>> Makefile.local
 	@echo # >> Makefile.local
-	@echo # Define WINDOWS_SCIP_DIR to point to a installation directory of the scip binary packaged to use it >> Makefile.local
-	@echo #   e.g.: WINDOWS_SCIP_DIR = "relative_path/to/scip-6.0.2" >> Makefile.local
-	@echo # Define WINDOWS_GUROBI_DIR and GUROBI_LIB_VERSION to use Gurobi >> Makefile.local
+	@echo ## OPTIONAL DEPENDENCIES ## >> Makefile.local
+	@echo # Define WINDOWS_CPLEX_DIR to point to a installation directory of the CPLEX Studio >> Makefile.local
+	@echo #   e.g.: WINDOWS_CPLEX_DIR = C:\Progra~1\CPLEX_STUDIO2010\IBM\ILOG\CPLEX_STUDIO2010 >> Makefile.local
 	@echo # >> Makefile.local
-	@echo # Define WINDOWS_ZLIB_DIR, WINDOWS_ZLIB_NAME, WINDOWS_GFLAGS_DIR, >> Makefile.local
-	@echo # WINDOWS_GLOG_DIR, WINDOWS_PROTOBUF_DIR, WINDOWS_SWIG_BINARY, >> Makefile.local
-	@echo # WINDOWS_CLP_DIR, WINDOWS_CBC_DIR if you wish to use a custom version >> Makefile.local
-	@echo #   e.g.: WINDOWS_GFLAGS_DIR = "relative_path/to/gflags/dir" >> Makefile.local
+	@echo # Define WINDOWS_CPLEX_VERSION to specify the suffix of the library >> Makefile.local
+	@echo #   e.g.: WINDOWS_CPLEX_VERSION = 2010 >> Makefile.local
 	@echo # >> Makefile.local
-	@echo # Define absolute paths without trailing "\". E.g. "c:\Installs\SCIP-6.0.0" >> Makefile.local
+	@echo # Define WINDOWS_XPRESS_DIR to point to a installation directory of the XPRESS-MP >> Makefile.local
+	@echo #   e.g.: WINDOWS_XPRESS_DIR = C:\xpressmp>> Makefile.local
+	@echo # >> Makefile.local
+	@echo # SCIP is enabled and built-in by default. >> Makefile.local
+	@echo # To disable support, uncomment the following line: >> Makefile.local
+	@echo # USE_SCIP = OFF >> Makefile.local
+	@echo # >> Makefile.local
+	@echo # By default, make third_party will download SCIP and compile it locally. >> Makefile.local
+	@echo # To override this behavior, define WINDOWS_SCIP_DIR to point to an installation>> Makefile.local
+	@echo # directory of the scip binary packaged to use it >> Makefile.local
+	@echo #   e.g.: WINDOWS_SCIP_DIR = C:\Progra~1\SCIPOP~1.2 >> Makefile.local
+	@echo #   note: You can use: 'dir "%ProgramFiles%\SCIPOp*" /x' to find the shortname >> Makefile.local
+	@echo # >> Makefile.local
+	@echo # Coin OR solvers (CLP, CBC) are enabled and built-in by default. >> Makefile.local
+	@echo # To disable support, uncomment the following line: >> Makefile.local
+	@echo # USE_COINOR = OFF >> Makefile.local
+	@echo # >> Makefile.local
+	@echo # Define WINDOWS_CLP_DIR, WINDOWS_CBC_DIR if you wish to use a custom version >> Makefile.local
+	@echo #   e.g.: WINDOWS_CBC_DIR = C:\Progra~1\CoinOR\Cbc >> Makefile.local
+	@echo #         WINDOWS_CLP_DIR = C:\Progra~1\CoinOR\Clp >> Makefile.local
+	@echo # >> Makefile.local
+	@echo ## REQUIRED DEPENDENCIES ## >> Makefile.local
+	@echo # By default they will be automatically built -> nothing to define >> Makefile.local
+	@echo # Define WINDOWS_PROTOBUF_DIR to depend on external Protobuf library >> Makefile.local
+	@echo #   e.g.: WINDOWS_PROTOBUF_DIR = C:\Progra~1\Protobuf >> Makefile.local
+	@echo # >> Makefile.local
+	@echo # Define WINDOWS_ZLIB_DIR, WINDOWS_ZLIB_NAME >> Makefile.local
+	@echo #   e.g.: WINDOWS_ZLIB_DIR = C:\Progra~1\zlib >> Makefile.local
+	@echo # >> Makefile.local
+	@echo # Define WINDOWS_SWIG_BINARY for using a custom swig binary >> Makefile.local
+	@echo #   e.g.: WINDOWS_SWIG_BINARY = C:\Progra~1\swigwin >> Makefile.local
+	@echo # >> Makefile.local
+	@echo # Define absolute paths without trailing "\". E.g. "C:\Foo\Bar" >> Makefile.local
+	@echo # Paths must be without spaces, try to use 'dir "directory*" /x' to get the shortname without space of each directory >> Makefile.local
+	@echo #   e.g. dir "%ProgramFiles%*" /x >> Makefile.local
 
 ############
 ##  ZLIB  ##
@@ -193,13 +226,13 @@ Makefile.local: makefiles/Makefile.third_party.$(SYSTEM).mk
 .PHONY: install_zlib
 install_zlib: dependencies/install/include/zlib.h dependencies/install/include/zconf.h dependencies/install/lib/zlib.lib
 
-dependencies/install/include/zlib.h: dependencies/install/include dependencies/sources/zlib-$(ZLIB_TAG)/zlib.h
+dependencies/install/include/zlib.h: dependencies/sources/zlib-$(ZLIB_TAG)/zlib.h | dependencies/install/include
 	$(COPY) dependencies$Ssources$Szlib-$(ZLIB_TAG)$Szlib.h dependencies$Sinstall$Sinclude$Szlib.h
 
-dependencies/install/include/zconf.h: dependencies/install/include dependencies/sources/zlib-$(ZLIB_TAG)/zlib.h
+dependencies/install/include/zconf.h: dependencies/sources/zlib-$(ZLIB_TAG)/zlib.h | dependencies/install/include
 	$(COPY) dependencies$Ssources$Szlib-$(ZLIB_TAG)$Szconf.h dependencies$Sinstall$Sinclude$Szconf.h
 
-dependencies/install/lib/zlib.lib: dependencies/sources/zlib-$(ZLIB_TAG)/zlib.h
+dependencies/install/lib/zlib.lib: dependencies/sources/zlib-$(ZLIB_TAG)/zlib.h | dependencies/install/lib
 	cd dependencies$Ssources$Szlib-$(ZLIB_TAG) && set MAKEFLAGS= && nmake -f win32$SMakefile.msc zlib.lib
 	$(COPY) dependencies$Ssources$Szlib-$(ZLIB_TAG)$Szlib.lib dependencies$Sinstall$Slib
 
@@ -214,106 +247,35 @@ ZLIB_INC = /I"$(WINDOWS_ZLIB_PATH)\\include"
 ZLIB_SWIG = -I"$(WINDOWS_ZLIB_DIR)/include"
 
 ZLIB_LNK = "$(WINDOWS_ZLIB_PATH)\lib\$(WINDOWS_ZLIB_NAME)"
+
+DEPENDENCIES_INC += $(ZLIB_INC)
+SWIG_INC += $(ZLIB_SWIG)
 DEPENDENCIES_LNK += $(ZLIB_LNK)
-
-##############
-##  GFLAGS  ##
-##############
-# This uses gflags cmake-based build.
-install_gflags: dependencies/install/lib/gflags.lib
-
-dependencies/install/lib/gflags.lib: dependencies/sources/gflags-$(GFLAGS_TAG)
-	cd dependencies\sources\gflags-$(GFLAGS_TAG) && \
-  set MAKEFLAGS= && \
-  "$(CMAKE)" -H. -Bbuild_cmake \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_TESTING=OFF \
-    -DCMAKE_INSTALL_PREFIX=..\..\install \
-    -G "NMake Makefiles" && \
-  "$(CMAKE)" --build build_cmake && \
-  "$(CMAKE)" --build build_cmake --target install
-
-dependencies/sources/gflags-$(GFLAGS_TAG): dependencies/archives/gflags-$(GFLAGS_TAG).zip | dependencies/sources
-	$(UNZIP) -q -d dependencies/sources dependencies\archives\gflags-$(GFLAGS_TAG).zip
-	-$(TOUCH) dependencies\sources\gflags-$(GFLAGS_TAG)\INSTALL.md
-
-dependencies/archives/gflags-$(GFLAGS_TAG).zip:
-	$(WGET) --quiet -P dependencies\archives --no-check-certificate https://github.com/gflags/gflags/archive/v$(GFLAGS_TAG).zip
-	cd dependencies/archives && rename v$(GFLAGS_TAG).zip gflags-$(GFLAGS_TAG).zip
-
-GFLAGS_INC = /I"$(WINDOWS_GFLAGS_PATH)\\include" /DGFLAGS_DLL_DECL= /DGFLAGS_DLL_DECLARE_FLAG= /DGFLAGS_DLL_DEFINE_FLAG=
-GFLAGS_SWIG = -I"$(WINDOWS_GFLAGS_DIR)/include" -DGFLAGS_DLL_DECL= -DGFLAGS_DLL_DECLARE_FLAG= -DGFLAGS_DLL_DEFINE_FLAG=
-DYNAMIC_GFLAGS_LNK = "$(WINDOWS_GFLAGS_PATH)\lib\gflags_static.lib"
-STATIC_GFLAGS_LNK = "$(WINDOWS_GFLAGS_PATH)\lib\gflags_static.lib"
-
-GFLAGS_LNK = $(STATIC_GFLAGS_LNK)
-DEPENDENCIES_LNK += $(GFLAGS_LNK)
-
-############
-##  GLOG  ##
-############
-# This uses glog cmake-based build.
-install_glog: dependencies/install/lib/glog.lib
-
-dependencies/install/lib/glog.lib: dependencies/sources/glog-$(GLOG_TAG) install_gflags
-	cd dependencies\sources\glog-$(GLOG_TAG) && \
-  set MAKEFLAGS= && \
-  "$(CMAKE)" -H. -Bbuild_cmake \
-    -DCMAKE_PREFIX_PATH=..\..\install \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_TESTING=OFF \
-    -DCMAKE_INSTALL_PREFIX=..\..\install \
-    -G "NMake Makefiles" && \
-  "$(CMAKE)" --build build_cmake && \
-  "$(CMAKE)" --build build_cmake --target install
-
-dependencies/sources/glog-$(GLOG_TAG): dependencies/archives/glog-$(GLOG_TAG).zip | dependencies/sources
-	$(UNZIP) -q -d dependencies/sources dependencies\archives\glog-$(GLOG_TAG).zip
-	-$(TOUCH) dependencies\sources\glog-$(GLOG_TAG)\CMakeLists.txt
-
-dependencies/archives/glog-$(GLOG_TAG).zip:
-	$(WGET) --quiet -P dependencies\archives --no-check-certificate https://github.com/google/glog/archive/v$(GLOG_TAG).zip
-	cd dependencies/archives && rename v$(GLOG_TAG).zip glog-$(GLOG_TAG).zip
-
-GLOG_INC = /I"$(WINDOWS_GLOG_PATH)\\include" /DGOOGLE_GLOG_DLL_DECL=
-GLOG_SWIG = -I"$(WINDOWS_GLOG_DIR)/include" -DGOOGLE_GLOG_DLL_DECL=
-DYNAMIC_GLOG_LNK = "$(WINDOWS_GLOG_PATH)\lib\glog.lib"
-STATIC_GLOG_LNK = "$(WINDOWS_GLOG_PATH)\lib\glog.lib"
-
-GLOG_LNK = $(STATIC_GLOG_LNK)
-DEPENDENCIES_LNK += $(GLOG_LNK)
 
 ################
 ##  Protobuf  ##
 ################
 # Install protocol buffers.
-install_protobuf: dependencies\install\bin\protoc.exe  dependencies\install\include\google\protobuf\message.h
+install_protobuf: dependencies/install/lib/libprotobuf.lib
 
-dependencies\install\bin\protoc.exe: dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build\Release\protoc.exe
-	copy dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build\Release\protoc.exe dependencies\install\bin
-	copy dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build\Release\*.lib dependencies\install\lib
+dependencies/install/lib/libprotobuf.lib: dependencies/sources/protobuf-$(PROTOBUF_TAG) install_zlib
+	cd dependencies\sources\protobuf-$(PROTOBUF_TAG) && \
+  set MAKEFLAGS= && \
+  "$(CMAKE)" -Hcmake -Bbuild_cmake \
+    -DCMAKE_PREFIX_PATH=..\..\install \
+    -DCMAKE_BUILD_TYPE=Release \
+    -Dprotobuf_BUILD_TESTS=OFF \
+    -DBUILD_TESTING=OFF \
+    -DZLIB_ROOT=..\..\install \
+    -DCMAKE_INSTALL_PREFIX=..\..\install \
+    -G "NMake Makefiles" && \
+  "$(CMAKE)" --build build_cmake --config Release && \
+  "$(CMAKE)" --build build_cmake --config Release --target install
 
-dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build\Release\protoc.exe: dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build\protobuf.sln
-	cd dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build && msbuild protobuf.sln /t:Build /p:Configuration=Release;LinkIncremental=false
-
-dependencies\install\include\google\protobuf\message.h: dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build\include.tar
-	cd dependencies\install && ..\..\$(TAR) xvmf ..\sources\protobuf-$(PROTOBUF_TAG)\cmake\build\include.tar
-#	copy dependencies\sources\protobuf-$(PROTOBUF_TAG)\src\google\protobuf-$(PROTOBUF_TAG)\stubs\stl_util.h dependencies\install\include\google\protobuf-$(PROTOBUF_TAG)\stubs
-
-dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build\include.tar: dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build\protobuf.sln
-	cd dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build && extract_includes.bat
-# workaround waiting for https://github.com/google/protobuf/pull/4538
-	$(COPY) dependencies\sources\protobuf-$(PROTOBUF_TAG)\src\google\protobuf\*.proto dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build\include\google\protobuf
-	cd dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build && ..\..\..\..\..\$(TAR) cf include.tar include
-
-dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build\protobuf.sln: dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\CMakeLists.txt
-	-${MKDIR} dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build
-	${SED} -i -e '/\"\/MD\"/d' dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\CMakeLists.txt
-	cd dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\build && "$(CMAKE)" -G $(CMAKE_PLATFORM) -Dprotobuf_BUILD_TESTS=OFF ..
-
-dependencies\sources\protobuf-$(PROTOBUF_TAG)\cmake\CMakeLists.txt:
-	$(WGET) --quiet -P dependencies\archives --no-check-certificate https://github.com/google/protobuf/archive/v$(PROTOBUF_TAG).zip
-	$(UNZIP) -q -d dependencies\sources dependencies\archives\v$(PROTOBUF_TAG).zip
+dependencies/sources/protobuf-$(PROTOBUF_TAG): | dependencies/sources
+	-$(DELREC) dependencies/sources/protobuf-$(PROTOBUF_TAG)
+	git clone --quiet -b $(PROTOBUF_TAG) https://github.com/protocolbuffers/protobuf.git dependencies\sources\protobuf-$(PROTOBUF_TAG)
+	cd dependencies\sources\protobuf-$(PROTOBUF_TAG) && git apply "$(OR_TOOLS_TOP)\patches\protobuf-$(PROTOBUF_TAG).patch"
 
 PROTOBUF_INC = /I"$(WINDOWS_PROTOBUF_PATH)\\include"
 PROTOBUF_SWIG = -I"$(WINDOWS_PROTOBUF_DIR)/include"
@@ -322,12 +284,15 @@ DYNAMIC_PROTOBUF_LNK = "$(WINDOWS_PROTOBUF_PATH)\lib\libprotobuf.lib"
 STATIC_PROTOBUF_LNK = "$(WINDOWS_PROTOBUF_PATH)\lib\libprotobuf.lib"
 
 PROTOBUF_LNK = $(STATIC_PROTOBUF_LNK)
+
+DEPENDENCIES_INC += $(PROTOBUF_INC)
+SWIG_INC += $(PROTOBUF_SWIG)
 DEPENDENCIES_LNK += $(PROTOBUF_LNK)
 
 # Install Java protobuf
 #  - Compile generic message proto.
 #  - Compile duration.proto
-dependencies/install/lib/protobuf.jar: | dependencies/install/bin/protoc.exe
+dependencies/install/lib/protobuf.jar: | dependencies/install/lib/libprotobuf.lib
 	cd dependencies\\sources\\protobuf-$(PROTOBUF_TAG)\\java && \
 	  ..\\..\\..\\install\\bin\\protoc --java_out=core/src/main/java -I../src \
 	  ../src/google/protobuf/descriptor.proto
@@ -348,14 +313,16 @@ dependencies/install/lib/absl.lib: dependencies/sources/abseil-cpp-$(ABSL_TAG) |
 	cd dependencies\sources\abseil-cpp-$(ABSL_TAG) && \
   set MAKEFLAGS= && \
   "$(CMAKE)" -H. -Bbuild_cmake \
+    -DCMAKE_CXX_STANDARD=17 \
+    -DCMAKE_CXX_STANDARD_REQUIRED=ON \
     -DCMAKE_PREFIX_PATH=..\..\install \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=OFF \
     -DBUILD_TESTING=OFF \
     -DCMAKE_INSTALL_PREFIX=..\..\install \
     -G "NMake Makefiles" && \
-  "$(CMAKE)" --build build_cmake && \
-  "$(CMAKE)" --build build_cmake --target install
+  "$(CMAKE)" --build build_cmake --config Release && \
+  "$(CMAKE)" --build build_cmake --config Release --target install
 
 dependencies/sources/abseil-cpp-$(ABSL_TAG): | dependencies/sources
 	-$(DELREC) dependencies/sources/abseil-cpp-$(ABSL_TAG)
@@ -372,15 +339,19 @@ STATIC_ABSL_LNK = \
 DYNAMIC_ABSL_LNK = $(STATIC_ABSL_LNK)
 
 ABSL_LNK = $(STATIC_ABSL_LNK)
+
+DEPENDENCIES_INC += $(ABSL_INC)
+SWIG_INC += $(ABSL_SWIG)
 DEPENDENCIES_LNK += $(ABSL_LNK)
 
 ############
 ##  COIN  ##
 ############
 # Install Coin CBC
-install_coin_cbc: dependencies\install\bin\cbc.exe
+install_coin_cbc: dependencies/install/bin/cbc.exe
 
-dependencies\install\bin\cbc.exe: dependencies\sources\Cbc-$(CBC_TAG)\Cbc\MSVisualStudio\v10\$(CBC_PLATFORM)\cbc.exe
+CBC_SRCDIR = dependencies/sources/Cbc-$(CBC_TAG)
+dependencies/install/bin/cbc.exe: $(CBC_SRCDIR)/Cbc/MSVisualStudio/v10/$(CBC_PLATFORM)/cbc.exe
 	$(COPY) dependencies\sources\Cbc-$(CBC_TAG)\Cbc\MSVisualStudio\v10\$(CBC_PLATFORM)\*.lib dependencies\install\lib\coin
 	$(COPY) dependencies\sources\Cbc-$(CBC_TAG)\Cbc\src\*.hpp dependencies\install\include\coin
 	$(COPY) dependencies\sources\Cbc-$(CBC_TAG)\Clp\src\*.hpp dependencies\install\include\coin
@@ -395,7 +366,7 @@ dependencies\install\bin\cbc.exe: dependencies\sources\Cbc-$(CBC_TAG)\Cbc\MSVisu
 	$(COPY) dependencies\sources\Cbc-$(CBC_TAG)\Osi\src\Osi\*.h dependencies\install\include\coin
 	$(COPY) dependencies\sources\Cbc-$(CBC_TAG)\Cbc\MSVisualStudio\v10\$(CBC_PLATFORM)\cbc.exe dependencies\install\bin
 
-dependencies\sources\Cbc-$(CBC_TAG)\Cbc\MSVisualStudio\v10\$(CBC_PLATFORM)\cbc.exe: dependencies\sources\Cbc-$(CBC_TAG)\configure
+$(CBC_SRCDIR)/Cbc/MSVisualStudio/v10/$(CBC_PLATFORM)/cbc.exe: $(CBC_SRCDIR)
 	tools\win\upgrade_vs_project.cmd dependencies\\sources\\Cbc-$(CBC_TAG)\\Clp\\MSVisualStudio\\v10\\libOsiClp\\libOsiClp.vcxproj $(VS_RELEASE)
 	tools\win\upgrade_vs_project.cmd dependencies\\sources\\Cbc-$(CBC_TAG)\\Clp\\MSVisualStudio\\v10\\libClp\\libClp.vcxproj $(VS_RELEASE)
 	tools\win\upgrade_vs_project.cmd dependencies\\sources\\Cbc-$(CBC_TAG)\\Cbc\\MSVisualStudio\\v10\\libOsiCbc\\libOsiCbc.vcxproj $(VS_RELEASE)
@@ -408,10 +379,8 @@ dependencies\sources\Cbc-$(CBC_TAG)\Cbc\MSVisualStudio\v10\$(CBC_PLATFORM)\cbc.e
 	$(SED) -i 's/CBC_BUILD;/CBC_BUILD;CBC_THREAD_SAFE;CBC_NO_INTERRUPT;/g' dependencies\\sources\\Cbc-$(CBC_TAG)\\Cbc\\MSVisualStudio\\v10\\libCbcSolver\\libCbcSolver.vcxproj
 	cd dependencies\sources\Cbc-$(CBC_TAG)\Cbc\MSVisualStudio\v10 && msbuild Cbc.sln /t:cbc /p:Configuration=Release;BuildCmd=ReBuild
 
-CBC_ARCHIVE:=https://www.coin-or.org/download/source/Cbc/Cbc-${CBC_TAG}.zip
-
-dependencies\sources\Cbc-$(CBC_TAG)\configure:
-	$(WGET) --quiet --continue -P dependencies\archives --no-check-certificate ${CBC_ARCHIVE} || (@echo wget failed to dowload $(CBC_ARCHIVE), try running '$(WGET) -P dependencies\archives --no-check-certificate $(CBC_ARCHIVE)' then rerun 'make third_party' && exit 1)
+$(CBC_SRCDIR): | dependencies/sources
+	-$(DELREC) $(CBC_SRCDIR)
 	$(UNZIP) -q -d dependencies\sources dependencies\archives\Cbc-$(CBC_TAG).zip
 
 # This is needed to find Coin include files and libraries.
@@ -473,7 +442,66 @@ COIN_LNK = \
   $(OSI_LNK) \
   $(COINUTILS_LNK)
 
+DEPENDENCIES_INC += $(COIN_INC)
+SWIG_INC += $(COIN_SWIG)
 DEPENDENCIES_LNK += $(COIN_LNK)
+
+#########################
+##  SCIP               ##
+#########################
+.PHONY: build_scip
+ifeq ($(USE_SCIP),OFF)
+build_scip: $(GEN_DIR)/ortools/linear_solver/lpi_glop.cc
+
+$(GEN_DIR)/ortools/linear_solver/lpi_glop.cc: | $(GEN_DIR)/ortools/linear_solver
+	$(TOUCH) $(GEN_DIR)/ortools/linear_solver/lpi_glop.cc
+else
+build_scip: dependencies/install/lib/libscip.lib $(GEN_DIR)/ortools/linear_solver/lpi_glop.cc
+
+SCIP_SRCDIR = dependencies/sources/scip-$(SCIP_TAG)
+dependencies/install/lib/libscip.lib: $(SCIP_SRCDIR)
+	-tools\win\rm -rf $(SCIP_SRCDIR)\build_cmake
+	cd dependencies\sources\scip-$(SCIP_TAG) && \
+  set MAKEFLAGS= && \
+  "$(CMAKE)" -H. -Bbuild_cmake \
+    -DCMAKE_CXX_STANDARD=17 \
+    -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+    -DCMAKE_PREFIX_PATH=..\..\install \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DSHARED=OFF \
+    -DBUILD_TESTING=OFF \
+    -DCMAKE_INSTALL_PREFIX=..\..\install \
+    -DREADLINE=OFF \
+    -DGMP=OFF \
+    -DPAPILO=OFF \
+    -DZIMPL=OFF \
+    -DIPOPT=OFF \
+    -DTPI="tny" \
+    -DEXPRINT="none" \
+    -DLPS="none" \
+    -DSYM="none" \
+    -G "NMake Makefiles" && \
+  "$(CMAKE)" --build build_cmake --config Release && \
+  "$(CMAKE)" --build build_cmake --config Release --target install
+	lib /REMOVE:CMakeFiles\libscip.dir\lpi\lpi_none.c.obj $(OR_TOOLS_TOP)\dependencies\install\lib\libscip.lib
+
+$(SCIP_SRCDIR): | dependencies/sources
+	-$(DELREC) $(SCIP_SRCDIR)
+	-tools\win\gzip.exe -dc dependencies\archives\scip-$(SCIP_TAG).tgz | tools\win\tar.exe -x -v -m -C dependencies\\sources -f -
+	cd dependencies\sources\scip-$(SCIP_TAG) && git apply --ignore-whitespace "$(OR_TOOLS_TOP)\patches\scip-$(SCIP_TAG).patch"
+
+$(GEN_DIR)/ortools/linear_solver/lpi_glop.cc: $(SCIP_SRCDIR) | $(GEN_DIR)/ortools/linear_solver
+	copy dependencies\sources\scip-$(SCIP_TAG)\src\lpi\lpi_glop.cpp $(GEN_PATH)\ortools\linear_solver\lpi_glop.cc
+
+SCIP_INC = /I"$(WINDOWS_SCIP_PATH)\\include" /DUSE_SCIP /DNO_CONFIG_HEADER
+SCIP_SWIG = -I"$(WINDOWS_SCIP_DIR)/include" -DUSE_SCIP -DNO_CONFIG_HEADER
+SCIP_LNK = "$(WINDOWS_SCIP_PATH)\lib\libscip.lib"
+
+DEPENDENCIES_INC += $(SCIP_INC)
+SWIG_INC += $(SCIP_SWIG)
+DEPENDENCIES_LNK += $(SCIP_LNK)
+endif
 
 ############
 ##  SWIG  ##
@@ -485,7 +513,7 @@ dependencies/install/swigwin-$(SWIG_TAG)/swig.exe: dependencies/archives/swigwin
 	$(UNZIP) -q -d dependencies$Sinstall dependencies$Sarchives$Sswigwin-$(SWIG_TAG).zip
 	$(TOUCH) dependencies$Sinstall$Sswigwin-$(SWIG_TAG)$Sswig.exe
 
-SWIG_ARCHIVE:=https://superb-dca2.dl.sourceforge.net/project/swig/swigwin/swigwin-$(SWIG_TAG)/swigwin-$(SWIG_TAG).zip
+SWIG_ARCHIVE:=http://prdownloads.sourceforge.net/swig/swigwin-$(SWIG_TAG).zip
 
 dependencies/archives/swigwin-$(SWIG_TAG).zip:
 	$(WGET) --quiet -P dependencies$Sarchives --no-check-certificate $(SWIG_ARCHIVE)
@@ -503,19 +531,15 @@ clean_third_party: remove_readonly_svn_attribs
 	-$(DEL) Makefile.local
 	-$(DEL) dependencies\check.log
 	-$(DEL) dependencies\archives\swigwin*.zip
-	-$(DEL) dependencies\archives\Cbc*
-	-$(DEL) dependencies\archives\gflags*.zip
 	-$(DEL) dependencies\archives\sparsehash*.zip
 	-$(DEL) dependencies\archives\zlib*.zip
 	-$(DEL) dependencies\archives\v*.zip
 	-$(DEL) dependencies\archives\win_flex_bison*.zip
-	-$(DELREC) dependencies\archives
 	-$(DELREC) dependencies\sources\zlib*
-	-$(DELREC) dependencies\sources\gflags*
-	-$(DELREC) dependencies\sources\glog*
 	-$(DELREC) dependencies\sources\protobuf*
 	-$(DELREC) dependencies\sources\abseil-cpp*
 	-$(DELREC) dependencies\sources\Cbc-*
+	-$(DELREC) dependencies\sources\scip*
 	-$(DELREC) dependencies\sources\google*
 	-$(DELREC) dependencies\sources\glpk*
 	-$(DELREC) dependencies\sources\sparsehash*
@@ -527,12 +551,6 @@ detect_third_party:
 	@echo WINDOWS_ZLIB_DIR = $(WINDOWS_ZLIB_DIR)
 	@echo ZLIB_INC = $(ZLIB_INC)
 	@echo ZLIB_LNK = $(ZLIB_LNK)
-	@echo WINDOWS_GFLAGS_DIR = $(WINDOWS_GFLAGS_DIR)
-	@echo GFLAGS_INC = $(GFLAGS_INC)
-	@echo GFLAGS_LNK = $(GFLAGS_LNK)
-	@echo WINDOWS_GLOG_DIR = $(WINDOWS_GLOG_DIR)
-	@echo GLOG_INC = $(GLOG_INC)
-	@echo GLOG_LNK = $(GLOG_LNK)
 	@echo WINDOWS_PROTOBUF_DIR = $(WINDOWS_PROTOBUF_DIR)
 	@echo PROTOBUF_INC = $(PROTOBUF_INC)
 	@echo PROTOBUF_LNK = $(PROTOBUF_LNK)
@@ -544,17 +562,14 @@ detect_third_party:
 	@echo WINDOWS_CLP_DIR = $(WINDOWS_CLP_DIR)
 	@echo CLP_INC = $(CLP_INC)
 	@echo CLP_LNK = $(CLP_LNK)
+	@echo WINDOWS_SCIP_DIR = $(WINDOWS_SCIP_DIR)
+	@echo SCIP_INC = $(SCIP_INC)
+	@echo SCIP_LNK = $(SCIP_LNK)
 ifdef WINDOWS_GLPK_DIR
 	@echo WINDOWS_GLPK_DIR = $(WINDOWS_GLPK_DIR)
 	@echo GLPK_INC = $(GLPK_INC)
 	@echo DYNAMIC_GLPK_LNK = $(DYNAMIC_GLPK_LNK)
 	@echo STATIC_GLPK_LNK = $(STATIC_GLPK_LNK)
-endif
-ifdef WINDOWS_SCIP_DIR
-	@echo WINDOWS_SCIP_DIR = $(WINDOWS_SCIP_DIR)
-	@echo SCIP_INC = $(SCIP_INC)
-	@echo DYNAMIC_SCIP_LNK = $(DYNAMIC_SCIP_LNK)
-	@echo STATIC_SCIP_LNK = $(STATIC_SCIP_LNK)
 endif
 ifdef WINDOWS_CPLEX_DIR
 	@echo WINDOWS_CPLEX_DIR = $(WINDOWS_CPLEX_DIR)
@@ -562,10 +577,9 @@ ifdef WINDOWS_CPLEX_DIR
 	@echo DYNAMIC_CPLEX_LNK = $(DYNAMIC_CPLEX_LNK)
 	@echo STATIC_CPLEX_LNK = $(STATIC_CPLEX_LNK)
 endif
-ifdef WINDOWS_GUROBI_DIR
-	@echo WINDOWS_GUROBI_DIR = $(WINDOWS_GUROBI_DIR)
-	@echo GUROBI_INC = $(GUROBI_INC)
-	@echo DYNAMIC_GUROBI_LNK = $(DYNAMIC_GUROBI_LNK)
-	@echo STATIC_GUROBI_LNK = $(STATIC_GUROBI_LNK)
+ifdef WINDOWS_XPRESS_DIR
+	@echo WINDOWS_XPRESS_DIR = $(WINDOWS_XPRESS_DIR)
+	@echo XPRESS_INC = $(XPRESS_INC)
+	@echo XPRESS_LNK = $(XPRESS_LNK)
 endif
 	@echo off & echo(

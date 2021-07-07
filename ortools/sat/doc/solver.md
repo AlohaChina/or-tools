@@ -27,7 +27,6 @@
          * [Java code](#java-code-2)
          * [C# code](#c-code-5)
 
-<!-- Added by: lperron, at: Thu Nov 14 21:15:58 CET 2019 -->
 
 <!--te-->
 
@@ -41,10 +40,6 @@ solver. The most useful one is the time limit.
 
 ```python
 """Solves a problem with a time limit."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 from ortools.sat.python import cp_model
 
@@ -69,7 +64,7 @@ def SolveWithTimeLimitSampleSat():
 
   status = solver.Solve(model)
 
-  if status == cp_model.FEASIBLE:
+  if status == cp_model.OPTIMAL:
     print('x = %i' % solver.Value(x))
     print('y = %i' % solver.Value(y))
     print('z = %i' % solver.Value(z))
@@ -110,7 +105,7 @@ void SolveWithTimeLimitSampleSat() {
   const CpSolverResponse response = SolveCpModel(cp_model.Build(), &model);
   LOG(INFO) << CpSolverResponseStats(response);
 
-  if (response.status() == CpSolverStatus::FEASIBLE) {
+  if (response.status() == CpSolverStatus::OPTIMAL) {
     LOG(INFO) << "  x = " << SolutionIntegerValue(response, x);
     LOG(INFO) << "  y = " << SolutionIntegerValue(response, y);
     LOG(INFO) << "  z = " << SolutionIntegerValue(response, z);
@@ -130,6 +125,9 @@ int main() {
 ### Specifying the time limit in Java
 
 ```java
+package com.google.ortools.sat.samples;
+
+import com.google.ortools.Loader;
 import com.google.ortools.sat.CpSolverStatus;
 import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.CpSolver;
@@ -137,10 +135,8 @@ import com.google.ortools.sat.IntVar;
 
 /** Solves a problem with a time limit. */
 public class SolveWithTimeLimitSampleSat {
-
-  static { System.loadLibrary("jniortools"); }
-
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     // Create the model.
     CpModel model = new CpModel();
     // Create the variables.
@@ -157,7 +153,7 @@ public class SolveWithTimeLimitSampleSat {
     solver.getParameters().setMaxTimeInSeconds(10.0);
     CpSolverStatus status = solver.solve(model);
 
-    if (status == CpSolverStatus.FEASIBLE) {
+    if (status == CpSolverStatus.OPTIMAL) {
       System.out.println("x = " + solver.value(x));
       System.out.println("y = " + solver.value(y));
       System.out.println("z = " + solver.value(z));
@@ -176,34 +172,34 @@ using Google.OrTools.Sat;
 
 public class SolveWithTimeLimitSampleSat
 {
-  static void Main()
-  {
-    // Creates the model.
-    CpModel model = new CpModel();
-    // Creates the variables.
-    int num_vals = 3;
-
-    IntVar x = model.NewIntVar(0, num_vals - 1, "x");
-    IntVar y = model.NewIntVar(0, num_vals - 1, "y");
-    IntVar z = model.NewIntVar(0, num_vals - 1, "z");
-    // Adds a different constraint.
-    model.Add(x != y);
-
-    // Creates a solver and solves the model.
-    CpSolver solver = new CpSolver();
-
-    // Adds a time limit. Parameters are stored as strings in the solver.
-    solver.StringParameters = "max_time_in_seconds:10.0";
-
-    CpSolverStatus status = solver.Solve(model);
-
-    if (status == CpSolverStatus.Feasible)
+    static void Main()
     {
-      Console.WriteLine("x = " + solver.Value(x));
-      Console.WriteLine("y = " + solver.Value(y));
-      Console.WriteLine("z = " + solver.Value(z));
+        // Creates the model.
+        CpModel model = new CpModel();
+        // Creates the variables.
+        int num_vals = 3;
+
+        IntVar x = model.NewIntVar(0, num_vals - 1, "x");
+        IntVar y = model.NewIntVar(0, num_vals - 1, "y");
+        IntVar z = model.NewIntVar(0, num_vals - 1, "z");
+        // Adds a different constraint.
+        model.Add(x != y);
+
+        // Creates a solver and solves the model.
+        CpSolver solver = new CpSolver();
+
+        // Adds a time limit. Parameters are stored as strings in the solver.
+        solver.StringParameters = "max_time_in_seconds:10.0";
+
+        CpSolverStatus status = solver.Solve(model);
+
+        if (status == CpSolverStatus.Optimal)
+        {
+            Console.WriteLine("x = " + solver.Value(x));
+            Console.WriteLine("y = " + solver.Value(y));
+            Console.WriteLine("z = " + solver.Value(z));
+        }
     }
-  }
 }
 ```
 
@@ -218,10 +214,6 @@ The exact implementation depends on the target language.
 
 ```python
 """Solves an optimization problem and displays all intermediate solutions."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 from ortools.sat.python import cp_model
 
@@ -266,7 +258,7 @@ def SolveAndPrintIntermediateSolutionsSampleSat():
   # Creates a solver and solves.
   solver = cp_model.CpSolver()
   solution_printer = VarArrayAndObjectiveSolutionPrinter([x, y, z])
-  status = solver.SolveWithSolutionCallback(model, solution_printer)
+  status = solver.Solve(model, solution_printer)
 
   print('Status = %s' % solver.StatusName(status))
   print('Number of solutions found: %i' % solution_printer.solution_count())
@@ -325,6 +317,9 @@ int main() {
 ### Java code
 
 ```java
+package com.google.ortools.sat.samples;
+
+import com.google.ortools.Loader;
 import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.CpSolver;
 import com.google.ortools.sat.CpSolverSolutionCallback;
@@ -333,9 +328,6 @@ import com.google.ortools.sat.LinearExpr;
 
 /** Solves an optimization problem and displays all intermediate solutions. */
 public class SolveAndPrintIntermediateSolutionsSampleSat {
-
-  static { System.loadLibrary("jniortools"); }
-
   static class VarArraySolutionPrinterWithObjective extends CpSolverSolutionCallback {
     public VarArraySolutionPrinterWithObjective(IntVar[] variables) {
       variableArray = variables;
@@ -360,6 +352,7 @@ public class SolveAndPrintIntermediateSolutionsSampleSat {
   }
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     // Create the model.
     CpModel model = new CpModel();
 
@@ -380,7 +373,7 @@ public class SolveAndPrintIntermediateSolutionsSampleSat {
     CpSolver solver = new CpSolver();
     VarArraySolutionPrinterWithObjective cb =
         new VarArraySolutionPrinterWithObjective(new IntVar[] {x, y, z});
-    solver.solveWithSolutionCallback(model, cb);
+    solver.solve(model, cb);
 
     System.out.println(cb.getSolutionCount() + " solutions found.");
   }
@@ -395,63 +388,58 @@ using Google.OrTools.Sat;
 
 public class VarArraySolutionPrinterWithObjective : CpSolverSolutionCallback
 {
-  public VarArraySolutionPrinterWithObjective(IntVar[] variables)
-  {
-    variables_ = variables;
-  }
-
-  public override void OnSolutionCallback()
-  {
-    Console.WriteLine(String.Format("Solution #{0}: time = {1:F2} s",
-          solution_count_, WallTime()));
-    Console.WriteLine(
-        String.Format("  objective value = {0}", ObjectiveValue()));
-    foreach (IntVar v in variables_)
+    public VarArraySolutionPrinterWithObjective(IntVar[] variables)
     {
-      Console.WriteLine(
-          String.Format("  {0} = {1}", v.ShortString(), Value(v)));
+        variables_ = variables;
     }
-    solution_count_++;
-  }
 
-  public int SolutionCount()
-  {
-    return solution_count_;
-  }
+    public override void OnSolutionCallback()
+    {
+        Console.WriteLine(String.Format("Solution #{0}: time = {1:F2} s", solution_count_, WallTime()));
+        Console.WriteLine(String.Format("  objective value = {0}", ObjectiveValue()));
+        foreach (IntVar v in variables_)
+        {
+            Console.WriteLine(String.Format("  {0} = {1}", v.ShortString(), Value(v)));
+        }
+        solution_count_++;
+    }
 
-  private int solution_count_;
-  private IntVar[] variables_;
+    public int SolutionCount()
+    {
+        return solution_count_;
+    }
+
+    private int solution_count_;
+    private IntVar[] variables_;
 }
 
 public class SolveAndPrintIntermediateSolutionsSampleSat
 {
-  static void Main()
-  {
-    // Creates the model.
-    CpModel model = new CpModel();
+    static void Main()
+    {
+        // Creates the model.
+        CpModel model = new CpModel();
 
-    // Creates the variables.
-    int num_vals = 3;
+        // Creates the variables.
+        int num_vals = 3;
 
-    IntVar x = model.NewIntVar(0, num_vals - 1, "x");
-    IntVar y = model.NewIntVar(0, num_vals - 1, "y");
-    IntVar z = model.NewIntVar(0, num_vals - 1, "z");
+        IntVar x = model.NewIntVar(0, num_vals - 1, "x");
+        IntVar y = model.NewIntVar(0, num_vals - 1, "y");
+        IntVar z = model.NewIntVar(0, num_vals - 1, "z");
 
-    // Adds a different constraint.
-    model.Add(x != y);
+        // Adds a different constraint.
+        model.Add(x != y);
 
-    // Maximizes a linear combination of variables.
-    model.Maximize(x + 2 * y + 3 * z);
+        // Maximizes a linear combination of variables.
+        model.Maximize(x + 2 * y + 3 * z);
 
-    // Creates a solver and solves the model.
-    CpSolver solver = new CpSolver();
-    VarArraySolutionPrinterWithObjective cb =
-      new VarArraySolutionPrinterWithObjective(new IntVar[] { x, y, z });
-    solver.SolveWithSolutionCallback(model, cb);
+        // Creates a solver and solves the model.
+        CpSolver solver = new CpSolver();
+        VarArraySolutionPrinterWithObjective cb = new VarArraySolutionPrinterWithObjective(new IntVar[] { x, y, z });
+        solver.Solve(model, cb);
 
-    Console.WriteLine(String.Format("Number of solutions found: {0}",
-          cb.SolutionCount()));
-  }
+        Console.WriteLine(String.Format("Number of solutions found: {0}", cb.SolutionCount()));
+    }
 }
 ```
 
@@ -463,18 +451,23 @@ register a callback on the solver that will be called at each solution.
 Please note that it does not work in parallel
 (i. e. parameter `num_search_workers` > 1).
 
+It also does not work if the model contains an objective.
+
+The method will return the following:
+
+  * *FEASIBLE* if some solutions have been found
+  * *INFEASIBLE* if the solver has proved there are no solution
+  * *OPTIMAL* if all solutions have been found
+
 The exact implementation depends on the target language.
 
 ### Python code
 
-To search for all solutions, use the SearchForAllSolutions method.
+To search for all solutions, use the Solve() method after setting the correct
+parameter.
 
 ```python
 """Code sample that solves a model and displays all solutions."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 from ortools.sat.python import cp_model
 
@@ -514,7 +507,10 @@ def SearchForAllSolutionsSampleSat():
   # Create a solver and solve.
   solver = cp_model.CpSolver()
   solution_printer = VarArraySolutionPrinter([x, y, z])
-  status = solver.SearchForAllSolutions(model, solution_printer)
+  # Enumerate all solutions.
+  solver.parameters.enumerate_all_solutions = True
+  # Solve.
+  status = solver.Solve(model, solution_printer)
 
   print('Status = %s' % solver.StatusName(status))
   print('Number of solutions found: %i' % solution_printer.solution_count())
@@ -577,7 +573,13 @@ int main() {
 
 ### Java code
 
+As in Python, CpSolver.solve() must be called after setting the correct
+parameter.
+
 ```java
+package com.google.ortools.sat.samples;
+
+import com.google.ortools.Loader;
 import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.CpSolver;
 import com.google.ortools.sat.CpSolverSolutionCallback;
@@ -585,9 +587,6 @@ import com.google.ortools.sat.IntVar;
 
 /** Code sample that solves a model and displays all solutions. */
 public class SearchForAllSolutionsSampleSat {
-
-  static { System.loadLibrary("jniortools"); }
-
   static class VarArraySolutionPrinter extends CpSolverSolutionCallback {
     public VarArraySolutionPrinter(IntVar[] variables) {
       variableArray = variables;
@@ -611,6 +610,7 @@ public class SearchForAllSolutionsSampleSat {
   }
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     // Create the model.
     CpModel model = new CpModel();
 
@@ -627,7 +627,10 @@ public class SearchForAllSolutionsSampleSat {
     // Create a solver and solve the model.
     CpSolver solver = new CpSolver();
     VarArraySolutionPrinter cb = new VarArraySolutionPrinter(new IntVar[] {x, y, z});
-    solver.searchAllSolutions(model, cb);
+    // Tell the solver to enumerate all solutions.
+    solver.getParameters().setEnumerateAllSolutions(true);
+    // And solve.
+    solver.solve(model, cb);
 
     System.out.println(cb.getSolutionCount() + " solutions found.");
   }
@@ -636,7 +639,8 @@ public class SearchForAllSolutionsSampleSat {
 
 ### C\# code
 
-As in Python, CpSolver.SearchAllSolutions() must be called.
+As in Python, CpSolver.Solve() must be called after setting the correct string
+parameter.
 
 ```cs
 using System;
@@ -644,60 +648,59 @@ using Google.OrTools.Sat;
 
 public class VarArraySolutionPrinter : CpSolverSolutionCallback
 {
-  public VarArraySolutionPrinter(IntVar[] variables)
-  {
-    variables_ = variables;
-  }
-
-  public override void OnSolutionCallback()
-  {
+    public VarArraySolutionPrinter(IntVar[] variables)
     {
-      Console.WriteLine(String.Format("Solution #{0}: time = {1:F2} s",
-                                      solution_count_, WallTime()));
-      foreach (IntVar v in variables_)
-      {
-        Console.WriteLine(
-            String.Format("  {0} = {1}", v.ShortString(), Value(v)));
-      }
-      solution_count_++;
+        variables_ = variables;
     }
-  }
 
-  public int SolutionCount()
-  {
-    return solution_count_;
-  }
+    public override void OnSolutionCallback()
+    {
+        {
+            Console.WriteLine(String.Format("Solution #{0}: time = {1:F2} s", solution_count_, WallTime()));
+            foreach (IntVar v in variables_)
+            {
+                Console.WriteLine(String.Format("  {0} = {1}", v.ShortString(), Value(v)));
+            }
+            solution_count_++;
+        }
+    }
 
-  private int solution_count_;
-  private IntVar[] variables_;
+    public int SolutionCount()
+    {
+        return solution_count_;
+    }
+
+    private int solution_count_;
+    private IntVar[] variables_;
 }
 
 public class SearchForAllSolutionsSampleSat
 {
-  static void Main()
-  {
-    // Creates the model.
-    CpModel model = new CpModel();
+    static void Main()
+    {
+        // Creates the model.
+        CpModel model = new CpModel();
 
-    // Creates the variables.
-    int num_vals = 3;
+        // Creates the variables.
+        int num_vals = 3;
 
-    IntVar x = model.NewIntVar(0, num_vals - 1, "x");
-    IntVar y = model.NewIntVar(0, num_vals - 1, "y");
-    IntVar z = model.NewIntVar(0, num_vals - 1, "z");
+        IntVar x = model.NewIntVar(0, num_vals - 1, "x");
+        IntVar y = model.NewIntVar(0, num_vals - 1, "y");
+        IntVar z = model.NewIntVar(0, num_vals - 1, "z");
 
-    // Adds a different constraint.
-    model.Add(x != y);
+        // Adds a different constraint.
+        model.Add(x != y);
 
-    // Creates a solver and solves the model.
-    CpSolver solver = new CpSolver();
-    VarArraySolutionPrinter cb =
-        new VarArraySolutionPrinter(new IntVar[] { x, y, z });
-    solver.SearchAllSolutions(model, cb);
+        // Creates a solver and solves the model.
+        CpSolver solver = new CpSolver();
+        VarArraySolutionPrinter cb = new VarArraySolutionPrinter(new IntVar[] { x, y, z });
+        // Search for all solutions.
+        solver.StringParameters = "enumerate_all_solutions:true";
+        // And solve.
+        solver.Solve(model, cb);
 
-    Console.WriteLine(String.Format("Number of solutions found: {0}",
-                                    cb.SolutionCount()));
-  }
+        Console.WriteLine(String.Format("Number of solutions found: {0}", cb.SolutionCount()));
+    }
 }
 ```
 
@@ -714,10 +717,6 @@ CpSolverSolutionCallback.OnSolutionCallback().
 
 ```python
 """Code sample that solves a model and displays a small number of solutions."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 from ortools.sat.python import cp_model
 
@@ -757,7 +756,10 @@ def StopAfterNSolutionsSampleSat():
   # Create a solver and solve.
   solver = cp_model.CpSolver()
   solution_printer = VarArraySolutionPrinterWithLimit([x, y, z], 5)
-  status = solver.SearchForAllSolutions(model, solution_printer)
+  # Enumerate all solutions.
+  solver.parameters.enumerate_all_solutions = True
+  # Solve.
+  status = solver.Solve(model, solution_printer)
   print('Status = %s' % solver.StatusName(status))
   print('Number of solutions found: %i' % solution_printer.solution_count())
   assert solution_printer.solution_count() == 5
@@ -836,6 +838,9 @@ Stopping search is performed by calling stopSearch() inside of
 CpSolverSolutionCallback.onSolutionCallback().
 
 ```java
+package com.google.ortools.sat.samples;
+
+import com.google.ortools.Loader;
 import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.CpSolver;
 import com.google.ortools.sat.CpSolverSolutionCallback;
@@ -843,9 +848,6 @@ import com.google.ortools.sat.IntVar;
 
 /** Code sample that solves a model and displays a small number of solutions. */
 public class StopAfterNSolutionsSampleSat {
-
-  static { System.loadLibrary("jniortools"); }
-
   static class VarArraySolutionPrinterWithLimit extends CpSolverSolutionCallback {
     public VarArraySolutionPrinterWithLimit(IntVar[] variables, int limit) {
       variableArray = variables;
@@ -875,6 +877,7 @@ public class StopAfterNSolutionsSampleSat {
   }
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     // Create the model.
     CpModel model = new CpModel();
     // Create the variables.
@@ -888,7 +891,10 @@ public class StopAfterNSolutionsSampleSat {
     CpSolver solver = new CpSolver();
     VarArraySolutionPrinterWithLimit cb =
         new VarArraySolutionPrinterWithLimit(new IntVar[] {x, y, z}, 5);
-    solver.searchAllSolutions(model, cb);
+    // Tell the solver to enumerate all solutions.
+    solver.getParameters().setEnumerateAllSolutions(true);
+    // And solve.
+    solver.solve(model, cb);
 
     System.out.println(cb.getSolutionCount() + " solutions found.");
     if (cb.getSolutionCount() != 5) {
@@ -910,62 +916,56 @@ using Google.OrTools.Sat;
 
 public class VarArraySolutionPrinterWithLimit : CpSolverSolutionCallback
 {
-  public VarArraySolutionPrinterWithLimit(IntVar[] variables,
-                                          int solution_limit)
-  {
-    variables_ = variables;
-    solution_limit_ = solution_limit;
-  }
-
-  public override void OnSolutionCallback()
-  {
-    Console.WriteLine(String.Format("Solution #{0}: time = {1:F2} s",
-          solution_count_, WallTime()));
-    foreach (IntVar v in variables_)
+    public VarArraySolutionPrinterWithLimit(IntVar[] variables, int solution_limit)
     {
-      Console.WriteLine(
-          String.Format("  {0} = {1}", v.ShortString(), Value(v)));
+        variables_ = variables;
+        solution_limit_ = solution_limit;
     }
-    solution_count_++;
-    if (solution_count_ >= solution_limit_)
+
+    public override void OnSolutionCallback()
     {
-      Console.WriteLine(
-          String.Format("Stopping search after {0} solutions",
-            solution_limit_));
-      StopSearch();
+        Console.WriteLine(String.Format("Solution #{0}: time = {1:F2} s", solution_count_, WallTime()));
+        foreach (IntVar v in variables_)
+        {
+            Console.WriteLine(String.Format("  {0} = {1}", v.ShortString(), Value(v)));
+        }
+        solution_count_++;
+        if (solution_count_ >= solution_limit_)
+        {
+            Console.WriteLine(String.Format("Stopping search after {0} solutions", solution_limit_));
+            StopSearch();
+        }
     }
-  }
 
-  public int SolutionCount()
-  {
-    return solution_count_;
-  }
+    public int SolutionCount()
+    {
+        return solution_count_;
+    }
 
-  private int solution_count_;
-  private IntVar[] variables_;
-  private int solution_limit_;
+    private int solution_count_;
+    private IntVar[] variables_;
+    private int solution_limit_;
 }
 
 public class StopAfterNSolutionsSampleSat
 {
-  static void Main()
-  {
-    // Creates the model.
-    CpModel model = new CpModel();
-    // Creates the variables.
-    int num_vals = 3;
+    static void Main()
+    {
+        // Creates the model.
+        CpModel model = new CpModel();
+        // Creates the variables.
+        int num_vals = 3;
 
-    IntVar x = model.NewIntVar(0, num_vals - 1, "x");
-    IntVar y = model.NewIntVar(0, num_vals - 1, "y");
-    IntVar z = model.NewIntVar(0, num_vals - 1, "z");
+        IntVar x = model.NewIntVar(0, num_vals - 1, "x");
+        IntVar y = model.NewIntVar(0, num_vals - 1, "y");
+        IntVar z = model.NewIntVar(0, num_vals - 1, "z");
 
-    // Creates a solver and solves the model.
-    CpSolver solver = new CpSolver();
-    VarArraySolutionPrinterWithLimit cb =
-      new VarArraySolutionPrinterWithLimit(new IntVar[] { x, y, z }, 5);
-    solver.SearchAllSolutions(model, cb);
-    Console.WriteLine(String.Format("Number of solutions found: {0}",
-          cb.SolutionCount()));
-  }
+        // Creates a solver and solves the model.
+        CpSolver solver = new CpSolver();
+        VarArraySolutionPrinterWithLimit cb = new VarArraySolutionPrinterWithLimit(new IntVar[] { x, y, z }, 5);
+        solver.StringParameters = "enumerate_all_solutions:true";
+        solver.Solve(model, cb);
+        Console.WriteLine(String.Format("Number of solutions found: {0}", cb.SolutionCount()));
+    }
 }
 ```

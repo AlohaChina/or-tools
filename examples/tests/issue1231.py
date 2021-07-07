@@ -1,4 +1,4 @@
-# Copyright 2010-2011 Google
+# Copyright 2010-2021 Google
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -20,7 +20,6 @@ where each letter represents a unique digit.
 This problem has 72 different solutions in base 10.
 """
 
-from __future__ import print_function
 from ortools.constraint_solver import pywrapcp
 from os import abort
 

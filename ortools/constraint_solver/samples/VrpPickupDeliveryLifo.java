@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,7 +12,9 @@
 // limitations under the License.
 
 // [START program]
+package com.google.ortools.constraintsolver.samples;
 // [START import]
+import com.google.ortools.Loader;
 import com.google.ortools.constraintsolver.Assignment;
 import com.google.ortools.constraintsolver.FirstSolutionStrategy;
 import com.google.ortools.constraintsolver.RoutingDimension;
@@ -26,10 +28,6 @@ import java.util.logging.Logger;
 
 /** Minimal Pickup & Delivery Problem (PDP).*/
 public class VrpPickupDeliveryLifo {
-  static {
-    System.loadLibrary("jniortools");
-  }
-
   private static final Logger logger = Logger.getLogger(VrpPickupDeliveryLifo.class.getName());
 
   // [START data_model]
@@ -74,6 +72,9 @@ public class VrpPickupDeliveryLifo {
   /// @brief Print the solution.
   static void printSolution(
       DataModel data, RoutingModel routing, RoutingIndexManager manager, Assignment solution) {
+    // Solution cost.
+    logger.info("Objective : " + solution.objectiveValue());
+    // Inspect solution.
     long totalDistance = 0;
     for (int i = 0; i < data.vehicleNumber; ++i) {
       long index = routing.start(i);
@@ -95,6 +96,7 @@ public class VrpPickupDeliveryLifo {
   // [END solution_printer]
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     // Instantiate the data problem.
     // [START data]
     final DataModel data = new DataModel();

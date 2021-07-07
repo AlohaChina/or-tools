@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,11 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Optimization algorithms to solve a LinearBooleanProblem by using the SAT
-// solver as a black-box.
-//
-// TODO(user): Currently, only the MINIMIZATION problem type is supported.
-
 #ifndef OR_TOOLS_SAT_OPTIMIZATION_H_
 #define OR_TOOLS_SAT_OPTIMIZATION_H_
 
@@ -23,6 +18,7 @@
 #include <vector>
 
 #include "ortools/sat/boolean_problem.pb.h"
+#include "ortools/sat/cp_model_mapping.h"
 #include "ortools/sat/integer.h"
 #include "ortools/sat/integer_search.h"
 #include "ortools/sat/model.h"
@@ -32,15 +28,6 @@
 namespace operations_research {
 namespace sat {
 
-// Tries to minimize the given UNSAT core with a really simple heuristic.
-// The idea is to remove literals that are consequences of others in the core.
-// We already know that in the initial order, no literal is propagated by the
-// one before it, so we just look for propagation in the reverse order.
-//
-// Important: The given SatSolver must be the one that just produced the given
-// core.
-void MinimizeCore(SatSolver* solver, std::vector<Literal>* core);
-
 // Like MinimizeCore() with a slower but strictly better heuristic. This
 // algorithm should produce a minimal core with respect to propagation. We put
 // each literal of the initial core "last" at least once, so if such literal can
@@ -48,7 +35,10 @@ void MinimizeCore(SatSolver* solver, std::vector<Literal>* core);
 // removed.
 //
 // Note that this function doest NOT preserve the order of Literal in the core.
-void MinimizeCoreWithPropagation(SatSolver* solver, std::vector<Literal>* core);
+//
+// TODO(user): Avoid spending too much time trying to minimize a core.
+void MinimizeCoreWithPropagation(TimeLimit* limit, SatSolver* solver,
+                                 std::vector<Literal>* core);
 
 // Because the Solve*() functions below are also used in scripts that requires a
 // special output format, we use this to tell them whether or not to use the
@@ -237,8 +227,7 @@ class CoreBasedOptimizer {
 // TODO(user): This function brings dependency to the SCIP MIP solver which is
 // quite big, maybe we should find a way not to do that.
 SatSolver::Status MinimizeWithHittingSetAndLazyEncoding(
-    IntegerVariable objective_var, std::vector<IntegerVariable> variables,
-    std::vector<IntegerValue> coefficients,
+    const ObjectiveDefinition& objective_definition,
     const std::function<void()>& feasible_solution_observer, Model* model);
 
 }  // namespace sat

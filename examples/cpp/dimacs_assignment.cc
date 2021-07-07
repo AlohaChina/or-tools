@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,8 +16,10 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
-#include "absl/container/flat_hash_map.h"
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
 #include "absl/strings/str_format.h"
 #include "examples/cpp/parse_dimacs_assignment.h"
 #include "examples/cpp/print_dimacs_assignment.h"
@@ -28,18 +30,18 @@
 #include "ortools/graph/ebert_graph.h"
 #include "ortools/graph/linear_assignment.h"
 
-DEFINE_bool(assignment_compare_hungarian, false,
-            "Compare result and speed against Hungarian method.");
-DEFINE_string(assignment_problem_output_file, "",
-              "Print the problem to this file in DIMACS format (after layout "
-              "is optimized, if applicable).");
-DEFINE_bool(assignment_reverse_arcs, false,
-            "Ignored if --assignment_static_graph=true. Use StarGraph "
-            "if true, ForwardStarGraph if false.");
-DEFINE_bool(assignment_static_graph, true,
-            "Use the ForwardStarStaticGraph representation, "
-            "otherwise ForwardStarGraph or StarGraph according "
-            "to --assignment_reverse_arcs.");
+ABSL_FLAG(bool, assignment_compare_hungarian, false,
+          "Compare result and speed against Hungarian method.");
+ABSL_FLAG(std::string, assignment_problem_output_file, "",
+          "Print the problem to this file in DIMACS format (after layout "
+          "is optimized, if applicable).");
+ABSL_FLAG(bool, assignment_reverse_arcs, false,
+          "Ignored if --assignment_static_graph=true. Use StarGraph "
+          "if true, ForwardStarGraph if false.");
+ABSL_FLAG(bool, assignment_static_graph, true,
+          "Use the ForwardStarStaticGraph representation, "
+          "otherwise ForwardStarGraph or StarGraph according "
+          "to --assignment_reverse_arcs.");
 
 namespace operations_research {
 
@@ -130,7 +132,7 @@ int SolveDimacsAssignment(int argc, char* argv[]) {
   if (assignment == nullptr) {
     LOG(FATAL) << error_message;
   }
-  if (!FLAGS_assignment_problem_output_file.empty()) {
+  if (!absl::GetFlag(FLAGS_assignment_problem_output_file).empty()) {
     // The following tail array management stuff is done in a generic
     // way so we can plug in different types of graphs for which the
     // TailArrayManager template can be instantiated, even though we
@@ -139,12 +141,13 @@ int SolveDimacsAssignment(int argc, char* argv[]) {
     // this file and making no other changes to the code.
     TailArrayManager<GraphType> tail_array_manager(graph);
     PrintDimacsAssignmentProblem<GraphType>(
-        *assignment, tail_array_manager, FLAGS_assignment_problem_output_file);
+        *assignment, tail_array_manager,
+        absl::GetFlag(FLAGS_assignment_problem_output_file));
     tail_array_manager.ReleaseTailArrayIfForwardGraph();
   }
   CostValue hungarian_cost = 0.0;
   bool hungarian_solved = false;
-  if (FLAGS_assignment_compare_hungarian) {
+  if (absl::GetFlag(FLAGS_assignment_compare_hungarian)) {
     hungarian_cost = BuildAndSolveHungarianInstance(*assignment);
     hungarian_solved = true;
   }
@@ -185,16 +188,16 @@ int main(int argc, char* argv[]) {
   } else {
     usage = absl::StrFormat(kUsageTemplate, argv[0]);
   }
-  gflags::SetUsageMessage(usage);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  google::InitGoogleLogging(usage.c_str());
+  absl::ParseCommandLine(argc, argv);
 
   if (argc < 2) {
     LOG(FATAL) << usage;
   }
 
-  if (FLAGS_assignment_static_graph) {
+  if (absl::GetFlag(FLAGS_assignment_static_graph)) {
     return SolveDimacsAssignment<ForwardStarStaticGraph>(argc, argv);
-  } else if (FLAGS_assignment_reverse_arcs) {
+  } else if (absl::GetFlag(FLAGS_assignment_reverse_arcs)) {
     return SolveDimacsAssignment<StarGraph>(argc, argv);
   } else {
     return SolveDimacsAssignment<ForwardStarGraph>(argc, argv);

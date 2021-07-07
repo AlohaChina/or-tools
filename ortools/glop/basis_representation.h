@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -282,6 +282,9 @@ class BasisFactorization {
   double DeterministicTime() const;
 
  private:
+  // Called by ForceRefactorization() or Refactorize() or Initialize().
+  Status ComputeFactorization();
+
   // Return true if the submatrix of matrix_ given by basis_ is exactly the
   // identity (without permutation).
   bool IsIdentityBasis() const;
@@ -359,6 +362,7 @@ class BasisFactorization {
   LuFactorization lu_factorization_;
 
   // mutable because the Solve() functions are const but need to update this.
+  double last_factorization_deterministic_time_ = 0.0;
   mutable double deterministic_time_;
 
   DISALLOW_COPY_AND_ASSIGN(BasisFactorization);

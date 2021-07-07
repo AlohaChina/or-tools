@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -175,6 +175,7 @@ class StatsGroup {
 class DistributionStat : public Stat {
  public:
   explicit DistributionStat(const std::string& name);
+  DistributionStat() : DistributionStat("") {}
   DistributionStat(const std::string& name, StatsGroup* group);
   ~DistributionStat() override {}
   void Reset() override;
@@ -187,7 +188,7 @@ class DistributionStat : public Stat {
   double Sum() const override { return sum_; }
   double Max() const { return max_; }
   double Min() const { return min_; }
-  int64 Num() const { return num_; }
+  int64_t Num() const { return num_; }
 
   // Get the average of the distribution or 0.0 if empty.
   double Average() const;
@@ -207,20 +208,21 @@ class DistributionStat : public Stat {
   double sum_squares_from_average_;
   double min_;
   double max_;
-  int64 num_;
+  int64_t num_;
 };
 
 // Statistic on the distribution of a sequence of running times.
 // Also provides some facility to measure such time with the CPU cycle counter.
 //
 // TODO(user): Since we inherit from DistributionStat, we currently store the
-// sum of CPU cycles as a double internally. A better option is to use int64
+// sum of CPU cycles as a double internally. A better option is to use int64_t
 // because with the 53 bits of precision of a double, we will run into an issue
 // if the sum of times reaches 52 days for a 2GHz processor.
 class TimeDistribution : public DistributionStat {
  public:
   explicit TimeDistribution(const std::string& name)
       : DistributionStat(name), timer_() {}
+  TimeDistribution() : TimeDistribution("") {}
   TimeDistribution(const std::string& name, StatsGroup* group)
       : DistributionStat(name, group), timer_() {}
   std::string ValueAsString() const override;
@@ -262,6 +264,7 @@ class RatioDistribution : public DistributionStat {
  public:
   explicit RatioDistribution(const std::string& name)
       : DistributionStat(name) {}
+  RatioDistribution() : RatioDistribution("") {}
   RatioDistribution(const std::string& name, StatsGroup* group)
       : DistributionStat(name, group) {}
   std::string ValueAsString() const override;
@@ -273,6 +276,7 @@ class DoubleDistribution : public DistributionStat {
  public:
   explicit DoubleDistribution(const std::string& name)
       : DistributionStat(name) {}
+  DoubleDistribution() : DoubleDistribution("") {}
   DoubleDistribution(const std::string& name, StatsGroup* group)
       : DistributionStat(name, group) {}
   std::string ValueAsString() const override;
@@ -284,10 +288,11 @@ class IntegerDistribution : public DistributionStat {
  public:
   explicit IntegerDistribution(const std::string& name)
       : DistributionStat(name) {}
+  IntegerDistribution() : IntegerDistribution("") {}
   IntegerDistribution(const std::string& name, StatsGroup* group)
       : DistributionStat(name, group) {}
   std::string ValueAsString() const override;
-  void Add(int64 value);
+  void Add(int64_t value);
 };
 
 // Helper classes to time a block of code and add the result to a
@@ -418,9 +423,11 @@ inline std::string RemoveOperationsResearchAndGlop(
   operations_research::ScopedInstructionCounter scoped_instruction_count( \
       RemoveOperationsResearchAndGlop(__PRETTY_FUNCTION__), time_limit)
 
+#else  // !HAS_PERF_SUBSYSTEM
+#define SCOPED_INSTRUCTION_COUNT(time_limit)
 #endif  // HAS_PERF_SUBSYSTEM
 
-#else  // OR_STATS
+#else  // !OR_STATS
 // If OR_STATS is not defined, we remove some instructions that may be time
 // consuming.
 

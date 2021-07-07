@@ -1,4 +1,4 @@
-# Copyright 2010-2018 Google LLC
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -36,7 +36,7 @@ solver calls each time it finds a new solution.
 Additional methods for solving CP-SAT models:
 
 * [`Constraint`](#cp_model.Constraint): A few utility methods for modifying
-  contraints created by `CpModel`.
+  constraints created by `CpModel`.
 * [`LinearExpr`](#lineacp_model.LinearExpr): Methods for creating constraints
   and the objective from large arrays of coefficients.
 
@@ -50,8 +50,8 @@ from __future__ import print_function
 
 import collections
 import numbers
+import threading
 import time
-from six import iteritems
 
 from ortools.sat import cp_model_pb2
 from ortools.sat import sat_parameters_pb2
@@ -253,8 +253,40 @@ class LinearExpr(object):
             'calling %% on a linear expression is not supported, '
             'please use CpModel.AddModuloEquality')
 
+    def __pow__(self, _):
+        raise NotImplementedError(
+            'calling ** on a linear expression is not supported, '
+            'please use CpModel.AddMultiplicationEquality')
+
+    def __lshift__(self, _):
+        raise NotImplementedError(
+            'calling left shift on a linear expression is not supported')
+
+    def __rshift__(self, _):
+        raise NotImplementedError(
+            'calling right shift on a linear expression is not supported')
+
+    def __and__(self, _):
+        raise NotImplementedError(
+            'calling and on a linear expression is not supported, '
+            'please use CpModel.AddBoolAnd')
+
+    def __or__(self, _):
+        raise NotImplementedError(
+            'calling or on a linear expression is not supported, '
+            'please use CpModel.AddBoolOr')
+
+    def __xor__(self, _):
+        raise NotImplementedError(
+            'calling xor on a linear expression is not supported, '
+            'please use CpModel.AddBoolXor')
+
     def __neg__(self):
         return _ProductCst(self, -1)
+
+    def __bool__(self):
+        raise NotImplementedError(
+            'Evaluating a LinearExpr instance as a Boolean is not implemented.')
 
     def __eq__(self, arg):
         if arg is None:
@@ -284,8 +316,7 @@ class LinearExpr(object):
             cp_model_helper.AssertIsInt64(arg)
             if arg == INT_MIN:
                 raise ArithmeticError('< INT_MIN is not supported')
-            return BoundedLinearExpression(
-                self, [INT_MIN, cp_model_helper.CapInt64(arg - 1)])
+            return BoundedLinearExpression(self, [INT_MIN, arg - 1])
         else:
             return BoundedLinearExpression(self - arg, [INT_MIN, -1])
 
@@ -294,8 +325,7 @@ class LinearExpr(object):
             cp_model_helper.AssertIsInt64(arg)
             if arg == INT_MAX:
                 raise ArithmeticError('> INT_MAX is not supported')
-            return BoundedLinearExpression(
-                self, [cp_model_helper.CapInt64(arg + 1), INT_MAX])
+            return BoundedLinearExpression(self, [arg + 1, INT_MAX])
         else:
             return BoundedLinearExpression(self - arg, [1, INT_MAX])
 
@@ -309,11 +339,8 @@ class LinearExpr(object):
             elif arg == INT_MIN:
                 return BoundedLinearExpression(self, [INT_MIN + 1, INT_MAX])
             else:
-                return BoundedLinearExpression(self, [
-                    INT_MIN,
-                    cp_model_helper.CapInt64(arg - 1),
-                    cp_model_helper.CapInt64(arg + 1), INT_MAX
-                ])
+                return BoundedLinearExpression(
+                    self, [INT_MIN, arg - 1, arg + 1, INT_MAX])
         else:
             return BoundedLinearExpression(self - arg,
                                            [INT_MIN, -1, 1, INT_MAX])
@@ -426,6 +453,8 @@ class _ScalProd(LinearExpr):
             output += ' + {}'.format(self.__constant)
         elif self.__constant < 0:
             output += ' - {}'.format(-self.__constant)
+        if output is None:
+            output = '0'
         return output
 
     def __repr__(self):
@@ -460,11 +489,22 @@ class IntVar(LinearExpr):
     def __init__(self, model, domain, name):
         """See CpModel.NewIntVar below."""
         self.__model = model
-        self.__index = len(model.variables)
-        self.__var = model.variables.add()
-        self.__var.domain.extend(domain.FlattenedIntervals())
-        self.__var.name = name
         self.__negation = None
+        # Python do not support multiple __init__ methods.
+        # This method is only called from the CpModel class.
+        # We hack the parameter to support the two cases:
+        # case 1:
+        #     model is a CpModelProto, domain is a Domain, and name is a string.
+        # case 2:
+        #     model is a CpModelProto, domain is an index (int), and name is None.
+        if isinstance(domain, numbers.Integral) and name is None:
+            self.__index = domain
+            self.__var = model.variables[domain]
+        else:
+            self.__index = len(model.variables)
+            self.__var = model.variables.add()
+            self.__var.domain.extend(domain.FlattenedIntervals())
+            self.__var.name = name
 
     def Index(self):
         """Returns the index of the variable in the model."""
@@ -473,6 +513,12 @@ class IntVar(LinearExpr):
     def Proto(self):
         """Returns the variable protobuf."""
         return self.__var
+
+    def IsEqualTo(self, other):
+        """Returns true if self == other in the python sense."""
+        if not isinstance(other, IntVar):
+            return False
+        return self.Index() == other.Index()
 
     def __str__(self):
         if not self.__var.name:
@@ -503,7 +549,7 @@ class IntVar(LinearExpr):
             if bound < 0 or bound > 1:
                 raise TypeError(
                     'Cannot call Not on a non boolean variable: %s' % self)
-        if not self.__negation:
+        if self.__negation is None:
             self.__negation = _NotBooleanVariable(self)
         return self.__negation
 
@@ -522,6 +568,10 @@ class _NotBooleanVariable(LinearExpr):
 
     def __str__(self):
         return 'not(%s)' % str(self.__boolvar)
+
+    def __bool__(self):
+        raise NotImplementedError(
+            'Evaluating a literal as a Boolean value is not implemented.')
 
 
 class BoundedLinearExpression(object):
@@ -563,6 +613,30 @@ class BoundedLinearExpression(object):
     def Bounds(self):
         return self.__bounds
 
+    def __bool__(self):
+        # Check for x == y
+        if self.__bounds == [0, 0]:
+            coeffs_map, constant = self.__expr.GetVarValueMap()
+            if constant != 0:
+                return False
+            for coeff in coeffs_map.values():
+                if coeff != 0:
+                    return False
+            return True
+        elif self.__bounds == [INT_MIN, -1, 1, INT_MAX]:
+            # Check for x != y
+            coeffs_map, constant = self.__expr.GetVarValueMap()
+            if constant != 0:
+                return True
+            for coeff in coeffs_map.values():
+                if coeff != 0:
+                    return True
+            return False
+
+        raise NotImplementedError(
+            'Evaluating a BoundedLinearExpr as a Boolean value is not supported.'
+        )
+
 
 class Constraint(object):
     """Base class for constraints.
@@ -572,9 +646,9 @@ class Constraint(object):
   The purpose of this class is to allow specification of enforcement literals
   for this constraint.
 
-      b = model.BoolVar('b')
-      x = model.IntVar(0, 10, 'x')
-      y = model.IntVar(0, 10, 'y')
+      b = model.NewBoolVar('b')
+      x = model.NewIntVar(0, 10, 'x')
+      y = model.NewIntVar(0, 10, 'y')
 
       model.Add(x + 2 * y == 5).OnlyEnforceIf(b.Not())
   """
@@ -644,15 +718,28 @@ class IntervalVar(object):
     def __init__(self, model, start_index, size_index, end_index,
                  is_present_index, name):
         self.__model = model
-        self.__index = len(model.constraints)
-        self.__ct = self.__model.constraints.add()
-        self.__ct.interval.start = start_index
-        self.__ct.interval.size = size_index
-        self.__ct.interval.end = end_index
-        if is_present_index is not None:
-            self.__ct.enforcement_literal.append(is_present_index)
-        if name:
-            self.__ct.name = name
+        # As with the IntVar::__init__ method, we hack the __init__ method to
+        # support two use cases:
+        #   case 1: called when creating a new interval variable.
+        #      {start|size|end}_index are indices of integer variables
+        #      is_present_index is either None or the index of a Boolean literal.
+        #      name is a string
+        #   case 2: called when querying an existing interval variable.
+        #      start_index is an int, all parameters after are None.
+        if (size_index is None and end_index is None and
+                is_present_index is None and name is None):
+            self.__index = start_index
+            self.__ct = model.constraints[start_index]
+        else:
+            self.__index = len(model.constraints)
+            self.__ct = self.__model.constraints.add()
+            self.__ct.interval.start = start_index
+            self.__ct.interval.size = size_index
+            self.__ct.interval.end = end_index
+            if is_present_index is not None:
+                self.__ct.enforcement_literal.append(is_present_index)
+            if name:
+                self.__ct.name = name
 
     def Index(self):
         """Returns the index of the interval constraint in the model."""
@@ -683,6 +770,36 @@ class IntervalVar(object):
         return self.__ct.name
 
 
+def ObjectIsATrueLiteral(literal):
+    """Checks if literal is either True, or a Boolean literals fixed to True."""
+    if isinstance(literal, IntVar):
+        proto = literal.Proto()
+        return (len(proto.domain) == 2 and proto.domain[0] == 1 and
+                proto.domain[1] == 1)
+    if isinstance(literal, _NotBooleanVariable):
+        proto = literal.Not().Proto()
+        return (len(proto.domain) == 2 and proto.domain[0] == 0 and
+                proto.domain[1] == 0)
+    if isinstance(literal, numbers.Integral):
+        return literal == 1
+    return False
+
+
+def ObjectIsAFalseLiteral(literal):
+    """Checks if literal is either False, or a Boolean literals fixed to False."""
+    if isinstance(literal, IntVar):
+        proto = literal.Proto()
+        return (len(proto.domain) == 2 and proto.domain[0] == 0 and
+                proto.domain[1] == 0)
+    if isinstance(literal, _NotBooleanVariable):
+        proto = literal.Not().Proto()
+        return (len(proto.domain) == 2 and proto.domain[0] == 1 and
+                proto.domain[1] == 1)
+    if isinstance(literal, numbers.Integral):
+        return literal == 0
+    return False
+
+
 class CpModel(object):
     """Methods for building a CP model.
 
@@ -695,7 +812,6 @@ class CpModel(object):
     def __init__(self):
         self.__model = cp_model_pb2.CpModelProto()
         self.__constant_map = {}
-        self.__optional_constant_map = {}
 
     # Integer variable.
 
@@ -739,7 +855,8 @@ class CpModel(object):
 
     def NewConstant(self, value):
         """Declares a constant integer."""
-        return IntVar(self.__model, Domain(value, value), '')
+        return IntVar(self.__model, self.GetOrMakeIndexFromConstant(value),
+                      None)
 
     # Linear constraints.
 
@@ -753,7 +870,7 @@ class CpModel(object):
             ct = Constraint(self.__model.constraints)
             model_ct = self.__model.constraints[ct.Index()]
             coeffs_map, constant = linear_expr.GetVarValueMap()
-            for t in iteritems(coeffs_map):
+            for t in coeffs_map.items():
                 if not isinstance(t[0], IntVar):
                     raise TypeError('Wrong argument' + str(t))
                 cp_model_helper.AssertIsInt64(t[1])
@@ -816,6 +933,9 @@ class CpModel(object):
 
         if not variables:
             raise ValueError('AddElement expects a non-empty variables array')
+
+        if isinstance(index, numbers.Integral):
+            return self.Add(list(variables)[index] == target)
 
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
@@ -980,7 +1100,7 @@ class CpModel(object):
             raise ValueError('AddAutomaton expects some final states')
 
         if not transition_triples:
-            raise ValueError('AddAutomaton expects some transtion triples')
+            raise ValueError('AddAutomaton expects some transition triples')
 
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
@@ -1040,37 +1160,47 @@ class CpModel(object):
         """Adds Reservoir(times, demands, min_level, max_level).
 
     Maintains a reservoir level within bounds. The water level starts at 0, and
-    at any time >= 0, it must be between min_level and max_level. Furthermore,
-    this constraint expects all times variables to be >= 0.
+    at any time, it must be between min_level and max_level.
+
     If the variable `times[i]` is assigned a value t, then the current level
     changes by `demands[i]`, which is constant, at time t.
 
-    Note that level min can be > 0, or level max can be < 0. It just forces
-    some demands to be executed at time 0 to make sure that we are within those
-    bounds with the executed demands. Therefore, at any time t >= 0:
+     Note that min level must be <= 0, and the max level must be >= 0. Please
+     use fixed demands to simulate initial state.
 
-        sum(demands[i] if times[i] <= t) in [min_level, max_level]
+     Therefore, at any time:
+         sum(demands[i] if times[i] <= t) in [min_level, max_level]
 
     Args:
-      times: A list of positive integer variables which specify the time of the
+      times: A list of integer variables which specify the time of the
         filling or emptying the reservoir.
       demands: A list of integer values that specifies the amount of the
         emptying or filling.
-      min_level: At any time >= 0, the level of the reservoir must be greater of
+      min_level: At any time, the level of the reservoir must be greater or
         equal than the min level.
-      max_level: At any time >= 0, the level of the reservoir must be less or
-        equal than the max level.
+      max_level: At any time, the level of the reservoir must be less or equal
+        than the max level.
 
     Returns:
       An instance of the `Constraint` class.
 
     Raises:
       ValueError: if max_level < min_level.
+
+      ValueError: if max_level < 0.
+
+      ValueError: if min_level > 0
     """
 
         if max_level < min_level:
             return ValueError(
                 'Reservoir constraint must have a max_level >= min_level')
+
+        if max_level < 0:
+            return ValueError('Reservoir constraint must have a max_level >= 0')
+
+        if min_level > 0:
+            return ValueError('Reservoir constraint must have a min_level <= 0')
 
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
@@ -1084,45 +1214,55 @@ class CpModel(object):
                                          min_level, max_level):
         """Adds Reservoir(times, demands, actives, min_level, max_level).
 
-    Maintain a reservoir level within bounds. The water level starts at 0, and
-    at
-    any time >= 0, it must be within min_level, and max_level. Furthermore, this
-    constraints expect all times variables to be >= 0.
-    If `actives[i]` is true, and if `times[i]` is assigned a value t, then the
-    level of the reservoir changes by `demands[i]`, which is constant, at
-    time t.
+    Maintains a reservoir level within bounds. The water level starts at 0, and
+    at any time, it must be between min_level and max_level.
 
-    Note that level_min can be > 0, or level_max can be < 0. It just forces
-    some demands to be executed at time 0 to make sure that we are within those
-    bounds with the executed demands. Therefore, at any time t >= 0:
+    If the variable `times[i]` is assigned a value t, and `actives[i]` is
+    `True`, then the current level changes by `demands[i]`, which is constant,
+    at time t.
 
-        sum(demands[i] * actives[i] if times[i] <= t) in [min_level, max_level]
+     Note that min level must be <= 0, and the max level must be >= 0. Please
+     use fixed demands to simulate initial state.
+
+     Therefore, at any time:
+         sum(demands[i] * actives[i] if times[i] <= t) in [min_level, max_level]
+
 
     The array of boolean variables 'actives', if defined, indicates which
     actions are actually performed.
 
     Args:
-      times: A list of positive integer variables which specify the time of the
+      times: A list of integer variables which specify the time of the
         filling or emptying the reservoir.
       demands: A list of integer values that specifies the amount of the
         emptying or filling.
       actives: a list of boolean variables. They indicates if the
         emptying/refilling events actually take place.
-      min_level: At any time >= 0, the level of the reservoir must be greater of
+      min_level: At any time, the level of the reservoir must be greater or
         equal than the min level.
-      max_level: At any time >= 0, the level of the reservoir must be less or
-        equal than the max level.
+      max_level: At any time, the level of the reservoir must be less or equal
+        than the max level.
 
     Returns:
       An instance of the `Constraint` class.
 
     Raises:
       ValueError: if max_level < min_level.
+
+      ValueError: if max_level < 0.
+
+      ValueError: if min_level > 0
     """
 
         if max_level < min_level:
             return ValueError(
                 'Reservoir constraint must have a max_level >= min_level')
+
+        if max_level < 0:
+            return ValueError('Reservoir constraint must have a max_level >= 0')
+
+        if min_level > 0:
+            return ValueError('Reservoir constraint must have a min_level <= 0')
 
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
@@ -1366,14 +1506,90 @@ class CpModel(object):
     Returns:
       An instance of the `Constraint` class.
     """
+        return self.AddCumulativeWithEnergy(intervals, demands, [], capacity)
+
+    def AddCumulativeWithEnergy(self, intervals, demands, energies, capacity):
+        """Adds Cumulative(intervals, demands, energies, capacity).
+
+    This constraint enforces that:
+
+        for all t:
+          sum(demands[i]
+            if (start(intervals[t]) <= t < end(intervals[t])) and
+            (t is present)) <= capacity
+
+    The constraint assumes that:
+
+        for all t:
+          energies[t] == size(intervals[t]) * demands[t]
+
+    Args:
+      intervals: The list of intervals.
+      demands: The list of demands for each interval. Each demand must be >= 0.
+        Each demand can be an integer value, or an integer variable.
+      energies: The list of linear expressions representing the energy of each
+        task. This information is optional, and if given must be compatible with
+        the demand and the size of each task (energy = size * demand).
+      capacity: The maximum capacity of the cumulative constraint. It must be a
+        positive integer value or variable.
+
+    Returns:
+      An instance of the `Constraint` class.
+    """
         ct = Constraint(self.__model.constraints)
         model_ct = self.__model.constraints[ct.Index()]
         model_ct.cumulative.intervals.extend(
             [self.GetIntervalIndex(x) for x in intervals])
         model_ct.cumulative.demands.extend(
             [self.GetOrMakeIndex(x) for x in demands])
+        for e in energies:
+            model_ct.cumulative.energies.append(self.ParseLinearExpression(e))
         model_ct.cumulative.capacity = self.GetOrMakeIndex(capacity)
         return ct
+
+    # Support for deep copy.
+    def CopyFrom(self, other_model):
+        """Reset the model, and creates a new one from a CpModelProto instance."""
+        self.__model.CopyFrom(other_model.Proto())
+
+        # Rebuild constant map.
+        self.__constant_map.clear()
+        for i, var in enumerate(self.__model.variables):
+            if len(var.domain) == 2 and var.domain[0] == var.domain[1]:
+                self.__constant_map[var.domain[0]] = i
+
+    def GetBoolVarFromProtoIndex(self, index):
+        """Returns an already created Boolean variable from its index."""
+        if index < 0 or index >= len(self.__model.variables):
+            raise ValueError(
+                f'GetBoolVarFromProtoIndex: out of bound index {index}')
+        var = self.__model.variables[index]
+        if len(var.domain) != 2 or var.domain[0] < 0 or var.domain[1] > 1:
+            raise ValueError(
+                f'GetBoolVarFromProtoIndex: index {index} does not reference' +
+                ' a Boolean variable')
+
+        return IntVar(self.__model, index, None)
+
+    def GetIntVarFromProtoIndex(self, index):
+        """Returns an already created integer variable from its index."""
+        if index < 0 or index >= len(self.__model.variables):
+            raise ValueError(
+                f'GetIntVarFromProtoIndex: out of bound index {index}')
+        return IntVar(self.__model, index, None)
+
+    def GetIntervalVarFromProtoIndex(self, index):
+        """Returns an already created interval variable from its index."""
+        if index < 0 or index >= len(self.__model.constraints):
+            raise ValueError(
+                f'GetIntervalVarFromProtoIndex: out of bound index {index}')
+        ct = self.__model.constraints[index]
+        if not ct.HasField('interval'):
+            raise ValueError(
+                f'GetIntervalVarFromProtoIndex: index {index} does not reference an'
+                + ' interval variable')
+
+        return IntervalVar(self.__model, index, None, None, None, None)
 
     # Helpers.
 
@@ -1431,10 +1647,27 @@ class CpModel(object):
         return index
 
     def VarIndexToVarProto(self, var_index):
-        if var_index > 0:
+        if var_index >= 0:
             return self.__model.variables[var_index]
         else:
             return self.__model.variables[-var_index - 1]
+
+    def ParseLinearExpression(self, linear_expr):
+        """Returns a LinearExpressionProto built from a LinearExpr instance."""
+        result = cp_model_pb2.LinearExpressionProto()
+        if isinstance(linear_expr, numbers.Integral):
+            result.offset = linear_expr
+            return result
+
+        coeffs_map, constant = linear_expr.GetVarValueMap()
+        result.offset = constant
+        for t in coeffs_map.items():
+            if not isinstance(t[0], IntVar):
+                raise TypeError('Wrong argument' + str(t))
+            cp_model_helper.AssertIsInt64(t[1])
+            result.vars.append(t[0].Index())
+            result.coeffs.append(t[1])
+        return result
 
     def _SetObjective(self, obj, minimize):
         """Sets the objective of the model."""
@@ -1457,7 +1690,7 @@ class CpModel(object):
             else:
                 self.__model.objective.scaling_factor = -1
                 self.__model.objective.offset = -constant
-            for v, c, in iteritems(coeffs_map):
+            for v, c, in coeffs_map.items():
                 self.__model.objective.coeffs.append(c)
                 if minimize:
                     self.__model.objective.vars.append(v.Index())
@@ -1501,11 +1734,25 @@ class CpModel(object):
 
     def ModelStats(self):
         """Returns a string containing some model statistics."""
-        return pywrapsat.SatHelper.ModelStats(self.__model)
+        return pywrapsat.CpSatHelper.ModelStats(self.__model)
 
     def Validate(self):
         """Returns a string indicating that the model is invalid."""
-        return pywrapsat.SatHelper.ValidateModel(self.__model)
+        return pywrapsat.CpSatHelper.ValidateModel(self.__model)
+
+    def ExportToFile(self, file):
+        """Write the model as a protocol buffer to 'file'.
+
+    Args:
+      file: file to write the model to. If the filename ends with 'txt', the
+            model will be written as a text file, otherwise, the binary format
+            will be used.
+
+
+    Returns:
+      True if the model was correctly written.
+    """
+        return pywrapsat.CpSatHelper.WriteModelToFile(self.__model, file)
 
     def AssertIsBooleanVariable(self, x):
         if isinstance(x, IntVar):
@@ -1518,14 +1765,36 @@ class CpModel(object):
                             ' is not a boolean variable')
 
     def AddHint(self, var, value):
+        """Adds 'var == value' as a hint to the solver."""
         self.__model.solution_hint.vars.append(self.GetOrMakeIndex(var))
         self.__model.solution_hint.values.append(value)
+
+    def ClearHints(self):
+        """Remove any solution hint from the model."""
+        self.__model.ClearField('solution_hint')
+
+    def AddAssumption(self, lit):
+        """Add the literal 'lit' to the model as assumptions."""
+        self.__model.assumptions.append(self.GetOrMakeBooleanIndex(lit))
+
+    def AddAssumptions(self, literals):
+        """Add the literals to the model as assumptions."""
+        for lit in literals:
+            self.AddAssumption(lit)
+
+    def ClearAssumptions(self):
+        """Remove all assumptions from the model."""
+        self.__model.ClearField('assumptions')
 
 
 def EvaluateLinearExpr(expression, solution):
     """Evaluate a linear expression against a solution."""
     if isinstance(expression, numbers.Integral):
         return expression
+    if not isinstance(expression, LinearExpr):
+        raise TypeError('Cannot interpret %s as a linear expression.' %
+                        expression)
+
     value = 0
     to_process = [(expression, 1)]
     while to_process:
@@ -1576,24 +1845,43 @@ class CpSolver(object):
 
     def __init__(self):
         self.__model = None
-        self.__solution = None
+        self.__solution: cp_model_pb2.CpSolverResponse = None
         self.parameters = sat_parameters_pb2.SatParameters()
+        self.log_callback = None
+        self.__solve_wrapper: pywrapsat.SolveWrapper = None
+        self.__lock = threading.Lock()
 
-    def Solve(self, model):
-        """Solves the given model and returns the solve status."""
-        self.__solution = pywrapsat.SatHelper.SolveWithParameters(
-            model.Proto(), self.parameters)
+    def Solve(self, model, solution_callback=None):
+        """Solves a problem and passes each solution to the callback if not null."""
+        with self.__lock:
+            solve_wrapper = pywrapsat.SolveWrapper()
+
+        solve_wrapper.SetParameters(self.parameters)
+        if solution_callback is not None:
+            solve_wrapper.AddSolutionCallback(solution_callback)
+
+        if self.log_callback is not None:
+            solve_wrapper.AddLogCallback(self.log_callback)
+
+        self.__solution = solve_wrapper.Solve(model.Proto())
+
+        if solution_callback is not None:
+            solve_wrapper.ClearSolutionCallback(solution_callback)
+
+        with self.__lock:
+            self.__solve_wrapper = None
+
         return self.__solution.status
 
+    # DEPRECATED, just use Solve() with the callback argument.
     def SolveWithSolutionCallback(self, model, callback):
-        """Solves a problem and passes each solution found to the callback."""
-        self.__solution = (
-            pywrapsat.SatHelper.SolveWithParametersAndSolutionCallback(
-                model.Proto(), self.parameters, callback))
-        return self.__solution.status
+        """DEPRECATED Use Solve() with the callback argument."""
+        return self.Solve(model, callback)
 
     def SearchForAllSolutions(self, model, callback):
-        """Search for all solutions of a satisfiability problem.
+        """DEPRECATED Use Solve() with the right parameter.
+
+    Search for all solutions of a satisfiability problem.
 
     This method searches for all feasible solutions of a given model.
     Then it feeds the solution to the callback.
@@ -1614,15 +1902,21 @@ class CpSolver(object):
         if model.HasObjective():
             raise TypeError('Search for all solutions is only defined on '
                             'satisfiability problems')
-        # Store old values.
+        # Store old parameter.
         enumerate_all = self.parameters.enumerate_all_solutions
         self.parameters.enumerate_all_solutions = True
-        self.__solution = (
-            pywrapsat.SatHelper.SolveWithParametersAndSolutionCallback(
-                model.Proto(), self.parameters, callback))
-        # Restore parameters.
+
+        self.Solve(model, callback)
+
+        # Restore parameter.
         self.parameters.enumerate_all_solutions = enumerate_all
         return self.__solution.status
+
+    def StopSearch(self):
+        """Stops the current search asynchronously."""
+        with self.__lock:
+            if self.__solve_wrapper:
+                self.__solve_wrapper.StopSearch()
 
     def Value(self, expression):
         """Returns the value of a linear expression after solve."""
@@ -1644,8 +1938,10 @@ class CpSolver(object):
         """Returns the best lower (upper) bound found when min(max)imizing."""
         return self.__solution.best_objective_bound
 
-    def StatusName(self, status):
+    def StatusName(self, status=None):
         """Returns the name of the status returned by Solve()."""
+        if status is None:
+            status = self.__solution.status
         return cp_model_pb2.CpSolverStatus.Name(status)
 
     def NumBooleans(self):
@@ -1670,11 +1966,15 @@ class CpSolver(object):
 
     def ResponseStats(self):
         """Returns some statistics on the solution found as a string."""
-        return pywrapsat.SatHelper.SolverResponseStats(self.__solution)
+        return pywrapsat.CpSatHelper.SolverResponseStats(self.__solution)
 
     def ResponseProto(self):
         """Returns the response object."""
         return self.__solution
+
+    def SufficientAssumptionsForInfeasibility(self):
+        """Returns the indices of the infeasible assumptions."""
+        return self.__solution.sufficient_assumptions_for_infeasibility
 
 
 class CpSolverSolutionCallback(pywrapsat.SolutionCallback):
@@ -1748,6 +2048,10 @@ class CpSolverSolutionCallback(pywrapsat.SolutionCallback):
             raise RuntimeError('Solve() has not be called.')
         if isinstance(expression, numbers.Integral):
             return expression
+        if not isinstance(expression, LinearExpr):
+            raise TypeError('Cannot interpret %s as a linear expression.' %
+                            expression)
+
         value = 0
         to_process = [(expression, 1)]
         while to_process:

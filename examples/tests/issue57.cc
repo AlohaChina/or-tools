@@ -13,10 +13,10 @@
 
 #include "ortools/base/hash.h"
 #include "ortools/base/map_util.h"
-#include "ortools/base/stl_util.h"
 #include "ortools/base/random.h"
-#include "ortools/constraint_solver/constraint_solveri.h"
+#include "ortools/base/stl_util.h"
 #include "ortools/constraint_solver/constraint_solver.h"
+#include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/string_array.h"
 
 namespace operations_research {
@@ -33,7 +33,7 @@ void OverflowTest() {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  absl::ParseCommandLine(argc, argv);
   operations_research::OverflowTest();
   return 0;
 }

@@ -1,4 +1,4 @@
-# Copyright 2010-2018 Google LLC
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -12,7 +12,6 @@
 # limitations under the License.
 """Tasks and workers to group assignment to average sum(cost) / #workers"""
 
-from __future__ import print_function
 
 from ortools.sat.python import cp_model
 
@@ -99,7 +98,7 @@ def tasks_and_workers_assignment_sat():
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = 60 * 60 * 2
     objective_printer = ObjectivePrinter()
-    status = solver.SolveWithSolutionCallback(model, objective_printer)
+    status = solver.Solve(model, objective_printer)
     print(solver.ResponseStats())
 
     if status == cp_model.OPTIMAL:

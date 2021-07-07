@@ -1,4 +1,4 @@
-# Copyright 2010-2018 Google LLC
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -11,9 +11,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Tests for ortools.linear_solver.pywraplp."""
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 import unittest
 from ortools.linear_solver import linear_solver_pb2
@@ -110,7 +107,6 @@ class PyWrapLpTest(unittest.TestCase):
         """Example of simple boolean program with the C++ style API."""
         solver = pywraplp.Solver('RunBooleanExampleCppStyle',
                                  optimization_problem_type)
-        infinity = solver.infinity()
         # x1 and x2 are integer non-negative variables.
         x1 = solver.BoolVar('x1')
         x2 = solver.BoolVar('x2')
@@ -128,19 +124,22 @@ class PyWrapLpTest(unittest.TestCase):
 
         self.SolveAndPrint(solver, [x1, x2], [c0])
 
-    def SolveAndPrint(self, solver, variable_list, constraint_list):
+    def SolveAndPrint(self, solver, variable_list, constraint_list, tolerance=1e-7):
         """Solve the problem and print the solution."""
         print(('Number of variables = %d' % solver.NumVariables()))
+        self.assertEqual(solver.NumVariables(), len(variable_list))
+
         print(('Number of constraints = %d' % solver.NumConstraints()))
+        self.assertEqual(solver.NumConstraints(), len(constraint_list))
 
         result_status = solver.Solve()
 
         # The problem has an optimal solution.
-        assert result_status == pywraplp.Solver.OPTIMAL
+        self.assertEqual(result_status, pywraplp.Solver.OPTIMAL)
 
         # The solution looks legit (when using solvers others than
         # GLOP_LINEAR_PROGRAMMING, verifying the solution is highly recommended!).
-        assert solver.VerifySolution(1e-7, True)
+        self.assertTrue(solver.VerifySolution(tolerance, True))
 
         print(('Problem solved in %f milliseconds' % solver.wall_time()))
 
@@ -167,30 +166,31 @@ class PyWrapLpTest(unittest.TestCase):
         all_names_and_problem_types = (list(
             linear_solver_pb2.MPModelRequest.SolverType.items()))
         for name, problem_type in all_names_and_problem_types:
-            if not pywraplp.Solver.SupportsProblemType(problem_type):
-                continue
-            if name.startswith('GUROBI'):
-                continue
-            if name.endswith('LINEAR_PROGRAMMING'):
-                print(('\n------ Linear programming example with %s ------' %
-                       name))
-                print('\n*** Natural language API ***')
-                self.RunLinearExampleNaturalLanguageAPI(problem_type)
-                print('\n*** C++ style API ***')
-                self.RunLinearExampleCppStyleAPI(problem_type)
-            elif name.endswith('MIXED_INTEGER_PROGRAMMING'):
-                print((
-                    '\n------ Mixed Integer programming example with %s ------'
-                    % name))
-                print('\n*** C++ style API ***')
-                self.RunMixedIntegerExampleCppStyleAPI(problem_type)
-            elif name.endswith('INTEGER_PROGRAMMING'):
-                print(('\n------ Boolean programming example with %s ------' %
-                       name))
-                print('\n*** C++ style API ***')
-                self.RunBooleanExampleCppStyleAPI(problem_type)
-            else:
-                print('ERROR: %s unsupported' % name)
+            with self.subTest(f'{name}: {problem_type}'):
+                if not pywraplp.Solver.SupportsProblemType(problem_type):
+                    continue
+                if name.startswith('GUROBI'):
+                    continue
+                if name.endswith('LINEAR_PROGRAMMING'):
+                    print(('\n------ Linear programming example with %s ------' %
+                           name))
+                    print('\n*** Natural language API ***')
+                    self.RunLinearExampleNaturalLanguageAPI(problem_type)
+                    print('\n*** C++ style API ***')
+                    self.RunLinearExampleCppStyleAPI(problem_type)
+                elif name.endswith('MIXED_INTEGER_PROGRAMMING'):
+                    print((
+                        '\n------ Mixed Integer programming example with %s ------'
+                        % name))
+                    print('\n*** C++ style API ***')
+                    self.RunMixedIntegerExampleCppStyleAPI(problem_type)
+                elif name.endswith('INTEGER_PROGRAMMING'):
+                    print(('\n------ Boolean programming example with %s ------' %
+                           name))
+                    print('\n*** C++ style API ***')
+                    self.RunBooleanExampleCppStyleAPI(problem_type)
+                else:
+                    print('ERROR: %s unsupported' % name)
 
     def testSetHint(self):
         print('testSetHint')
@@ -225,7 +225,11 @@ class PyWrapLpTest(unittest.TestCase):
         solver.Add(x >= 20)
 
         result_status = solver.Solve()
-        print(result_status) # outputs: 0        
+        print(result_status) # outputs: 0
+
+    def testSolveFromProto(self):
+        solver = pywraplp.Solver('', pywraplp.Solver.GLOP_LINEAR_PROGRAMMING)
+        solver.LoadSolutionFromProto(linear_solver_pb2.MPSolutionResponse())
 
 
 if __name__ == '__main__':

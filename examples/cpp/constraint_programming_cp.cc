@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -20,7 +20,7 @@ namespace operations_research {
 void RunConstraintProgrammingExample() {
   // Instantiate the solver.
   Solver solver("ConstraintProgrammingExample");
-  const int64 numVals = 3;
+  const int64_t numVals = 3;
 
   // Define decision variables.
   IntVar* const x = solver.MakeIntVar(0, numVals - 1, "x");
@@ -41,7 +41,7 @@ void RunConstraintProgrammingExample() {
   solver.NewSearch(db);
   while (solver.NextSolution()) {
     LOG(INFO) << "Solution"
-              << ": x = " << x->Value() << "; y = " << x->Value()
+              << ": x = " << x->Value() << "; y = " << y->Value()
               << "; z = " << z->Value();
   }
   solver.EndSearch();
@@ -55,7 +55,7 @@ void RunConstraintProgrammingExample() {
 
 int main(int argc, char** argv) {
   google::InitGoogleLogging(argv[0]);
-  FLAGS_logtostderr = 1;
+  absl::SetFlag(&FLAGS_logtostderr, 1);
   operations_research::RunConstraintProgrammingExample();
   return EXIT_SUCCESS;
 }

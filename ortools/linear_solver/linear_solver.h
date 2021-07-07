@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -134,6 +134,7 @@
 #ifndef OR_TOOLS_LINEAR_SOLVER_LINEAR_SOLVER_H_
 #define OR_TOOLS_LINEAR_SOLVER_LINEAR_SOLVER_H_
 
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <map>
@@ -143,18 +144,22 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
+#include "absl/status/status.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_format.h"
 #include "absl/types/optional.h"
-#include "ortools/base/commandlineflags.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
-#include "ortools/base/status.h"
 #include "ortools/base/timer.h"
 #include "ortools/linear_solver/linear_expr.h"
 #include "ortools/linear_solver/linear_solver.pb.h"
+#include "ortools/linear_solver/linear_solver_callback.h"
 #include "ortools/port/proto_utils.h"
+
+ABSL_DECLARE_FLAG(bool, linear_solver_enable_verbose_output);
 
 namespace operations_research {
 
@@ -165,6 +170,9 @@ class MPObjective;
 class MPSolverInterface;
 class MPSolverParameters;
 class MPVariable;
+
+// There is a homonymous version taking a MPSolver::OptimizationProblemType.
+bool SolverTypeIsMip(MPModelRequest::SolverType solver_type);
 
 /**
  * This mathematical programming (MP) solver class is the main class
@@ -179,61 +187,72 @@ class MPSolver {
    *  (take particular care of the open-source version).
    */
   enum OptimizationProblemType {
-#ifdef USE_CLP
-    /// Linear Programming solver using Coin CBC.
+    // Linear programming problems.
+    // ----------------------------
     CLP_LINEAR_PROGRAMMING = 0,
-#endif
-#ifdef USE_GLPK
-    /// Linear Programming solver using GLPK.
     GLPK_LINEAR_PROGRAMMING = 1,
-#endif
-    /// Linear Programming solver using GLOP (Recommended solver).
-    GLOP_LINEAR_PROGRAMMING = 2,
-#ifdef USE_GUROBI
-    /// Linear Programming solver using GUROBI.
-    GUROBI_LINEAR_PROGRAMMING = 6,
-#endif
-#ifdef USE_CPLEX
-    /// Linear Programming solver using CPLEX.
-    CPLEX_LINEAR_PROGRAMMING = 10,
-#endif
+    GLOP_LINEAR_PROGRAMMING = 2,  // Recommended default value. Made in Google.
 
-// Integer programming problems.
-#ifdef USE_SCIP
-    /// Mixed integer Programming Solver using SCIP.
+    // Integer programming problems.
+    // -----------------------------
     SCIP_MIXED_INTEGER_PROGRAMMING = 3,  // Recommended default value.
-#endif
-#ifdef USE_GLPK
-    /// Mixed integer Programming Solver using SCIP.
     GLPK_MIXED_INTEGER_PROGRAMMING = 4,
-#endif
-#ifdef USE_CBC
-    /// Mixed integer Programming Solver using Coin CBC.
     CBC_MIXED_INTEGER_PROGRAMMING = 5,
-#endif
-#if defined(USE_GUROBI)
-    /// Mixed integer Programming Solver using GUROBI.
+
+    // Commercial software (need license).
+    GUROBI_LINEAR_PROGRAMMING = 6,
     GUROBI_MIXED_INTEGER_PROGRAMMING = 7,
-#endif
-#if defined(USE_CPLEX)
-    /// Mixed integer Programming Solver using CPLEX.
+    CPLEX_LINEAR_PROGRAMMING = 10,
     CPLEX_MIXED_INTEGER_PROGRAMMING = 11,
-#endif
-    /// Linear Boolean Programming Solver.
-    BOP_INTEGER_PROGRAMMING = 12,
-    /// SAT based solver (requires only integer and Boolean variables).
-    /// If you pass it mixed integer problems, it will scale coefficients to
-    /// integer values, and solve continuous variables as integral variables.
-    SAT_INTEGER_PROGRAMMING = 14,
-#if defined(USE_XPRESS)
     XPRESS_LINEAR_PROGRAMMING = 101,
     XPRESS_MIXED_INTEGER_PROGRAMMING = 102,
-#endif
+
+    // Boolean optimization problem (requires only integer variables and works
+    // best with only Boolean variables).
+    BOP_INTEGER_PROGRAMMING = 12,
+
+    // SAT based solver (requires only integer and Boolean variables).
+    // If you pass it mixed integer problems, it will scale coefficients to
+    // integer values, and solver continuous variables as integral variables.
+    SAT_INTEGER_PROGRAMMING = 14,
+
+    // Dedicated knapsack solvers.
+    KNAPSACK_MIXED_INTEGER_PROGRAMMING = 13,
   };
 
   /// Create a solver with the given name and underlying solver backend.
   MPSolver(const std::string& name, OptimizationProblemType problem_type);
   virtual ~MPSolver();
+
+  /**
+   * Recommended factory method to create a MPSolver instance, especially in
+   * non C++ languages.
+   *
+   * It returns a newly created solver instance if successful, or a nullptr
+   * otherwise. This can occur if the relevant interface is not linked in, or if
+   * a needed license is not accessible for commercial solvers.
+   *
+   * Ownership of the solver is passed on to the caller of this method.
+   * It will accept both string names of the OptimizationProblemType enum, as
+   * well as a short version (i.e. "SCIP_MIXED_INTEGER_PROGRAMMING" or "SCIP").
+   *
+   * solver_id is case insensitive, and the following names are supported:
+   *   - CLP_LINEAR_PROGRAMMING or CLP
+   *   - CBC_MIXED_INTEGER_PROGRAMMING or CBC
+   *   - GLOP_LINEAR_PROGRAMMING or GLOP
+   *   - BOP_INTEGER_PROGRAMMING or BOP
+   *   - SAT_INTEGER_PROGRAMMING or SAT or CP_SAT
+   *   - SCIP_MIXED_INTEGER_PROGRAMMING or SCIP
+   *   - GUROBI_LINEAR_PROGRAMMING or GUROBI_LP
+   *   - GUROBI_MIXED_INTEGER_PROGRAMMING or GUROBI or GUROBI_MIP
+   *   - CPLEX_LINEAR_PROGRAMMING or CPLEX_LP
+   *   - CPLEX_MIXED_INTEGER_PROGRAMMING or CPLEX or CPLEX_MIP
+   *   - XPRESS_LINEAR_PROGRAMMING or XPRESS_LP
+   *   - XPRESS_MIXED_INTEGER_PROGRAMMING or XPRESS or XPRESS_MIP
+   *   - GLPK_LINEAR_PROGRAMMING or GLPK_LP
+   *   - GLPK_MIXED_INTEGER_PROGRAMMING or GLPK or GLPK_MIP
+   */
+  static MPSolver* CreateSolver(const std::string& solver_id);
 
   /**
    * Whether the given problem type is supported (this will depend on the
@@ -244,9 +263,17 @@ class MPSolver {
   /**
    * Parses the name of the solver. Returns true if the solver type is
    * successfully parsed as one of the OptimizationProblemType.
+   * See the documentation of CreateSolver() for the list of supported names.
    */
-  static bool ParseSolverType(absl::string_view solver,
+  static bool ParseSolverType(absl::string_view solver_id,
                               OptimizationProblemType* type);
+
+  /**
+   * Parses the name of the solver and returns the correct optimization type or
+   * dies. Invariant: ParseSolverTypeOrDie(ToString(type)) = type.
+   */
+  static OptimizationProblemType ParseSolverTypeOrDie(
+      const std::string& solver_id);
 
   bool IsMIP() const;
 
@@ -275,6 +302,11 @@ class MPSolver {
    * the order in which they were created.)
    */
   const std::vector<MPVariable*>& variables() const { return variables_; }
+
+  /**
+   * Returns the variable at position index.
+   */
+  MPVariable* variable(int index) const { return variables_[index]; }
 
   /**
    * Looks up a variable by name, and returns nullptr if it does not exist. The
@@ -341,6 +373,9 @@ class MPSolver {
    * They are listed in the order in which they were created.
    */
   const std::vector<MPConstraint*>& constraints() const { return constraints_; }
+
+  /** Returns the constraint at the given index. */
+  MPConstraint* constraint(int index) const { return constraints_[index]; }
 
   /**
    *  Looks up a constraint by name, and returns nullptr if it does not exist.
@@ -416,7 +451,7 @@ class MPSolver {
     NOT_SOLVED = 6
   };
 
-  /// Solves the problem using default parameter values.
+  /// Solves the problem using the default parameter values.
   ResultStatus Solve();
 
   /// Solves the problem using the specified parameter values.
@@ -505,6 +540,12 @@ class MPSolver {
    * If you want to keep the MPSolver alive (for debugging, or for incremental
    * solving), you should write another version of this function that creates
    * the MPSolver object on the heap and returns it.
+   *
+   * Note(pawell): This attempts to first use `DirectlySolveProto()` (if
+   * implemented). Consequently, this most likely does *not* override any of
+   * the default parameters of the underlying solver. This behavior *differs*
+   * from `MPSolver::Solve()` which by default sets the feasibility tolerance
+   * and the gap limit (as of 2020/02/11, to 1e-7 and 0.0001, respectively).
    */
   static void SolveWithProto(const MPModelRequest& model_request,
                              MPSolutionResponse* response);
@@ -538,12 +579,14 @@ class MPSolver {
    *     like it should be):
    * - loading a solution whose variables don't correspond to the solver's
    *   current variables
+   * - loading a dual solution whose constraints don't correspond to the
+   *   solver's current constraints
    * - loading a solution with a status other than OPTIMAL / FEASIBLE.
    *
    * Note: the objective value isn't checked. You can use VerifySolution() for
    *       that.
    */
-  util::Status LoadSolutionFromProto(
+  absl::Status LoadSolutionFromProto(
       const MPSolutionResponse& response,
       double tolerance = kDefaultPrimalTolerance);
 
@@ -551,7 +594,7 @@ class MPSolver {
    * Resets values of out of bound variables to the corresponding bound and
    * returns an error if any of the variables have NaN value.
    */
-  util::Status ClampSolutionWithinBounds();
+  absl::Status ClampSolutionWithinBounds();
 
   /**
    * Shortcuts to the homonymous MPModelProtoExporter methods, via exporting to
@@ -573,7 +616,7 @@ class MPSolver {
    * details). Also, some solvers may not (yet) support this function, but still
    * enable multi-threading via SetSolverSpecificParametersAsString().
    */
-  util::Status SetNumThreads(int num_threads);
+  absl::Status SetNumThreads(int num_threads);
 
   /// Returns the number of threads to be used during solve.
   int GetNumThreads() const { return num_threads_; }
@@ -665,16 +708,16 @@ class MPSolver {
   }
 
   /// Returns the number of simplex iterations.
-  int64 iterations() const;
+  int64_t iterations() const;
 
   /**
    * Returns the number of branch-and-bound nodes evaluated during the solve.
    *
    * Only available for discrete problems.
    */
-  int64 nodes() const;
+  int64_t nodes() const;
 
-  /// Returns a std::string describing the underlying solver and its version.
+  /// Returns a string describing the underlying solver and its version.
   std::string SolverVersion() const;
 
   /**
@@ -727,21 +770,30 @@ class MPSolver {
    * not the solver computes them ahead of time or when NextSolution() is called
    * is solver specific.
    *
-   * As of 2018-08-09, only Gurobi supports NextSolution(), see
-   * linear_solver_underlying_gurobi_test for an example of how to configure
-   * Gurobi for this purpose. The other solvers return false unconditionally.
+   * As of 2020-02-10, only Gurobi and SCIP support NextSolution(), see
+   * linear_solver_interfaces_test for an example of how to configure these
+   * solvers for multiple solutions. Other solvers return false unconditionally.
    */
   ABSL_MUST_USE_RESULT bool NextSolution();
+
+  // Does not take ownership of "mp_callback".
+  //
+  // As of 2019-10-22, only SCIP and Gurobi support Callbacks.
+  // SCIP does not support suggesting a heuristic solution in the callback.
+  //
+  // See go/mpsolver-callbacks for additional documentation.
+  void SetCallback(MPCallback* mp_callback);
+  bool SupportsCallbacks() const;
 
   // DEPRECATED: Use TimeLimit() and SetTimeLimit(absl::Duration) instead.
   // NOTE: These deprecated functions used the convention time_limit = 0 to mean
   // "no limit", which now corresponds to time_limit_ = InfiniteDuration().
-  int64 time_limit() const {
+  int64_t time_limit() const {
     return time_limit_ == absl::InfiniteDuration()
                ? 0
                : absl::ToInt64Milliseconds(time_limit_);
   }
-  void set_time_limit(int64 time_limit_milliseconds) {
+  void set_time_limit(int64_t time_limit_milliseconds) {
     SetTimeLimit(time_limit_milliseconds == 0
                      ? absl::InfiniteDuration()
                      : absl::Milliseconds(time_limit_milliseconds));
@@ -751,7 +803,7 @@ class MPSolver {
   }
 
   // DEPRECATED: Use DurationSinceConstruction() instead.
-  int64 wall_time() const {
+  int64_t wall_time() const {
     return absl::ToInt64Milliseconds(DurationSinceConstruction());
   }
 
@@ -844,6 +896,10 @@ class MPSolver {
 
   DISALLOW_COPY_AND_ASSIGN(MPSolver);
 };
+
+inline bool SolverTypeIsMip(MPSolver::OptimizationProblemType solver_type) {
+  return SolverTypeIsMip(static_cast<MPModelRequest::SolverType>(solver_type));
+}
 
 const absl::string_view ToString(
     MPSolver::OptimizationProblemType optimization_problem_type);
@@ -1095,25 +1151,25 @@ class MPVariable {
       : index_(index),
         lb_(lb),
         ub_(ub),
+        integer_(integer),
         name_(name.empty() ? absl::StrFormat("auto_v_%09d", index) : name),
         solution_value_(0.0),
         reduced_cost_(0.0),
-        interface_(interface_in),
-        integer_(integer){}
+        interface_(interface_in) {}
 
   void set_solution_value(double value) { solution_value_ = value; }
   void set_reduced_cost(double reduced_cost) { reduced_cost_ = reduced_cost; }
 
  private:
   const int index_;
-  int branching_priority_ = 0;
   double lb_;
   double ub_;
+  bool integer_;
   const std::string name_;
   double solution_value_;
   double reduced_cost_;
+  int branching_priority_ = 0;
   MPSolverInterface* const interface_;
-  bool integer_;
   DISALLOW_COPY_AND_ASSIGN(MPVariable);
 };
 
@@ -1238,8 +1294,8 @@ class MPConstraint {
         lb_(lb),
         ub_(ub),
         name_(name.empty() ? absl::StrFormat("auto_c_%09d", index) : name),
-        indicator_variable_(nullptr),
         is_lazy_(false),
+        indicator_variable_(nullptr),
         dual_value_(0.0),
         interface_(interface_in) {}
 
@@ -1264,15 +1320,15 @@ class MPConstraint {
   // Name.
   const std::string name_;
 
-  // If given, this constraint is only active if `indicator_variable_`'s value
-  // is equal to `indicator_value_`.
-  const MPVariable* indicator_variable_;
-  bool indicator_value_;
-
   // True if the constraint is "lazy", i.e. the constraint is added to the
   // underlying Linear Programming solver only if it is violated.
   // By default this parameter is 'false'.
   bool is_lazy_;
+
+  // If given, this constraint is only active if `indicator_variable_`'s value
+  // is equal to `indicator_value_`.
+  const MPVariable* indicator_variable_;
+  bool indicator_value_;
 
   double dual_value_;
   MPSolverInterface* const interface_;
@@ -1445,6 +1501,13 @@ class MPSolverParameters {
   DISALLOW_COPY_AND_ASSIGN(MPSolverParameters);
 };
 
+// Whether the given MPSolverResponseStatus (of a solve) would yield an RPC
+// error when happening on the linear solver stubby server, see
+// ./linear_solver_service.proto.
+// Note that RPC errors forbid to carry a response to the client, who can only
+// see the RPC error itself (error code + error message).
+bool MPSolverResponseStatusIsRpcError(MPSolverResponseStatus status);
+
 // This class wraps the actual mathematical programming solvers. Each
 // solver (GLOP, CLP, CBC, GLPK, SCIP) has its own interface class that
 // derives from this abstract class. This class is never directly
@@ -1471,10 +1534,10 @@ class MPSolverInterface {
 
   // When the underlying solver does not provide the number of simplex
   // iterations.
-  static const int64 kUnknownNumberOfIterations = -1;
+  static constexpr int64_t kUnknownNumberOfIterations = -1;
   // When the underlying solver does not provide the number of
   // branch-and-bound nodes.
-  static const int64 kUnknownNumberOfNodes = -1;
+  static constexpr int64_t kUnknownNumberOfNodes = -1;
 
   // Constructor. The user will access the MPSolverInterface through the
   // MPSolver passed as argument.
@@ -1549,16 +1612,13 @@ class MPSolverInterface {
   // ------ Query statistics on the solution and the solve ------
   // Returns the number of simplex iterations. The problem must be discrete,
   // otherwise it crashes, or returns kUnknownNumberOfIterations in NDEBUG mode.
-  virtual int64 iterations() const = 0;
+  virtual int64_t iterations() const = 0;
   // Returns the number of branch-and-bound nodes. The problem must be discrete,
   // otherwise it crashes, or returns kUnknownNumberOfNodes in NDEBUG mode.
-  virtual int64 nodes() const = 0;
+  virtual int64_t nodes() const = 0;
   // Returns the best objective bound. The problem must be discrete, otherwise
-  // it crashes, or returns trivial_worst_objective_bound() in NDEBUG mode.
-  virtual double best_objective_bound() const = 0;
-  // A trivial objective bound: the worst possible value of the objective,
-  // which will be +infinity if minimizing and -infinity if maximing.
-  double trivial_worst_objective_bound() const;
+  // it crashes, or returns trivial bound (+/- inf) in NDEBUG mode.
+  double best_objective_bound() const;
   // Returns the objective value of the best solution found so far.
   double objective_value() const;
 
@@ -1578,9 +1638,6 @@ class MPSolverInterface {
   bool CheckSolutionIsSynchronizedAndExists() const {
     return CheckSolutionIsSynchronized() && CheckSolutionExists();
   }
-  // Checks whether information on the best objective bound exists. The behavior
-  // is similar to CheckSolutionIsSynchronized() above.
-  virtual bool CheckBestObjectiveBoundExists() const;
 
   // ----- Misc -----
   // Queries problem type. For simplicity, the distinction between
@@ -1622,7 +1679,7 @@ class MPSolverInterface {
     return result_status_;
   }
 
-  // Returns a std::string describing the underlying solver and its version.
+  // Returns a string describing the underlying solver and its version.
   virtual std::string SolverVersion() const = 0;
 
   // Returns the underlying solver.
@@ -1643,6 +1700,13 @@ class MPSolverInterface {
 
   // See MPSolver::NextSolution() for contract.
   virtual bool NextSolution() { return false; }
+
+  // See MPSolver::SetCallback() for details.
+  virtual void SetCallback(MPCallback* mp_callback) {
+    LOG(FATAL) << "Callbacks not supported for this solver.";
+  }
+
+  virtual bool SupportsCallbacks() const { return false; }
 
   friend class MPSolver;
 
@@ -1667,6 +1731,9 @@ class MPSolverInterface {
 
   // The value of the objective function.
   double objective_value_;
+
+  // The value of the best objective bound. Used only for MIP solvers.
+  double best_objective_bound_;
 
   // Boolean indicator for the verbosity of the solver output.
   bool quiet_;
@@ -1713,27 +1780,16 @@ class MPSolverInterface {
   virtual void SetPresolveMode(int value) = 0;
 
   // Sets the number of threads to be used by the solver.
-  virtual util::Status SetNumThreads(int num_threads);
+  virtual absl::Status SetNumThreads(int num_threads);
 
   // Pass solver specific parameters in text format. The format is
   // solver-specific and is the same as the corresponding solver configuration
   // file format. Returns true if the operation was successful.
   //
-  // The default implementation of this method stores the parameters in a
-  // temporary file and calls ReadParameterFile to import the parameter file
-  // into the solver. Solvers that support passing the parameters directly can
-  // override this method to skip the temporary file logic.
+  // Default implementation returns true if the input is empty. It returns false
+  // and logs a WARNING if the input is not empty.
   virtual bool SetSolverSpecificParametersAsString(
       const std::string& parameters);
-
-  // Reads a solver-specific file of parameters and set them.
-  // Returns true if there was no errors.
-  virtual bool ReadParameterFile(const std::string& filename);
-
-  // Returns a file extension like ".tmp", this is needed because some solvers
-  // require a given extension for the ReadParameterFile() filename and we need
-  // to know it to generate a temporary parameter file.
-  virtual std::string ValidFileExtensionForParameterFile() const;
 
   // Sets the scaling mode.
   virtual void SetScalingMode(int value) = 0;

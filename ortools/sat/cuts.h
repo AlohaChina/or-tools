@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,10 +14,13 @@
 #ifndef OR_TOOLS_SAT_CUTS_H_
 #define OR_TOOLS_SAT_CUTS_H_
 
+#include <functional>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "ortools/base/int_type.h"
+#include "ortools/base/strong_vector.h"
 #include "ortools/sat/implied_bounds.h"
 #include "ortools/sat/integer.h"
 #include "ortools/sat/linear_constraint.h"
@@ -38,8 +41,9 @@ namespace sat {
 // - Only add cuts in term of the same variables or their negation.
 struct CutGenerator {
   std::vector<IntegerVariable> vars;
-  std::function<void(const gtl::ITIVector<IntegerVariable, double>& lp_values,
-                     LinearConstraintManager* manager)>
+  std::function<bool(
+      const absl::StrongVector<IntegerVariable, double>& lp_values,
+      LinearConstraintManager* manager)>
       generate_cuts;
 };
 
@@ -60,16 +64,78 @@ class ImpliedBoundsProcessor {
         integer_trail_(integer_trail),
         implied_bounds_(implied_bounds) {}
 
+  // See if some of the implied bounds equation are violated and add them to
+  // the IB cut pool if it is the case.
+  //
+  // Important: This must be called before we process any constraints with a
+  // different lp_values or level zero bounds.
+  void RecomputeCacheAndSeparateSomeImpliedBoundCuts(
+      const absl::StrongVector<IntegerVariable, double>& lp_values);
+
   // Processes and updates the given cut.
   void ProcessUpperBoundedConstraint(
-      const gtl::ITIVector<IntegerVariable, double>& lp_values,
-      LinearConstraint* cut) const;
+      const absl::StrongVector<IntegerVariable, double>& lp_values,
+      LinearConstraint* cut);
+
+  // Same as ProcessUpperBoundedConstraint() but instead of just using
+  // var >= coeff * binary + lb we use var == slack + coeff * binary + lb where
+  // slack is a new temporary variable that we create.
+  //
+  // The new slack will be such that slack_infos[(slack - first_slack) / 2]
+  // contains its definition so that we can properly handle it in the cut
+  // generation and substitute it back later.
+  struct SlackInfo {
+    // This slack is equal to sum of terms + offset.
+    std::vector<std::pair<IntegerVariable, IntegerValue>> terms;
+    IntegerValue offset;
+
+    // The slack bounds and current lp_value.
+    IntegerValue lb = IntegerValue(0);
+    IntegerValue ub = IntegerValue(0);
+    double lp_value = 0.0;
+  };
+  void ProcessUpperBoundedConstraintWithSlackCreation(
+      bool substitute_only_inner_variables, IntegerVariable first_slack,
+      const absl::StrongVector<IntegerVariable, double>& lp_values,
+      LinearConstraint* cut, std::vector<SlackInfo>* slack_infos);
+
+  // Only used for debugging.
+  //
+  // Substituting back the slack created by the function above should give
+  // exactly the same cut as the original one.
+  bool DebugSlack(IntegerVariable first_slack,
+                  const LinearConstraint& initial_cut,
+                  const LinearConstraint& cut,
+                  const std::vector<SlackInfo>& info);
 
   // Add a new variable that could be used in the new cuts.
+  // Note that the cache must be computed to take this into account.
   void AddLpVariable(IntegerVariable var) { lp_vars_.insert(var); }
 
+  // Once RecomputeCacheAndSeparateSomeImpliedBoundCuts() has been called,
+  // we can get the best implied bound for each variables.
+  struct BestImpliedBoundInfo {
+    double bool_lp_value = 0.0;
+    double slack_lp_value = std::numeric_limits<double>::infinity();
+    bool is_positive;
+    IntegerValue bound_diff;
+    IntegerVariable bool_var = kNoIntegerVariable;
+  };
+  BestImpliedBoundInfo GetCachedImpliedBoundInfo(IntegerVariable var);
+
+  // As we compute the best implied bounds for each variable, we add violated
+  // cuts here.
+  TopNCuts& IbCutPool() { return ib_cut_pool_; }
+
  private:
+  BestImpliedBoundInfo ComputeBestImpliedBound(
+      IntegerVariable var,
+      const absl::StrongVector<IntegerVariable, double>& lp_values);
+
   absl::flat_hash_set<IntegerVariable> lp_vars_;
+  mutable absl::flat_hash_map<IntegerVariable, BestImpliedBoundInfo> cache_;
+
+  TopNCuts ib_cut_pool_ = TopNCuts(50);
 
   // Data from the constructor.
   IntegerTrail* integer_trail_;
@@ -96,7 +162,7 @@ class ImpliedBoundsProcessor {
 //
 // Algorithm:
 // - We first scale by a factor t so that rhs_remainder >= divisor / 2.
-// - Then, if use_letchford_lodi_version is true, we use the function described
+// - Then, if max_scaling == 2, we use the function described
 //   in "Strenghtening Chvatal-Gomory cuts and Gomory fractional cuts", Adam N.
 //   Letchfrod, Andrea Lodi.
 // - Otherwise, we use a generalization of this which is a discretized version
@@ -108,9 +174,11 @@ class ImpliedBoundsProcessor {
 // And that there is no dominance relation between any of these functions. So
 // it could be nice to try to generate a cut using different values of
 // max_scaling.
+IntegerValue GetFactorT(IntegerValue rhs_remainder, IntegerValue divisor,
+                        IntegerValue max_t);
 std::function<IntegerValue(IntegerValue)> GetSuperAdditiveRoundingFunction(
-    bool use_letchford_lodi_version, IntegerValue rhs_remainder,
-    IntegerValue divisor, IntegerValue max_scaling);
+    IntegerValue rhs_remainder, IntegerValue divisor, IntegerValue t,
+    IntegerValue max_scaling);
 
 // Given an upper bounded linear constraint, this function tries to transform it
 // to a valid cut that violate the given LP solution using integer rounding.
@@ -142,13 +210,66 @@ std::function<IntegerValue(IntegerValue)> GetSuperAdditiveRoundingFunction(
 // the best looking cut (or more than one). This is not on the critical code
 // path, so we can spend more effort in finding good cuts.
 struct RoundingOptions {
-  bool use_mir = false;
   IntegerValue max_scaling = IntegerValue(60);
 };
-void IntegerRoundingCut(RoundingOptions options, std::vector<double> lp_values,
-                        std::vector<IntegerValue> lower_bounds,
-                        std::vector<IntegerValue> upper_bounds,
-                        LinearConstraint* cut);
+class IntegerRoundingCutHelper {
+ public:
+  void ComputeCut(RoundingOptions options, const std::vector<double>& lp_values,
+                  const std::vector<IntegerValue>& lower_bounds,
+                  const std::vector<IntegerValue>& upper_bounds,
+                  ImpliedBoundsProcessor* ib_processor, LinearConstraint* cut);
+
+  // Returns the number of implied bound lifted Booleans in the last
+  // ComputeCut() call. Useful for investigation.
+  int NumLiftedBooleans() const { return num_lifted_booleans_; }
+
+ private:
+  // The helper is just here to reuse the memory for these vectors.
+  std::vector<int> relevant_indices_;
+  std::vector<double> relevant_lp_values_;
+  std::vector<IntegerValue> relevant_coeffs_;
+  std::vector<IntegerValue> relevant_bound_diffs_;
+  std::vector<IntegerValue> divisors_;
+  std::vector<std::pair<int, IntegerValue>> adjusted_coeffs_;
+  std::vector<IntegerValue> remainders_;
+  std::vector<bool> change_sign_at_postprocessing_;
+  std::vector<IntegerValue> rs_;
+  std::vector<IntegerValue> best_rs_;
+
+  int num_lifted_booleans_ = 0;
+  std::vector<std::pair<IntegerVariable, IntegerValue>> tmp_terms_;
+};
+
+// Helper to find knapsack or flow cover cuts (not yet implemented).
+class CoverCutHelper {
+ public:
+  // Try to find a cut with a knapsack heuristic.
+  // If this returns true, you can get the cut via cut().
+  bool TrySimpleKnapsack(const LinearConstraint base_ct,
+                         const std::vector<double>& lp_values,
+                         const std::vector<IntegerValue>& lower_bounds,
+                         const std::vector<IntegerValue>& upper_bounds);
+
+  // If successful, info about the last generated cut.
+  LinearConstraint* mutable_cut() { return &cut_; }
+  const LinearConstraint& cut() const { return cut_; }
+
+  // Single line of text that we append to the cut log line.
+  const std::string Info() { return absl::StrCat("lift=", num_lifting_); }
+
+ private:
+  struct Term {
+    int index;
+    double dist_to_max_value;
+    IntegerValue positive_coeff;  // abs(coeff in original constraint).
+    IntegerValue diff;
+  };
+  std::vector<Term> terms_;
+  std::vector<bool> in_cut_;
+
+  LinearConstraint cut_;
+  int num_lifting_;
+};
 
 // If a variable is away from its upper bound by more than value 1.0, then it
 // cannot be part of a cover that will violate the lp solution. This method
@@ -156,7 +277,7 @@ void IntegerRoundingCut(RoundingOptions options, std::vector<double> lp_values,
 // constraint.
 LinearConstraint GetPreprocessedLinearConstraint(
     const LinearConstraint& constraint,
-    const gtl::ITIVector<IntegerVariable, double>& lp_values,
+    const absl::StrongVector<IntegerVariable, double>& lp_values,
     const IntegerTrail& integer_trail);
 
 // Returns true if sum of all the variables in the given constraint is less than
@@ -180,7 +301,7 @@ bool ConstraintIsTriviallyTrue(const LinearConstraint& constraint,
 // negative coefficients.
 bool CanBeFilteredUsingCutLowerBound(
     const LinearConstraint& preprocessed_constraint,
-    const gtl::ITIVector<IntegerVariable, double>& lp_values,
+    const absl::StrongVector<IntegerVariable, double>& lp_values,
     const IntegerTrail& integer_trail);
 
 // Struct to help compute upper bound for knapsack instance.
@@ -201,7 +322,7 @@ double GetKnapsackUpperBound(std::vector<KnapsackItem> items, double capacity);
 // that all the coefficients are non negative.
 bool CanBeFilteredUsingKnapsackUpperBound(
     const LinearConstraint& constraint,
-    const gtl::ITIVector<IntegerVariable, double>& lp_values,
+    const absl::StrongVector<IntegerVariable, double>& lp_values,
     const IntegerTrail& integer_trail);
 
 // Returns true if the given constraint passes all the filters described above.
@@ -209,7 +330,7 @@ bool CanBeFilteredUsingKnapsackUpperBound(
 // negative coefficients.
 bool CanFormValidKnapsackCover(
     const LinearConstraint& preprocessed_constraint,
-    const gtl::ITIVector<IntegerVariable, double>& lp_values,
+    const absl::StrongVector<IntegerVariable, double>& lp_values,
     const IntegerTrail& integer_trail);
 
 // Converts the given constraint into canonical knapsack form (described
@@ -234,7 +355,7 @@ void ConvertToKnapsackForm(const LinearConstraint& constraint,
 // difference between the cut upper bound and this maximum value.
 bool LiftKnapsackCut(
     const LinearConstraint& constraint,
-    const gtl::ITIVector<IntegerVariable, double>& lp_values,
+    const absl::StrongVector<IntegerVariable, double>& lp_values,
     const std::vector<IntegerValue>& cut_vars_original_coefficients,
     const IntegerTrail& integer_trail, TimeLimit* time_limit,
     LinearConstraint* cut);
@@ -312,6 +433,53 @@ CutGenerator CreateSquareCutGenerator(IntegerVariable y, IntegerVariable x,
 // that all the fixed variables are ignored while generating cuts.
 CutGenerator CreateAllDifferentCutGenerator(
     const std::vector<IntegerVariable>& vars, Model* model);
+
+// Consider the Lin Max constraint with d expressions and n variables in the
+// form: target = max {exprs[k] = Sum (wki * xi + bk)}. k in {1,..,d}.
+//   Li = lower bound of xi
+//   Ui = upper bound of xi.
+// Let zk be in {0,1} for all k in {1,..,d}.
+// The target = exprs[k] when zk = 1.
+//
+// The following is a valid linearization for Lin Max.
+//   target >= exprs[k], for all k in {1,..,d}
+//   target <= Sum (wli * xi) + Sum((Nlk + bk) * zk), for all l in {1,..,d}
+// Where Nlk is a large number defined as:
+//   Nlk = Sum (max((wki - wli)*Li, (wki - wli)*Ui))
+//       = Sum (max corner difference for variable i, target expr l, max expr k)
+//
+// Consider a partition of variables xi into set {1,..,d} as I.
+// i.e. I(i) = j means xi is mapped to jth index.
+// The following inequality is valid and sharp cut for the lin max constraint
+// described above.
+//
+// target <= Sum(i=1..n)(wI(i)i * xi + Sum(k=1..d)(MPlusCoefficient_ki * zk))
+//           + Sum(k=1..d)(bk * zk) ,
+// Where MPlusCoefficient_ki = max((wki - wI(i)i) * Li,
+//                                 (wki - wI(i)i) * Ui)
+//                           = max corner difference for variable i,
+//                             target expr I(i), max expr k.
+//
+// For detailed proof of validity, refer
+// Reference: "Strong mixed-integer programming formulations for trained neural
+// networks" by Ross Anderson et. (https://arxiv.org/pdf/1811.01988.pdf).
+//
+// In the cut generator, we compute the most violated partition I by computing
+// the rhs value (wI(i)i * lp_value(xi) + Sum(k=1..d)(MPlusCoefficient_ki * zk))
+// for each variable for each partition index. We choose the partition index
+// that gives lowest rhs value for a given variable.
+//
+// Note: This cut generator requires all expressions to contain only positive
+// vars.
+CutGenerator CreateLinMaxCutGenerator(
+    const IntegerVariable target, const std::vector<LinearExpression>& exprs,
+    const std::vector<IntegerVariable>& z_vars, Model* model);
+
+// Extracts the variables that have a Literal view from base variables and
+// create a generator that will returns constraint of the form "at_most_one"
+// between such literals.
+CutGenerator CreateCliqueCutGenerator(
+    const std::vector<IntegerVariable>& base_variables, Model* model);
 
 }  // namespace sat
 }  // namespace operations_research

@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,6 +13,8 @@
 
 #ifndef OR_TOOLS_GLOP_UPDATE_ROW_H_
 #define OR_TOOLS_GLOP_UPDATE_ROW_H_
+
+#include <cstdint>
 
 #include "ortools/glop/basis_representation.h"
 #include "ortools/glop/parameters.pb.h"
@@ -70,9 +72,6 @@ class UpdateRow {
   // This must be called after a call to ComputeUpdateRow(). It will fill
   // all the non-relevant positions that where not filled by ComputeUpdateRow().
   void RecomputeFullUpdateRow(RowIndex leaving_row);
-
-  // Sets to zero the coefficient for column col.
-  void IgnoreUpdatePosition(ColIndex col);
 
   // Sets the algorithm parameters.
   void SetParameters(const GlopParameters& parameters);
@@ -147,7 +146,7 @@ class UpdateRow {
 
   // Track the number of basic floating point multiplication.
   // Used by DeterministicTime().
-  int64 num_operations_;
+  int64_t num_operations_;
 
   // Glop standard classes.
   GlopParameters parameters_;

@@ -1,4 +1,5 @@
-# Copyright 2010-2018 Google LLC
+#!/usr/bin/env python3
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -31,7 +32,6 @@ The Norwegian lives next to the blue house.
 
 Who owns a zebra and who drinks water?
 """
-from __future__ import print_function
 
 from ortools.sat.python import cp_model
 
@@ -110,7 +110,7 @@ def solve_zebra():
     solver = cp_model.CpSolver()
     status = solver.Solve(model)
 
-    if status == cp_model.FEASIBLE:
+    if status == cp_model.OPTIMAL:
         people = [englishman, spaniard, japanese, ukrainian, norwegian]
         water_drinker = [
             p for p in people if solver.Value(p) == solver.Value(water)

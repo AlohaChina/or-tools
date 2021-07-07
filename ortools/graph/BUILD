@@ -1,3 +1,5 @@
+load("@rules_cc//cc:defs.bzl", "cc_proto_library")
+
 package(default_visibility = ["//visibility:public"])
 
 cc_library(
@@ -6,6 +8,7 @@ cc_library(
     deps = [
         ":iterators",
         "//ortools/base",
+        "@com_google_absl//absl/debugging:leak_check",
     ],
 )
 
@@ -27,6 +30,7 @@ cc_library(
         ":graph",
         "//ortools/base:hash",
         "//ortools/base:map_util",
+        "@com_google_absl//absl/container:inlined_vector",
     ],
 )
 
@@ -41,8 +45,8 @@ cc_library(
     deps = [
         ":graph",
         "//ortools/base:filelineiter",
-        "//ortools/base:status",
-        "//ortools/base:statusor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
     ],
 )
@@ -54,7 +58,7 @@ cc_library(
 #    deps = [
 #        "//ortools/base",
 #        "//ortools/base:int_type",
-#        "//ortools/base:int_type_indexed_vector",
+#        "//ortools/base:strong_vector",
 #    ],
 #)
 
@@ -84,8 +88,8 @@ cc_library(
         "//ortools/base:file",
         "//ortools/base:hash",
         "//ortools/base:int_type",
-        #        "//ortools/base:int_type_indexed_bitmap",
-        "//ortools/base:int_type_indexed_vector",
+        #        "//ortools/base:strong_bitmap",
+        "//ortools/base:strong_vector",
         "//ortools/base:recordio",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -133,10 +137,10 @@ cc_library(
         "//ortools/base",
         "//ortools/base:hash",
         "//ortools/base:int_type",
-        "//ortools/base:int_type_indexed_vector",
+        "//ortools/base:strong_vector",
+        "//ortools/util:time_limit",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/strings",
-        "//ortools/util:time_limit",
     ],
 )
 
@@ -176,7 +180,7 @@ cc_library(
     name = "minimum_spanning_tree",
     hdrs = ["minimum_spanning_tree.h"],
     deps = [
-        ":connectivity",
+        ":connected_components",
         ":graph",
         "//ortools/base",
         "//ortools/base:adjustable_priority_queue",
@@ -229,21 +233,13 @@ cc_library(
     hdrs = ["perfect_matching.h"],
     visibility = ["//visibility:public"],
     deps = [
-        "@com_google_absl//absl/base",
-        "@com_google_absl//absl/strings",
         "//ortools/base",
         "//ortools/base:adjustable_priority_queue",
         "//ortools/base:int_type",
-        "//ortools/base:int_type_indexed_vector",
+        "//ortools/base:strong_vector",
         "//ortools/util:saturated_arithmetic",
-    ],
-)
-
-cc_library(
-    name = "connectivity",
-    hdrs = ["connectivity.h"],
-    deps = [
-        "//ortools/base",
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/strings",
     ],
 )
 
@@ -267,9 +263,9 @@ cc_library(
         ":graph",
         ":graphs",
         "//ortools/base",
-        "@com_google_absl//absl/memory",
         "//ortools/util:stats",
         "//ortools/util:zvector",
+        "@com_google_absl//absl/memory",
     ],
 )
 
@@ -278,7 +274,7 @@ cc_library(
     srcs = ["min_cost_flow.cc"],
     hdrs = ["min_cost_flow.h"],
     deps = [
-        ":connectivity",
+        ":connected_components",
         ":ebert_graph",
         ":graph",
         ":graphs",
@@ -308,10 +304,10 @@ cc_library(
     deps = [
         ":ebert_graph",
         "//ortools/base",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
         "//ortools/util:permutation",
         "//ortools/util:zvector",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 
@@ -324,11 +320,12 @@ cc_library(
         "connected_components.h",
     ],
     deps = [
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/container:flat_hash_set",
         "//ortools/base",
         "//ortools/base:map_util",
         "//ortools/base:ptr_util",
+        "//ortools/base:stl_util",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
     ],
 )
 
@@ -339,6 +336,20 @@ cc_library(
     ],
     deps = [
         "//ortools/base",
+    ],
+)
+
+cc_library(
+    name = "topologicalsorter",
+    srcs = ["topologicalsorter.cc"],
+    hdrs = ["topologicalsorter.h"],
+    deps = [
+        "//ortools/base",
+        "//ortools/base:container_logging",
+        "//ortools/base:map_util",
+        "//ortools/base:stl_util",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
     ],
 )
 
@@ -357,15 +368,4 @@ cc_library(
 #    name = "hopcroft_karp",
 #    srcs = ["hopcroft_karp.c"],
 #    hdrs = ["hopcroft_karp.h"],
-#)
-
-#cc_library(
-#    name = "dag_connectivity",
-#    srcs = ["dag_connectivity.cc"],
-#    hdrs = ["dag_connectivity.h"],
-#    deps = [
-#        "//ortools/base",
-#        "//ortools/util:bitset",
-#        "//ortools/util/graph:topologicalsorter",
-#    ],
 #)

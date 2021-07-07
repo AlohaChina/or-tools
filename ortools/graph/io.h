@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,19 +17,19 @@
 #define UTIL_GRAPH_IO_H_
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <numeric>
 #include <string>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/numbers.h"
-#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
 #include "ortools/base/filelineiter.h"
-#include "ortools/base/status.h"
-#include "ortools/base/statusor.h"
 #include "ortools/graph/graph.h"
 
 namespace util {
@@ -58,7 +58,7 @@ std::string GraphToString(const Graph& graph, GraphToStringFormat format);
 //   <node1> <node2>.
 //
 // This returns a newly created graph upon success, which the user needs to take
-// ownership of, or a failure status. See ortools/base/statusor.h.
+// ownership of, or a failure status. See absl/status/statusor.h.
 //
 // If "num_nodes_with_color_or_null" is not nullptr, it will be filled with the
 // color information: num_nodes_with_color_or_null[i] will be the number of
@@ -71,7 +71,7 @@ std::string GraphToString(const Graph& graph, GraphToStringFormat format);
 //       ReadGraphFile<MyGraph>("graph.g", /*directed=*/ false).ValueOrDie());
 //
 //   // More complicated error handling.
-//   util::StatusOr<MyGraph*> error_or_graph =
+//   absl::StatusOr<MyGraph*> error_or_graph =
 //       ReadGraphFile<MyGraph>("graph.g", /*directed=*/ false);
 //   if (!error_or_graph.ok()) {
 //     LOG(ERROR) << "Error: " << error_or_graph.status().error_message();
@@ -80,7 +80,7 @@ std::string GraphToString(const Graph& graph, GraphToStringFormat format);
 //     ...
 //   }
 template <class Graph>
-util::StatusOr<Graph*> ReadGraphFile(
+absl::StatusOr<Graph*> ReadGraphFile(
     const std::string& filename, bool directed,
     std::vector<int>* num_nodes_with_color_or_null);
 
@@ -97,7 +97,7 @@ util::StatusOr<Graph*> ReadGraphFile(
 // This method is the reverse of ReadGraphFile (with the same value for
 // "directed").
 template <class Graph>
-util::Status WriteGraphToFile(const Graph& graph, const std::string& filename,
+absl::Status WriteGraphToFile(const Graph& graph, const std::string& filename,
                               bool directed,
                               const std::vector<int>& num_nodes_with_color);
 
@@ -129,22 +129,23 @@ std::string GraphToString(const Graph& graph, GraphToStringFormat format) {
 }
 
 template <class Graph>
-util::StatusOr<Graph*> ReadGraphFile(
+absl::StatusOr<Graph*> ReadGraphFile(
     const std::string& filename, bool directed,
     std::vector<int>* num_nodes_with_color_or_null) {
   std::unique_ptr<Graph> graph;
-  int64 num_nodes = -1;
-  int64 num_expected_lines = -1;
-  int64 num_lines_read = 0;
+  int64_t num_nodes = -1;
+  int64_t num_expected_lines = -1;
+  int64_t num_lines_read = 0;
   for (const std::string& line : FileLines(filename)) {
     ++num_lines_read;
     if (num_lines_read == 1) {
-      std::vector<int64> header_ints;
-      // if (!SplitStringAndParse(line, " ", &absl::SimpleAtoi,
+      std::vector<int64_t> header_ints;
+      // if (!SplitStringAndParse(line, " ", &strings::safe_strto64,
       //                          &header_ints) ||
-      //     header_ints.size() < 2 || header_ints[0] < 0 || header_ints[1] < 0) {
-      //   return util::Status(
-      //       util::error::INVALID_ARGUMENT,
+      //     header_ints.size() < 2 || header_ints[0] < 0 || header_ints[1] < 0)
+      //     {
+      //        return absl::Status(
+      //            absl::StatusCode::kInvalidArgument,
       //       absl::StrCat("First line of '", filename,
       //                    "' should be at least two nonnegative integers."));
       // }
@@ -158,13 +159,13 @@ util::StatusOr<Graph*> ReadGraphFile(
         } else {
           const int num_colors = header_ints[2];
           if (header_ints.size() != num_colors + 2) {
-            return util::Status(
-                util::error::INVALID_ARGUMENT,
-                absl::StrCat(
+            return absl::Status(
+                absl::StatusCode::kInvalidArgument,
+                absl::StrFormat(
                     "There should be num_colors-1 color cardinalities in the"
-                    " header of '",
-                    filename, "' (where num_colors=", num_colors,
-                    "): the last color cardinality should be", " skipped."));
+                    " header of '%s' (where num_colors=%d): the last color"
+                    " cardinality should be skipped",
+                    filename, num_colors));
           }
           num_nodes_with_color_or_null->reserve(num_colors);
           int num_nodes_left = num_nodes;
@@ -172,30 +173,40 @@ util::StatusOr<Graph*> ReadGraphFile(
             num_nodes_with_color_or_null->push_back(header_ints[i]);
             num_nodes_left -= header_ints[i];
             if (header_ints[i] <= 0 || num_nodes_left <= 0) {
-              return util::Status(
-                  util::error::INVALID_ARGUMENT,
-                  absl::StrCat(
-                      "The color cardinalities in the header of '", filename,
-                      " should always be >0 and add up to less than the"
-                      " total number of nodes."));
+              return absl::Status(
+                  absl::StatusCode::kInvalidArgument,
+                  absl::StrFormat("The color cardinalities in the header of"
+                                  " '%s' should always be >0 and add up to less"
+                                  " than the total number of nodes",
+                                  filename));
             }
           }
           num_nodes_with_color_or_null->push_back(num_nodes_left);
         }
       }
-      const int64 num_arcs = (directed ? 1 : 2) * num_expected_lines;
+      const int64_t num_arcs = (directed ? 1 : 2) * num_expected_lines;
       graph.reset(new Graph(num_nodes, num_arcs));
       continue;
     }
+    size_t space_pos = line.find(' ');
     int64_t node1 = -1;
     int64_t node2 = -1;
-    if (sscanf(line.c_str(), "%ld %ld", &node1, &node2) != 2 || node1 < 0 ||
-        node2 < 0 || node1 >= num_nodes || node2 >= num_nodes) {
-      return util::Status(
-          util::error::INVALID_ARGUMENT,
-          absl::StrCat("In '", filename, "', line ", num_lines_read,
-                       ": Expected two", " integers in the range [0, ",
-                       num_nodes, ")."));
+    bool parse_success = false;
+    if (space_pos != std::string::npos) {
+      if (absl::SimpleAtoi(absl::string_view(line.c_str(), space_pos),
+                           &node1) &&
+          absl::SimpleAtoi(absl::string_view(line.c_str() + space_pos + 1),
+                           &node2)) {
+        parse_success =
+            node1 >= 0 && node1 < num_nodes && node2 >= 0 && node2 < num_nodes;
+      }
+    }
+    if (!parse_success) {
+      return absl::Status(
+          absl::StatusCode::kInvalidArgument,
+          absl::StrFormat(
+              "In '%s', line %d: Expected two integers in the range [0, %d).",
+              filename, num_lines_read, num_nodes));
     }
     // We don't add superfluous arcs to the graph, but we still keep reading
     // the file, to get better error messages: we want to know the actual
@@ -206,26 +217,27 @@ util::StatusOr<Graph*> ReadGraphFile(
     if (!directed && node1 != node2) graph->AddArc(node2, node1);
   }
   if (num_lines_read == 0) {
-    return util::Status(util::error::INVALID_ARGUMENT, "Unknown or empty file");
+    return absl::Status(absl::StatusCode::kInvalidArgument,
+                        "Unknown or empty file");
   }
   if (num_lines_read != num_expected_lines + 1) {
-    return util::Status(util::error::INVALID_ARGUMENT,
-                        absl::StrCat("The number of arcs/edges in '", filename,
-                                     "' (", num_lines_read - 1,
-                                     " does not match the value announced in",
-                                     " the header (", num_expected_lines, ")"));
+    return absl::Status(
+        absl::StatusCode::kInvalidArgument,
+        absl::StrFormat("The number of arcs/edges in '%s' (%d) does not match"
+                        " the value announced in the header (%d)",
+                        filename, num_lines_read - 1, num_expected_lines));
   }
   graph->Build();
   return graph.release();
 }
 
 template <class Graph>
-util::Status WriteGraphToFile(const Graph& graph, const std::string& filename,
+absl::Status WriteGraphToFile(const Graph& graph, const std::string& filename,
                               bool directed,
                               const std::vector<int>& num_nodes_with_color) {
   FILE* f = fopen(filename.c_str(), "w");
   if (f == nullptr) {
-    return util::Status(util::error::INVALID_ARGUMENT,
+    return absl::Status(absl::StatusCode::kInvalidArgument,
                         "Could not open file: '" + filename + "'");
   }
   // In undirected mode, we must count the self-arcs separately. All other arcs
@@ -239,45 +251,45 @@ util::Status WriteGraphToFile(const Graph& graph, const std::string& filename,
     }
     if ((graph.num_arcs() - num_self_arcs) % 2 != 0) {
       fclose(f);
-      return util::Status(util::error::INVALID_ARGUMENT,
+      return absl::Status(absl::StatusCode::kInvalidArgument,
                           "WriteGraphToFile() called with directed=false"
                           " and with a graph with an odd number of (non-self)"
                           " arcs!");
     }
   }
   absl::FPrintF(
-      f, "%d %d", static_cast<int64>(graph.num_nodes()),
-      static_cast<int64>(directed ? graph.num_arcs()
-                                  : (graph.num_arcs() + num_self_arcs) / 2));
+      f, "%d %d", static_cast<int64_t>(graph.num_nodes()),
+      static_cast<int64_t>(directed ? graph.num_arcs()
+                                    : (graph.num_arcs() + num_self_arcs) / 2));
   if (!num_nodes_with_color.empty()) {
     if (std::accumulate(num_nodes_with_color.begin(),
                         num_nodes_with_color.end(), 0) != graph.num_nodes() ||
         *std::min_element(num_nodes_with_color.begin(),
                           num_nodes_with_color.end()) <= 0) {
-      return util::Status(util::error::INVALID_ARGUMENT,
+      return absl::Status(absl::StatusCode::kInvalidArgument,
                           "WriteGraphToFile() called with invalid coloring.");
     }
-    fprintf(f, " %lu", num_nodes_with_color.size());
+    absl::FPrintF(f, " %d", num_nodes_with_color.size());
     for (int i = 0; i < num_nodes_with_color.size() - 1; ++i) {
-      absl::FPrintF(f, " %d", static_cast<int64>(num_nodes_with_color[i]));
+      absl::FPrintF(f, " %d", static_cast<int64_t>(num_nodes_with_color[i]));
     }
   }
-  fprintf(f, "\n");
+  absl::FPrintF(f, "\n");
 
   for (const typename Graph::NodeIndex node : graph.AllNodes()) {
     for (const typename Graph::ArcIndex arc : graph.OutgoingArcs(node)) {
       const typename Graph::NodeIndex head = graph.Head(arc);
       if (directed || head >= node) {
-        absl::FPrintF(f, "%d %d\n", static_cast<int64>(node),
-                      static_cast<uint64>(head));
+        absl::FPrintF(f, "%d %d\n", static_cast<int64_t>(node),
+                      static_cast<uint64_t>(head));
       }
     }
   }
   if (fclose(f) != 0) {
-    return util::Status(util::error::INTERNAL,
+    return absl::Status(absl::StatusCode::kInternal,
                         "Could not close file '" + filename + "'");
   }
-  return util::Status::OK;
+  return ::absl::OkStatus();
 }
 
 }  // namespace util

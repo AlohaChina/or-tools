@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -64,10 +64,10 @@ class RcpspParser {
   // accordingly.
   void SetNumDeclaredTasks(int t);
   int strtoint32(const std::string& word);
-  int64 strtoint64(const std::string& word);
+  int64_t strtoint64(const std::string& word);
 
   std::string basedata_;
-  int64 seed_;
+  int64_t seed_;
   LoadStatus load_status_;
   int num_declared_tasks_;
   int current_task_;

@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -31,7 +31,6 @@
 %include "ortools/base/base.i"
 
 %include "std_string.i"
-%include "stdint.i"
 
 %include "ortools/util/python/proto.i"
 
@@ -103,6 +102,13 @@ __pdoc__['Variable.thisown'] = False
     std::string error_message;
     $self->LoadModelFromProto(input_model, &error_message);
     return error_message;
+  }
+
+  // Change the API of LoadSolutionFromProto() to simply return a boolean.
+  bool LoadSolutionFromProto(
+      const operations_research::MPSolutionResponse& response,
+      double tolerance = operations_research::MPSolverParameters::kDefaultPrimalTolerance) {
+    return $self->LoadSolutionFromProto(response, tolerance).ok();
   }
 
   std::string ExportModelAsLpFormat(bool obfuscated) {
@@ -204,9 +210,9 @@ __pdoc__['Variable.thisown'] = False
 
 
   static double Infinity() { return operations_research::MPSolver::infinity(); }
-  void SetTimeLimit(int64 x) { $self->set_time_limit(x); }
-  int64 WallTime() const { return $self->wall_time(); }
-  int64 Iterations() const { return $self->iterations(); }
+  void SetTimeLimit(int64_t x) { $self->set_time_limit(x); }
+  int64_t WallTime() const { return $self->wall_time(); }
+  int64_t Iterations() const { return $self->iterations(); }
 }  // extend operations_research::MPSolver
 
 %extend operations_research::MPVariable {
@@ -299,6 +305,10 @@ PY_CONVERT(MPVariable);
 %rename (Constraint) operations_research::MPSolver::MakeRowConstraint(double, double, const std::string&);
 %rename (Constraint) operations_research::MPSolver::MakeRowConstraint(const std::string&);
 %unignore operations_research::MPSolver::~MPSolver;
+%newobject operations_research::MPSolver::CreateSolver;
+%unignore operations_research::MPSolver::CreateSolver;
+%unignore operations_research::MPSolver::ParseAndCheckSupportForProblemType;
+
 %unignore operations_research::MPSolver::Solve;
 %unignore operations_research::MPSolver::VerifySolution;
 %unignore operations_research::MPSolver::infinity;
@@ -309,14 +319,16 @@ PY_CONVERT(MPVariable);
 %unignore operations_research::MPSolver::ExportModelToProto;
 %unignore operations_research::MPSolver::FillSolutionResponseProto;
 // LoadModelFromProto() is also visible: it's overridden by an %extend, above.
-%unignore operations_research::MPSolver::LoadSolutionFromProto;  // No test
+// LoadSolutionFromProto() is also visible: it's overridden by an %extend, above.
 
 // Expose some of the more advanced MPSolver API.
 %unignore operations_research::MPSolver::InterruptSolve;
 %unignore operations_research::MPSolver::SupportsProblemType;  // No unit test
 %unignore operations_research::MPSolver::wall_time;  // No unit test
 %unignore operations_research::MPSolver::Clear;  // No unit test
+%unignore operations_research::MPSolver::constraint;
 %unignore operations_research::MPSolver::constraints;
+%unignore operations_research::MPSolver::variable;
 %unignore operations_research::MPSolver::variables;
 %unignore operations_research::MPSolver::NumConstraints;
 %unignore operations_research::MPSolver::NumVariables;
@@ -327,8 +339,8 @@ PY_CONVERT(MPVariable);
 %rename (LookupVariable) operations_research::MPSolver::LookupVariableOrNull;
 %unignore operations_research::MPSolver::SetSolverSpecificParametersAsString;
 %unignore operations_research::MPSolver::NextSolution;
-// %unignore operations_research::MPSolver::ExportModelAsLpFormat;
-// %unignore operations_research::MPSolver::ExportModelAsMpsFormat;
+// ExportModelAsLpFormat() is also visible: it's overridden by an %extend, above.
+// ExportModelAsMpsFormat() is also visible: it's overridden by an %extend, above.
 
 // Expose very advanced parts of the MPSolver API. For expert users only.
 %unignore operations_research::MPSolver::ComputeConstraintActivities;
@@ -346,6 +358,8 @@ PY_CONVERT(MPVariable);
 %unignore operations_research::MPVariable::SetLb;
 %unignore operations_research::MPVariable::SetUb;
 %unignore operations_research::MPVariable::SetBounds;
+%unignore operations_research::MPVariable::SetInteger;
+%unignore operations_research::MPVariable::SetBranchingPriority;
 
 // MPVariable: reader API.
 %unignore operations_research::MPVariable::solution_value;
@@ -356,6 +370,7 @@ PY_CONVERT(MPVariable);
 %unignore operations_research::MPVariable::index;  // No unit test
 %unignore operations_research::MPVariable::basis_status;
 %unignore operations_research::MPVariable::reduced_cost;  // For experts only.
+%unignore operations_research::MPVariable::branching_priority;  // no unit test.
 
 // MPConstraint: writer API.
 %unignore operations_research::MPConstraint::SetCoefficient;
@@ -363,6 +378,7 @@ PY_CONVERT(MPVariable);
 %unignore operations_research::MPConstraint::SetUb;
 %unignore operations_research::MPConstraint::SetBounds;
 %unignore operations_research::MPConstraint::set_is_lazy;
+%unignore operations_research::MPConstraint::Clear;  // No unit test
 
 // MPConstraint: reader API.
 %unignore operations_research::MPConstraint::GetCoefficient;

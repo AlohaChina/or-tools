@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -98,7 +98,7 @@
 %enddef  // VECTOR_AS_JAVA_ARRAY
 
 VECTOR_AS_JAVA_ARRAY(int, int, Int);
-VECTOR_AS_JAVA_ARRAY(int64, long, Long);
+VECTOR_AS_JAVA_ARRAY(int64_t, long, Long);
 VECTOR_AS_JAVA_ARRAY(double, double, Double);
 
 
@@ -132,16 +132,19 @@ VECTOR_AS_JAVA_ARRAY(double, double, Double);
   $1 = &result;
 }
 %typemap(out) const std::vector<CType*>& {
-  jclass object_class = jenv->FindClass("JavaPackage/JavaType");
+  if (nullptr == $1)
+    return $null;
+  std::string java_class_path = #JavaPackage "/" #JavaType;
+  jclass object_class = jenv->FindClass(java_class_path.c_str());
+  if (nullptr == object_class)
+    return $null;
   $result = jenv->NewObjectArray($1->size(), object_class, 0);
-  if (nullptr != object_class) {
-    jmethodID ctor = jenv->GetMethodID(object_class,"<init>", "(JZ)V");
-    for (int i = 0; i < $1->size(); ++i) {
-      jlong obj_ptr = 0;
-      *((CType **)&obj_ptr) = (*$1)[i];
-      jobject elem = jenv->NewObject(object_class, ctor, obj_ptr, false);
-      jenv->SetObjectArrayElement($result, i, elem);
-    }
+  jmethodID ctor = jenv->GetMethodID(object_class,"<init>", "(JZ)V");
+  for (int i = 0; i < $1->size(); ++i) {
+    jlong obj_ptr = 0;
+    *((CType **)&obj_ptr) = (*$1)[i];
+    jobject elem = jenv->NewObject(object_class, ctor, obj_ptr, false);
+    jenv->SetObjectArrayElement($result, i, elem);
   }
 }
 %typemap(javaout) const std::vector<CType*> & {
@@ -153,28 +156,35 @@ VECTOR_AS_JAVA_ARRAY(double, double, Double);
 %typemap(jtype) std::vector<CType*> "JavaType[]"
 %typemap(jni) std::vector<CType*> "jobjectArray"
 %typemap(in) std::vector<CType*> (std::vector<CType*> result) {
-  jclass object_class = jenv->FindClass("JavaPackage/JavaType");
+  std::string java_class_path = #JavaPackage "/" #JavaType;
+  jclass object_class = jenv->FindClass(java_class_path.c_str());
   if (nullptr == object_class)
     return $null;
-  jmethodID method_id = jenv->GetStaticMethodID(
-    object_class, "getCPtr", "(LJavaPackage/JavaType;)J");
+  jmethodID method_id =
+      jenv->GetStaticMethodID(object_class,
+                              "getCPtr",
+                              std::string("(L" + java_class_path + ";)J").c_str());
   assert(method_id != nullptr);
   for (int i = 0; i < jenv->GetArrayLength($input); i++) {
     jobject elem = jenv->GetObjectArrayElement($input, i);
     jlong ptr_value = jenv->CallStaticLongMethod(object_class, method_id, elem);
-    $1.push_back(CastOp(CType, ptr_value));
+    result.push_back(CastOp(CType, ptr_value));
   }
+  $1 = result;
 }
 %enddef  // CONVERT_VECTOR_WITH_CAST
 
 
-// Typemaps to represents arguments of types "const std::vector<std::vector<CType>>&" or
-// "std::vector<std::vector<CType>>*" as JavaType[][] (ObjectArray of JavaTypeArrays).
+// Typemaps to represents arguments of types:
+// "const std::vector<std::vector<CType>>&" or
+// "std::vector<std::vector<CType>>*" or
+// "std::vector<std::vector<CType>>" or
+// as JavaType[][] (ObjectArray of JavaTypeArrays).
 // note: CType must be a primitive data type (PDT).
 // ref: https://docs.oracle.com/javase/8/docs/technotes/guides/jni/spec/functions.html#GetObjectArrayElement
 // ref: https://docs.oracle.com/javase/8/docs/technotes/guides/jni/spec/functions.html#Get_PrimitiveType_ArrayElements_routines
 %define MATRIX_AS_JAVA_ARRAY(CType, JavaType, JavaTypeName)
-// This part is for const std::vector<std::vector<>>&.
+// This part is for const std::vector<std::vector<CType> >&.
 %typemap(jstype) const std::vector<std::vector<CType> >& #JavaType "[][]"
 %typemap(javain) const std::vector<std::vector<CType> >& "$javainput"
 %typemap(jtype) const std::vector<std::vector<CType> >& #JavaType "[][]"
@@ -204,7 +214,7 @@ VECTOR_AS_JAVA_ARRAY(double, double, Double);
     return $null;
   }
 %}
-// Now, we do it for std::vector<std::vector<>>*
+// Now, we do it for std::vector<std::vector<CType> >*
 %typemap(jstype) std::vector<std::vector<CType> >* #JavaType "[][]"
 %typemap(javain) std::vector<std::vector<CType> >* "$javainput"
 %typemap(jtype) std::vector<std::vector<CType> >* #JavaType "[][]"
@@ -243,10 +253,39 @@ VECTOR_AS_JAVA_ARRAY(double, double, Double);
     JCALL3(SetObjectArrayElement, jenv, $input, index1, inner_array);
   }
 %}
+// Now, we do it for std::vector<std::vector<CType> >
+%typemap(jstype) std::vector<std::vector<CType> > #JavaType "[][]"
+%typemap(javain) std::vector<std::vector<CType> > "$javainput"
+%typemap(jtype) std::vector<std::vector<CType> > #JavaType "[][]"
+%typemap(jni) std::vector<std::vector<CType> > "jobjectArray"
+%typemap(in) std::vector<std::vector<CType> > %{
+  if($input) {
+    const int size = jenv->GetArrayLength($input);
+    $1.clear();
+    $1.resize(size);
+    for (int index1 = 0; index1 < size; ++index1) {
+      j ## JavaType ## Array inner_array =
+        (j ## JavaType ## Array)jenv->GetObjectArrayElement($input, index1);
+      const int inner_size = jenv->GetArrayLength(inner_array);
+      $1[index1].reserve(inner_size);
+      j ## JavaType * const values =
+        jenv->Get ## JavaTypeName ## ArrayElements((j ## JavaType ## Array)inner_array, NULL);
+      for (int index2 = 0; index2 < inner_size; ++index2) {
+        $1[index1].emplace_back(values[index2]);
+      }
+      jenv->Release ## JavaTypeName ## ArrayElements((j ## JavaType ## Array)inner_array, values, JNI_ABORT);
+      jenv->DeleteLocalRef(inner_array);
+    }
+  }
+  else {
+    SWIG_JavaThrowException(jenv, SWIG_JavaNullPointerException, "null table");
+    return $null;
+  }
+%}
 %enddef  // MATRIX_AS_JAVA_ARRAY
 
 MATRIX_AS_JAVA_ARRAY(int, int, Int);
-MATRIX_AS_JAVA_ARRAY(int64, long, Long);
+MATRIX_AS_JAVA_ARRAY(int64_t, long, Long);
 MATRIX_AS_JAVA_ARRAY(double, double, Double);
 
 %define REINTERPRET_CAST(CType, ptr)

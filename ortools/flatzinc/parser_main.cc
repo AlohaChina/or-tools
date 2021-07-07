@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,17 +17,20 @@
 
 #include <string>
 
+#include "absl/flags/flag.h"
+#include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/timer.h"
-#include "ortools/flatzinc/logging.h"
 #include "ortools/flatzinc/model.h"
 #include "ortools/flatzinc/parser.h"
 #include "ortools/flatzinc/presolve.h"
+#include "ortools/util/logging.h"
 
-DEFINE_string(file, "", "Input file in the flatzinc format.");
-DEFINE_bool(print, false, "Print model.");
-DEFINE_bool(presolve, false, "Presolve loaded file.");
-DEFINE_bool(statistics, false, "Print model statistics");
+ABSL_FLAG(std::string, file, "", "Input file in the flatzinc format.");
+ABSL_FLAG(bool, print, false, "Print model.");
+ABSL_FLAG(bool, presolve, false, "Presolve loaded file.");
+ABSL_FLAG(bool, statistics, false, "Print model statistics");
 
 namespace operations_research {
 namespace fz {
@@ -35,7 +38,11 @@ void ParseFile(const std::string& filename, bool presolve) {
   WallTimer timer;
   timer.Start();
 
-  FZLOG << "Loading " << filename << FZENDL;
+  SolverLogger logger;
+  logger.EnableLogging(true);
+  logger.SetLogToStdOut(true);
+
+  SOLVER_LOG(&logger, "Loading ", filename);
 
   std::string problem_name = filename;
   // Remove the .fzn extension.
@@ -46,26 +53,25 @@ void ParseFile(const std::string& filename, bool presolve) {
   if (found != std::string::npos) {
     problem_name = problem_name.substr(found + 1);
   }
-  FZLOG << "  - parsed in " << timer.GetInMs() << " ms" << FZENDL;
+  SOLVER_LOG(&logger, "  - parsed in ", timer.GetInMs(), " ms");
 
   Model model(problem_name);
   CHECK(ParseFlatzincFile(filename, &model));
   if (presolve) {
-    FZLOG << "Presolve model" << FZENDL;
+    SOLVER_LOG(&logger, "Presolve model");
     timer.Reset();
     timer.Start();
-    Presolver presolve;
-    presolve.CleanUpModelForTheCpSolver(&model, /*use_sat=*/true);
+    Presolver presolve(&logger);
     presolve.Run(&model);
-    FZLOG << "  - done in " << timer.GetInMs() << " ms" << FZENDL;
+    SOLVER_LOG(&logger, "  - done in ", timer.GetInMs(), " ms");
   }
-  if (FLAGS_statistics) {
-    ModelStatistics stats(model);
+  if (absl::GetFlag(FLAGS_statistics)) {
+    ModelStatistics stats(model, &logger);
     stats.BuildStatistics();
     stats.PrintStatistics();
   }
-  if (FLAGS_print) {
-    FZLOG << model.DebugString() << FZENDL;
+  if (absl::GetFlag(FLAGS_print)) {
+    SOLVER_LOG(&logger, model.DebugString());
   }
 }
 }  // namespace fz
@@ -77,9 +83,10 @@ int main(int argc, char** argv) {
       "human-readable format";
   absl::SetFlag(&FLAGS_log_prefix, false);
   absl::SetFlag(&FLAGS_logtostderr, true);
-  gflags::SetUsageMessage(kUsage);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  absl::SetProgramUsageMessage(kUsage);
+  absl::ParseCommandLine(argc, argv);
   google::InitGoogleLogging(argv[0]);
-  operations_research::fz::ParseFile(FLAGS_file, FLAGS_presolve);
+  operations_research::fz::ParseFile(absl::GetFlag(FLAGS_file),
+                                     absl::GetFlag(FLAGS_presolve));
   return 0;
 }

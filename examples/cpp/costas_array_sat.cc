@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -21,32 +21,35 @@
 // This example contains two separate implementations. CostasHard()
 // uses hard constraints, whereas CostasSoft() uses a minimizer to
 // minimize the number of duplicates.
+
+#include <cstdint>
 #include <ctime>
 #include <set>
 #include <utility>
 
+#include "absl/flags/flag.h"
+#include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "ortools/base/commandlineflags.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/random.h"
 #include "ortools/sat/cp_model.h"
 #include "ortools/sat/model.h"
 
-DEFINE_int32(minsize, 0, "Minimum problem size.");
-DEFINE_int32(maxsize, 0, "Maximum problem size.");
-DEFINE_int32(model, 1,
-             "Model type: 1 integer variables hard, 2 boolean variables, 3 "
-             "boolean_variable soft");
-DEFINE_string(params, "", "Sat parameters.");
+ABSL_FLAG(int, minsize, 0, "Minimum problem size.");
+ABSL_FLAG(int, maxsize, 0, "Maximum problem size.");
+ABSL_FLAG(int, model, 1,
+          "Model type: 1 integer variables hard, 2 boolean variables, 3 "
+          "boolean_variable soft");
+ABSL_FLAG(std::string, params, "", "Sat parameters.");
 
 namespace operations_research {
 namespace sat {
 
 // Checks that all pairwise distances are unique and returns all violators
-void CheckConstraintViolators(const std::vector<int64> &vars,
-                              std::vector<int> *const violators) {
+void CheckConstraintViolators(const std::vector<int64_t>& vars,
+                              std::vector<int>* const violators) {
   int dim = vars.size();
 
   // Check that all indices are unique
@@ -77,7 +80,7 @@ void CheckConstraintViolators(const std::vector<int64> &vars,
 }
 
 // Check that all pairwise differences are unique
-bool CheckCostas(const std::vector<int64> &vars) {
+bool CheckCostas(const std::vector<int64_t>& vars) {
   std::vector<int> violators;
 
   CheckConstraintViolators(vars, &violators);
@@ -102,28 +105,30 @@ void CostasHard(const int dim) {
   // Check that the pairwise difference is unique
   for (int i = 1; i < dim; ++i) {
     std::vector<IntVar> subset;
-    Domain diff(-dim, dim);
+    Domain difference_domain(-dim, dim);
 
     for (int j = 0; j < dim - i; ++j) {
-      subset.push_back(cp_model.NewIntVar(diff));
-      cp_model.AddEquality(LinearExpr::Sum({subset[j], vars[j]}), vars[j + i]);
+      IntVar diff = cp_model.NewIntVar(difference_domain);
+      subset.push_back(diff);
+      cp_model.AddEquality(
+          diff, LinearExpr::ScalProd({vars[j + i], vars[j]}, {1, -1}));
     }
 
     cp_model.AddAllDifferent(subset);
   }
 
   Model model;
-  if (!FLAGS_params.empty()) {
-    model.Add(NewSatParameters(FLAGS_params));
+  if (!absl::GetFlag(FLAGS_params).empty()) {
+    model.Add(NewSatParameters(absl::GetFlag(FLAGS_params)));
   }
   const CpSolverResponse response = SolveCpModel(cp_model.Build(), &model);
 
-  if (response.status() == CpSolverStatus::FEASIBLE) {
-    std::vector<int64> costas_matrix;
+  if (response.status() == CpSolverStatus::OPTIMAL) {
+    std::vector<int64_t> costas_matrix;
     std::string output;
 
     for (int n = 0; n < dim; ++n) {
-      const int64 v = SolutionIntegerValue(response, vars[n]);
+      const int64_t v = SolutionIntegerValue(response, vars[n]);
       costas_matrix.push_back(v);
       absl::StrAppendFormat(&output, "%3lld", v);
     }
@@ -180,13 +185,13 @@ void CostasBool(const int dim) {
   }
 
   Model model;
-  if (!FLAGS_params.empty()) {
-    model.Add(NewSatParameters(FLAGS_params));
+  if (!absl::GetFlag(FLAGS_params).empty()) {
+    model.Add(NewSatParameters(absl::GetFlag(FLAGS_params)));
   }
   const CpSolverResponse response = SolveCpModel(cp_model.Build(), &model);
 
-  if (response.status() == CpSolverStatus::FEASIBLE) {
-    std::vector<int64> costas_matrix;
+  if (response.status() == CpSolverStatus::OPTIMAL) {
+    std::vector<int64_t> costas_matrix;
     std::string output;
 
     for (int n = 0; n < dim; ++n) {
@@ -262,13 +267,13 @@ void CostasBoolSoft(const int dim) {
   cp_model.Minimize(LinearExpr::Sum(all_violations));
 
   Model model;
-  if (!FLAGS_params.empty()) {
-    model.Add(NewSatParameters(FLAGS_params));
+  if (!absl::GetFlag(FLAGS_params).empty()) {
+    model.Add(NewSatParameters(absl::GetFlag(FLAGS_params)));
   }
   const CpSolverResponse response = SolveCpModel(cp_model.Build(), &model);
 
   if (response.status() == CpSolverStatus::OPTIMAL) {
-    std::vector<int64> costas_matrix;
+    std::vector<int64_t> costas_matrix;
     std::string output;
 
     for (int n = 0; n < dim; ++n) {
@@ -293,16 +298,19 @@ void CostasBoolSoft(const int dim) {
 }  // namespace sat
 }  // namespace operations_research
 
-int main(int argc, char **argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
+int main(int argc, char** argv) {
+  absl::SetFlag(&FLAGS_logtostderr, true);
+  google::InitGoogleLogging(argv[0]);
+  absl::ParseCommandLine(argc, argv);
+
   int min = 1;
   int max = 10;
 
-  if (FLAGS_minsize != 0) {
-    min = FLAGS_minsize;
+  if (absl::GetFlag(FLAGS_minsize) != 0) {
+    min = absl::GetFlag(FLAGS_minsize);
 
-    if (FLAGS_maxsize != 0) {
-      max = FLAGS_maxsize;
+    if (absl::GetFlag(FLAGS_maxsize) != 0) {
+      max = absl::GetFlag(FLAGS_maxsize);
     } else {
       max = min;
     }
@@ -310,11 +318,11 @@ int main(int argc, char **argv) {
 
   for (int size = min; size <= max; ++size) {
     LOG(INFO) << "Computing Costas Array for dim = " << size;
-    if (FLAGS_model == 1) {
+    if (absl::GetFlag(FLAGS_model) == 1) {
       operations_research::sat::CostasHard(size);
-    } else if (FLAGS_model == 2) {
+    } else if (absl::GetFlag(FLAGS_model) == 2) {
       operations_research::sat::CostasBool(size);
-    } else if (FLAGS_model == 3) {
+    } else if (absl::GetFlag(FLAGS_model) == 3) {
       operations_research::sat::CostasBoolSoft(size);
     }
   }

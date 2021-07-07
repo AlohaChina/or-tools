@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -32,12 +32,12 @@
 namespace operations_research {
 namespace bop {
 
-using ::operations_research::LinearBooleanConstraint;
-using ::operations_research::LinearBooleanProblem;
 using ::operations_research::glop::ColIndex;
 using ::operations_research::glop::DenseRow;
 using ::operations_research::glop::LinearProgram;
 using ::operations_research::glop::LPSolver;
+using ::operations_research::sat::LinearBooleanConstraint;
+using ::operations_research::sat::LinearBooleanProblem;
 
 //------------------------------------------------------------------------------
 // BopCompleteLNSOptimizer
@@ -127,7 +127,7 @@ BopOptimizerBase::Status BopCompleteLNSOptimizer::Optimize(
 
   CHECK(sat_solver_ != nullptr);
   const double initial_dt = sat_solver_->deterministic_time();
-  auto advance_dt = ::gtl::MakeCleanup([initial_dt, this, &time_limit]() {
+  auto advance_dt = ::absl::MakeCleanup([initial_dt, this, &time_limit]() {
     time_limit->AdvanceDeterministicTime(sat_solver_->deterministic_time() -
                                          initial_dt);
   });
@@ -240,7 +240,7 @@ BopOptimizerBase::Status BopAdaptiveLNSOptimizer::Optimize(
   // Set-up a sat_propagator_ cleanup task to catch all the exit cases.
   const double initial_dt = sat_propagator_->deterministic_time();
   auto sat_propagator_cleanup =
-      ::gtl::MakeCleanup([initial_dt, this, &learned_info, &time_limit]() {
+      ::absl::MakeCleanup([initial_dt, this, &learned_info, &time_limit]() {
         if (!sat_propagator_->IsModelUnsat()) {
           sat_propagator_->SetAssumptionLevel(0);
           sat_propagator_->RestoreSolverToAssumptionLevel();
@@ -258,7 +258,7 @@ BopOptimizerBase::Status BopAdaptiveLNSOptimizer::Optimize(
   // difficulty of the problem. There is one "target" difficulty for each
   // different numbers in the Luby sequence. Note that the initial value is
   // reused from the last run.
-  BopParameters local_parameters = parameters;
+  const BopParameters& local_parameters = parameters;
   int num_tries = 0;  // TODO(user): remove? our limit is 1 by default.
   while (!time_limit->LimitReached() &&
          num_tries < local_parameters.num_random_lns_tries()) {

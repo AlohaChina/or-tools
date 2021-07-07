@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,15 +13,20 @@
 
 #include "ortools/sat/cp_model_expand.h"
 
+#include <cstdint>
+#include <limits>
 #include <map>
+#include <string>
 
 #include "absl/container/flat_hash_map.h"
 #include "ortools/base/hash.h"
 #include "ortools/base/map_util.h"
 #include "ortools/base/stl_util.h"
+#include "ortools/port/proto_utils.h"
 #include "ortools/sat/cp_model.pb.h"
 #include "ortools/sat/cp_model_utils.h"
 #include "ortools/sat/presolve_context.h"
+#include "ortools/sat/util.h"
 #include "ortools/util/saturated_arithmetic.h"
 #include "ortools/util/sorted_interval_list.h"
 
@@ -35,78 +40,19 @@ void ExpandReservoir(ConstraintProto* ct, PresolveContext* context) {
     return (void)context->NotifyThatModelIsUnsat();
   }
 
-  // TODO(user): Support sharing constraints in the model across constraints.
-  absl::flat_hash_map<std::pair<int, int>, int> precedence_cache;
   const ReservoirConstraintProto& reservoir = ct->reservoir();
-  const int num_variables = reservoir.times_size();
+  const int num_events = reservoir.times_size();
 
-  auto is_optional = [&context, &reservoir](int index) {
-    if (reservoir.actives_size() == 0) return false;
-    const int literal = reservoir.actives(index);
-    return !context->IsFixed(literal);
-  };
   const int true_literal = context->GetOrCreateConstantVar(1);
-  auto active = [&reservoir, true_literal](int index) {
+
+  const auto is_active_literal = [&reservoir, true_literal](int index) {
     if (reservoir.actives_size() == 0) return true_literal;
     return reservoir.actives(index);
   };
 
-  // x_lesseq_y <=> (x <= y && l_x is true && l_y is true).
-  const auto add_reified_precedence = [&context, true_literal](
-                                          int x_lesseq_y, int x, int y, int l_x,
-                                          int l_y) {
-    // x_lesseq_y => (x <= y) && l_x is true && l_y is true.
-    ConstraintProto* const lesseq = context->working_model->add_constraints();
-    lesseq->add_enforcement_literal(x_lesseq_y);
-    lesseq->mutable_linear()->add_vars(x);
-    lesseq->mutable_linear()->add_vars(y);
-    lesseq->mutable_linear()->add_coeffs(-1);
-    lesseq->mutable_linear()->add_coeffs(1);
-    lesseq->mutable_linear()->add_domain(0);
-    lesseq->mutable_linear()->add_domain(kint64max);
-    if (l_x != true_literal) {
-      context->AddImplication(x_lesseq_y, l_x);
-    }
-    if (l_y != true_literal) {
-      context->AddImplication(x_lesseq_y, l_y);
-    }
-
-    // Not(x_lesseq_y) && l_x && l_y => (x > y)
-    ConstraintProto* const greater = context->working_model->add_constraints();
-    greater->mutable_linear()->add_vars(x);
-    greater->mutable_linear()->add_vars(y);
-    greater->mutable_linear()->add_coeffs(-1);
-    greater->mutable_linear()->add_coeffs(1);
-    greater->mutable_linear()->add_domain(kint64min);
-    greater->mutable_linear()->add_domain(-1);
-    // Manages enforcement literal.
-    if (l_x == true_literal && l_y == true_literal) {
-      greater->add_enforcement_literal(NegatedRef(x_lesseq_y));
-    } else {
-      // conjunction <=> l_x && l_y && not(x_lesseq_y).
-      const int conjunction = context->NewBoolVar();
-      context->AddImplication(conjunction, NegatedRef(x_lesseq_y));
-      BoolArgumentProto* const bool_or =
-          context->working_model->add_constraints()->mutable_bool_or();
-      bool_or->add_literals(conjunction);
-      bool_or->add_literals(x_lesseq_y);
-
-      if (l_x != true_literal) {
-        context->AddImplication(conjunction, l_x);
-        bool_or->add_literals(NegatedRef(l_x));
-      }
-      if (l_y != true_literal) {
-        context->AddImplication(conjunction, l_y);
-        bool_or->add_literals(NegatedRef(l_y));
-      }
-
-      greater->add_enforcement_literal(conjunction);
-    }
-  };
-
   int num_positives = 0;
   int num_negatives = 0;
-  for (const int64 demand : reservoir.demands()) {
+  for (const int64_t demand : reservoir.demands()) {
     if (demand > 0) {
       num_positives++;
     } else if (demand < 0) {
@@ -116,34 +62,24 @@ void ExpandReservoir(ConstraintProto* ct, PresolveContext* context) {
 
   if (num_positives > 0 && num_negatives > 0) {
     // Creates Boolean variables equivalent to (start[i] <= start[j]) i != j
-    for (int i = 0; i < num_variables - 1; ++i) {
+    for (int i = 0; i < num_events - 1; ++i) {
+      const int active_i = is_active_literal(i);
+      if (context->LiteralIsFalse(active_i)) continue;
       const int time_i = reservoir.times(i);
-      for (int j = i + 1; j < num_variables; ++j) {
+
+      for (int j = i + 1; j < num_events; ++j) {
+        const int active_j = is_active_literal(j);
+        if (context->LiteralIsFalse(active_j)) continue;
         const int time_j = reservoir.times(j);
-        const std::pair<int, int> p = std::make_pair(time_i, time_j);
-        const std::pair<int, int> rev_p = std::make_pair(time_j, time_i);
-        if (gtl::ContainsKey(precedence_cache, p)) continue;
 
-        const int i_lesseq_j = context->NewBoolVar();
-        precedence_cache[p] = i_lesseq_j;
-        const int j_lesseq_i = context->NewBoolVar();
-        precedence_cache[rev_p] = j_lesseq_i;
-        add_reified_precedence(i_lesseq_j, time_i, time_j, active(i),
-                               active(j));
-        add_reified_precedence(j_lesseq_i, time_j, time_i, active(j),
-                               active(i));
-
-        // Consistency. This is redundant but should improves performance.
-        auto* const bool_or =
-            context->working_model->add_constraints()->mutable_bool_or();
-        bool_or->add_literals(i_lesseq_j);
-        bool_or->add_literals(j_lesseq_i);
-        if (is_optional(i)) {
-          bool_or->add_literals(NegatedRef(reservoir.actives(i)));
-        }
-        if (is_optional(j)) {
-          bool_or->add_literals(NegatedRef(reservoir.actives(j)));
-        }
+        const int i_lesseq_j = context->GetOrCreateReifiedPrecedenceLiteral(
+            time_i, time_j, active_i, active_j);
+        context->working_model->mutable_variables(i_lesseq_j)
+            ->set_name(absl::StrCat(i, " before ", j));
+        const int j_lesseq_i = context->GetOrCreateReifiedPrecedenceLiteral(
+            time_j, time_i, active_j, active_i);
+        context->working_model->mutable_variables(j_lesseq_i)
+            ->set_name(absl::StrCat(j, " before ", i));
       }
     }
 
@@ -151,84 +87,59 @@ void ExpandReservoir(ConstraintProto* ct, PresolveContext* context) {
     // For this we only add a constraint at the time a given demand
     // take place. We also have a constraint for time zero if needed
     // (added below).
-    for (int i = 0; i < num_variables; ++i) {
+    for (int i = 0; i < num_events; ++i) {
+      const int active_i = is_active_literal(i);
+      if (context->LiteralIsFalse(active_i)) continue;
       const int time_i = reservoir.times(i);
+
       // Accumulates demands of all predecessors.
       ConstraintProto* const level = context->working_model->add_constraints();
-      for (int j = 0; j < num_variables; ++j) {
+      level->add_enforcement_literal(active_i);
+
+      // Add contributions from previous events.
+      for (int j = 0; j < num_events; ++j) {
         if (i == j) continue;
+        const int active_j = is_active_literal(j);
+        if (context->LiteralIsFalse(active_j)) continue;
+
         const int time_j = reservoir.times(j);
-        level->mutable_linear()->add_vars(gtl::FindOrDieNoPrint(
-            precedence_cache, std::make_pair(time_j, time_i)));
+        level->mutable_linear()->add_vars(
+            context->GetOrCreateReifiedPrecedenceLiteral(time_j, time_i,
+                                                         active_j, active_i));
         level->mutable_linear()->add_coeffs(reservoir.demands(j));
       }
-      // Accounts for own demand.
-      const int64 demand_i = reservoir.demands(i);
+
+      // Accounts for own demand in the domain of the sum.
+      const int64_t demand_i = reservoir.demands(i);
       level->mutable_linear()->add_domain(
           CapSub(reservoir.min_level(), demand_i));
       level->mutable_linear()->add_domain(
           CapSub(reservoir.max_level(), demand_i));
-      if (is_optional(i)) {
-        level->add_enforcement_literal(reservoir.actives(i));
-      }
     }
   } else {
     // If all demands have the same sign, we do not care about the order, just
     // the sum.
-    int64 fixed_demand = 0;
     auto* const sum =
         context->working_model->add_constraints()->mutable_linear();
-    for (int i = 0; i < num_variables; ++i) {
-      const int64 demand = reservoir.demands(i);
-      if (demand == 0) continue;
-      if (is_optional(i)) {
-        sum->add_vars(reservoir.actives(i));
-        sum->add_coeffs(demand);
-      } else {
-        fixed_demand += demand;
-      }
+    for (int i = 0; i < num_events; ++i) {
+      sum->add_vars(is_active_literal(i));
+      sum->add_coeffs(reservoir.demands(i));
     }
-    sum->add_domain(CapSub(reservoir.min_level(), fixed_demand));
-    sum->add_domain(CapSub(reservoir.max_level(), fixed_demand));
-  }
-
-  // Constrains the reservoir level to be consistent at time 0.
-  // We need to do it only if 0 is not in [min_level..max_level].
-  // Otherwise, the regular propagation will already check it.
-  if (reservoir.min_level() > 0 || reservoir.max_level() < 0) {
-    auto* const initial_ct =
-        context->working_model->add_constraints()->mutable_linear();
-    for (int i = 0; i < num_variables; ++i) {
-      const int time_i = reservoir.times(i);
-      const int lesseq_0 = context->NewBoolVar();
-      // lesseq_0 <=> (x <= 0 && lit is true).
-      context->AddImplyInDomain(lesseq_0, time_i, Domain(kint64min, 0));
-      if (active(i) == true_literal) {
-        context->AddImplyInDomain(NegatedRef(lesseq_0), time_i,
-                                  Domain(1, kint64max));
-      } else {
-        // conjunction <=> lit && not(lesseq_0).
-        const int conjunction = context->NewBoolVar();
-        context->AddImplication(conjunction, active(i));
-        context->AddImplication(conjunction, NegatedRef(lesseq_0));
-        BoolArgumentProto* const bool_or =
-            context->working_model->add_constraints()->mutable_bool_or();
-        bool_or->add_literals(NegatedRef(active(i)));
-        bool_or->add_literals(lesseq_0);
-        bool_or->add_literals(conjunction);
-
-        context->AddImplyInDomain(conjunction, time_i, Domain(1, kint64max));
-      }
-
-      initial_ct->add_vars(lesseq_0);
-      initial_ct->add_coeffs(reservoir.demands(i));
-    }
-    initial_ct->add_domain(reservoir.min_level());
-    initial_ct->add_domain(reservoir.max_level());
+    sum->add_domain(reservoir.min_level());
+    sum->add_domain(reservoir.max_level());
   }
 
   ct->Clear();
   context->UpdateRuleStats("reservoir: expanded");
+}
+
+// This is not an "expansion" per say, but just a mandatory presolve step to
+// satisfy preconditions assumed by the rest of the code.
+void ExpandIntDiv(ConstraintProto* ct, PresolveContext* context) {
+  const int divisor = ct->int_div().vars(1);
+  if (!context->IntersectDomainWith(divisor, Domain(0).Complement())) {
+    return (void)context->NotifyThatModelIsUnsat();
+  }
 }
 
 void ExpandIntMod(ConstraintProto* ct, PresolveContext* context) {
@@ -237,14 +148,15 @@ void ExpandIntMod(ConstraintProto* ct, PresolveContext* context) {
   const int mod_var = int_mod.vars(1);
   const int target_var = int_mod.target();
 
-  const int64 mod_lb = context->MinOf(mod_var);
+  const int64_t mod_lb = context->MinOf(mod_var);
   CHECK_GE(mod_lb, 1);
-  const int64 mod_ub = context->MaxOf(mod_var);
+  const int64_t mod_ub = context->MaxOf(mod_var);
 
-  const int64 var_lb = context->MinOf(var);
-  const int64 var_ub = context->MaxOf(var);
+  const int64_t var_lb = context->MinOf(var);
+  const int64_t var_ub = context->MaxOf(var);
 
   // Compute domains of var / mod_var.
+  // TODO(user): implement Domain.ContinuousDivisionBy(domain).
   const int div_var =
       context->NewIntVar(Domain(var_lb / mod_ub, var_ub / mod_lb));
 
@@ -281,7 +193,8 @@ void ExpandIntMod(ConstraintProto* ct, PresolveContext* context) {
   } else {
     // Create prod_var = div_var * mod.
     const int prod_var = context->NewIntVar(
-        Domain(var_lb * mod_lb / mod_ub, var_ub * mod_ub / mod_lb));
+        context->DomainOf(div_var).ContinuousMultiplicationBy(
+            context->DomainOf(mod_var)));
     IntegerArgumentProto* const int_prod =
         context->working_model->add_constraints()->mutable_int_prod();
     int_prod->set_target(prod_var);
@@ -326,6 +239,181 @@ void ExpandIntProdWithBoolean(int bool_ref, int int_ref, int product_ref,
   zero->mutable_linear()->add_domain(0);
 }
 
+void AddXEqualYOrXEqualZero(int x_eq_y, int x, int y,
+                            PresolveContext* context) {
+  ConstraintProto* equality = context->working_model->add_constraints();
+  equality->add_enforcement_literal(x_eq_y);
+  equality->mutable_linear()->add_vars(x);
+  equality->mutable_linear()->add_coeffs(1);
+  equality->mutable_linear()->add_vars(y);
+  equality->mutable_linear()->add_coeffs(-1);
+  equality->mutable_linear()->add_domain(0);
+  equality->mutable_linear()->add_domain(0);
+  context->AddImplyInDomain(NegatedRef(x_eq_y), x, {0, 0});
+}
+
+// a_ref spans across 0, b_ref does not.
+void ExpandIntProdWithOneAcrossZero(int a_ref, int b_ref, int product_ref,
+                                    PresolveContext* context) {
+  DCHECK_LT(context->MinOf(a_ref), 0);
+  DCHECK_GT(context->MaxOf(a_ref), 0);
+  DCHECK(context->MinOf(b_ref) >= 0 || context->MaxOf(b_ref) <= 0);
+
+  // Split the domain of a in two, controlled by a new literal.
+  const int a_is_positive = context->NewBoolVar();
+  context->AddImplyInDomain(a_is_positive, a_ref,
+                            {0, std::numeric_limits<int64_t>::max()});
+  context->AddImplyInDomain(NegatedRef(a_is_positive), a_ref,
+                            {std::numeric_limits<int64_t>::min(), -1});
+  const int pos_a_ref = context->NewIntVar({0, context->MaxOf(a_ref)});
+  AddXEqualYOrXEqualZero(a_is_positive, pos_a_ref, a_ref, context);
+
+  const int neg_a_ref = context->NewIntVar({context->MinOf(a_ref), 0});
+  AddXEqualYOrXEqualZero(NegatedRef(a_is_positive), neg_a_ref, a_ref, context);
+
+  // Create product with the positive part ofa_ref.
+  const bool b_is_positive = context->MinOf(b_ref) >= 0;
+  const Domain pos_a_product_domain =
+      b_is_positive ? Domain({0, context->MaxOf(product_ref)})
+                    : Domain({context->MinOf(product_ref), 0});
+  const int pos_a_product = context->NewIntVar(pos_a_product_domain);
+  IntegerArgumentProto* pos_product =
+      context->working_model->add_constraints()->mutable_int_prod();
+  pos_product->set_target(pos_a_product);
+  pos_product->add_vars(pos_a_ref);
+  pos_product->add_vars(b_ref);
+
+  // Create product with the negative part of a_ref.
+  const Domain neg_a_product_domain =
+      b_is_positive ? Domain({context->MinOf(product_ref), 0})
+                    : Domain({0, context->MaxOf(product_ref)});
+  const int neg_a_product = context->NewIntVar(neg_a_product_domain);
+  IntegerArgumentProto* neg_product =
+      context->working_model->add_constraints()->mutable_int_prod();
+  neg_product->set_target(neg_a_product);
+  neg_product->add_vars(neg_a_ref);
+  neg_product->add_vars(b_ref);
+
+  // Link back to the original product.
+  LinearConstraintProto* lin =
+      context->working_model->add_constraints()->mutable_linear();
+  lin->add_vars(product_ref);
+  lin->add_coeffs(-1);
+  lin->add_vars(pos_a_product);
+  lin->add_coeffs(1);
+  lin->add_vars(neg_a_product);
+  lin->add_coeffs(1);
+  lin->add_domain(0);
+  lin->add_domain(0);
+}
+
+void ExpandPositiveIntProdWithTwoAcrossZero(int a_ref, int b_ref,
+                                            int product_ref,
+                                            PresolveContext* context) {
+  const int terms_are_positive = context->NewBoolVar();
+
+  const int64_t max_of_a = context->MaxOf(a_ref);
+  const int64_t max_of_b = context->MaxOf(b_ref);
+  const Domain positive_vars_domain({0, max_of_a * max_of_b});
+  int both_positive_product_ref = std::numeric_limits<int>::min();
+  if (!positive_vars_domain.IntersectionWith(context->DomainOf(product_ref))
+           .IsEmpty()) {
+    const int pos_a_ref = context->NewIntVar({0, max_of_a});
+    AddXEqualYOrXEqualZero(terms_are_positive, pos_a_ref, a_ref, context);
+    const int pos_b_ref = context->NewIntVar({0, max_of_b});
+    AddXEqualYOrXEqualZero(terms_are_positive, pos_b_ref, b_ref, context);
+
+    both_positive_product_ref = context->NewIntVar(positive_vars_domain);
+    IntegerArgumentProto* pos_product =
+        context->working_model->add_constraints()->mutable_int_prod();
+    pos_product->set_target(both_positive_product_ref);
+    pos_product->add_vars(pos_a_ref);
+    pos_product->add_vars(pos_b_ref);
+  }
+
+  const int64_t min_of_a = context->MinOf(a_ref);
+  const int64_t min_of_b = context->MinOf(b_ref);
+  const Domain negative_vars_domain({0, min_of_a * min_of_b});
+  int both_negative_product_ref = std::numeric_limits<int>::min();
+  if (!negative_vars_domain.IntersectionWith(context->DomainOf(product_ref))
+           .IsEmpty()) {
+    const int neg_a_ref = context->NewIntVar({min_of_a, 0});
+    AddXEqualYOrXEqualZero(NegatedRef(terms_are_positive), neg_a_ref, a_ref,
+                           context);
+    const int neg_b_ref = context->NewIntVar({min_of_b, 0});
+    AddXEqualYOrXEqualZero(NegatedRef(terms_are_positive), neg_b_ref, b_ref,
+                           context);
+    both_negative_product_ref = context->NewIntVar(negative_vars_domain);
+    IntegerArgumentProto* neg_product =
+        context->working_model->add_constraints()->mutable_int_prod();
+    neg_product->set_target(both_negative_product_ref);
+    neg_product->add_vars(neg_a_ref);
+    neg_product->add_vars(neg_b_ref);
+  }
+
+  // Link back to the original product.
+  LinearConstraintProto* lin =
+      context->working_model->add_constraints()->mutable_linear();
+  lin->add_vars(product_ref);
+  lin->add_coeffs(-1);
+  if (both_positive_product_ref != std::numeric_limits<int>::min()) {
+    lin->add_vars(both_positive_product_ref);
+    lin->add_coeffs(1);
+  }
+  if (both_negative_product_ref != std::numeric_limits<int>::min()) {
+    lin->add_vars(both_negative_product_ref);
+    lin->add_coeffs(1);
+  }
+  lin->add_domain(0);
+  lin->add_domain(0);
+}
+
+void ExpandIntProdWithTwoAcrossZero(int a_ref, int b_ref, int product_ref,
+                                    PresolveContext* context) {
+  if (context->MinOf(product_ref) >= 0) {
+    ExpandPositiveIntProdWithTwoAcrossZero(a_ref, b_ref, product_ref, context);
+    return;
+  } else if (context->MaxOf(product_ref) <= 0) {
+    ExpandPositiveIntProdWithTwoAcrossZero(a_ref, NegatedRef(b_ref),
+                                           NegatedRef(product_ref), context);
+    return;
+  }
+  // Split a_ref domain in two, controlled by a new literal.
+  const int a_is_positive = context->NewBoolVar();
+  context->AddImplyInDomain(a_is_positive, a_ref,
+                            {0, std::numeric_limits<int64_t>::max()});
+  context->AddImplyInDomain(NegatedRef(a_is_positive), a_ref,
+                            {std::numeric_limits<int64_t>::min(), -1});
+  const int64_t min_of_a = context->MinOf(a_ref);
+  const int64_t max_of_a = context->MaxOf(a_ref);
+
+  const int pos_a_ref = context->NewIntVar({0, max_of_a});
+  AddXEqualYOrXEqualZero(a_is_positive, pos_a_ref, a_ref, context);
+
+  const int neg_a_ref = context->NewIntVar({min_of_a, 0});
+  AddXEqualYOrXEqualZero(NegatedRef(a_is_positive), neg_a_ref, a_ref, context);
+
+  // Create product with two sub parts of a_ref.
+  const int pos_product_ref =
+      context->NewIntVar(context->DomainOf(product_ref));
+  ExpandIntProdWithOneAcrossZero(b_ref, pos_a_ref, pos_product_ref, context);
+  const int neg_product_ref =
+      context->NewIntVar(context->DomainOf(product_ref));
+  ExpandIntProdWithOneAcrossZero(b_ref, neg_a_ref, neg_product_ref, context);
+
+  // Link back to the original product.
+  LinearConstraintProto* lin =
+      context->working_model->add_constraints()->mutable_linear();
+  lin->add_vars(product_ref);
+  lin->add_coeffs(-1);
+  lin->add_vars(pos_product_ref);
+  lin->add_coeffs(1);
+  lin->add_vars(neg_product_ref);
+  lin->add_coeffs(1);
+  lin->add_domain(0);
+  lin->add_domain(0);
+}
+
 void ExpandIntProd(ConstraintProto* ct, PresolveContext* context) {
   const IntegerArgumentProto& int_prod = ct->int_prod();
   if (int_prod.vars_size() != 2) return;
@@ -343,10 +431,39 @@ void ExpandIntProd(ConstraintProto* ct, PresolveContext* context) {
     ExpandIntProdWithBoolean(a, b, p, context);
     ct->Clear();
     context->UpdateRuleStats("int_prod: expanded product with Boolean var");
-  } else if (b_is_boolean && !a_is_boolean) {
+    return;
+  }
+  if (b_is_boolean && !a_is_boolean) {
     ExpandIntProdWithBoolean(b, a, p, context);
     ct->Clear();
     context->UpdateRuleStats("int_prod: expanded product with Boolean var");
+    return;
+  }
+
+  const bool a_span_across_zero =
+      context->MinOf(a) < 0 && context->MaxOf(a) > 0;
+  const bool b_span_across_zero =
+      context->MinOf(b) < 0 && context->MaxOf(b) > 0;
+  if (a_span_across_zero && !b_span_across_zero) {
+    ExpandIntProdWithOneAcrossZero(a, b, p, context);
+    ct->Clear();
+    context->UpdateRuleStats(
+        "int_prod: expanded product with general integer variables");
+    return;
+  }
+  if (!a_span_across_zero && b_span_across_zero) {
+    ExpandIntProdWithOneAcrossZero(b, a, p, context);
+    ct->Clear();
+    context->UpdateRuleStats(
+        "int_prod: expanded product with general integer variables");
+    return;
+  }
+  if (a_span_across_zero && b_span_across_zero) {
+    ExpandIntProdWithTwoAcrossZero(a, b, p, context);
+    ct->Clear();
+    context->UpdateRuleStats(
+        "int_prod: expanded product with general integer variables");
+    return;
   }
 }
 
@@ -361,46 +478,77 @@ void ExpandInverse(ConstraintProto* ct, PresolveContext* context) {
   for (const int ref : ct->inverse().f_direct()) {
     if (!context->IntersectDomainWith(ref, Domain(0, size - 1))) {
       VLOG(1) << "Empty domain for a variable in ExpandInverse()";
+      return;
     }
   }
   for (const int ref : ct->inverse().f_inverse()) {
     if (!context->IntersectDomainWith(ref, Domain(0, size - 1))) {
       VLOG(1) << "Empty domain for a variable in ExpandInverse()";
+      return;
     }
   }
 
-  // Add the "full-encoding" clauses for better presolving.
-  //
-  // TODO(user): Dectect full encoding at presolve and automatically add them or
-  // (maybe implicitely). This way we don't need to add them here and we also
-  // support in a better way encoding already present in the model.
-  std::vector<BoolArgumentProto*> direct_clauses;
-  std::vector<BoolArgumentProto*> inverse_clauses;
-  for (int i = 0; i < size; ++i) {
-    direct_clauses.push_back(
-        context->working_model->add_constraints()->mutable_bool_or());
-    inverse_clauses.push_back(
-        context->working_model->add_constraints()->mutable_bool_or());
+  // Reduce the domains of each variable by checking that the inverse value
+  // exists.
+  std::vector<int64_t> possible_values;
+  // Propagate from one vector to its counterpart.
+  // Note this reaches the fixpoint as there is a one to one mapping between
+  // (variable-value) pairs in each vector.
+  const auto filter_inverse_domain = [context, size, &possible_values](
+                                         const auto& direct,
+                                         const auto& inverse) {
+    // Propagate for the inverse vector to the direct vector.
+    for (int i = 0; i < size; ++i) {
+      possible_values.clear();
+      const Domain domain = context->DomainOf(direct[i]);
+      bool removed_value = false;
+      for (const ClosedInterval& interval : domain) {
+        for (int64_t j = interval.start; j <= interval.end; ++j) {
+          if (context->DomainOf(inverse[j]).Contains(i)) {
+            possible_values.push_back(j);
+          } else {
+            removed_value = true;
+          }
+        }
+      }
+      if (removed_value) {
+        if (!context->IntersectDomainWith(
+                direct[i], Domain::FromValues(possible_values))) {
+          VLOG(1) << "Empty domain for a variable in ExpandInverse()";
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  if (!filter_inverse_domain(ct->inverse().f_direct(),
+                             ct->inverse().f_inverse())) {
+    return;
   }
 
-  // TODO(user): Avoid creating trivially false literal.
+  if (!filter_inverse_domain(ct->inverse().f_inverse(),
+                             ct->inverse().f_direct())) {
+    return;
+  }
+
+  // Expand the inverse constraint by associating literal to var == value
+  // and sharing them between the direct and inverse variables.
   for (int i = 0; i < size; ++i) {
     const int f_i = ct->inverse().f_direct(i);
-    for (int j = 0; j < size; ++j) {
-      const int r_j = ct->inverse().f_inverse(j);
-
-      // We have f[i] == j <=> r[j] == i;
-      // Add or reuse a Boolean equivalent to all these fact.
-      //
-      // TODO(user): if r_j == i is already encoded but not f_i == j, reuse
-      // the Boolean. The presolve should eventually remove these, but better
-      // not to create them in the first place.
-      const int bvar = context->GetOrCreateVarValueEncoding(f_i, j);
-      context->AddImplyInDomain(bvar, r_j, Domain(i));
-      context->AddImplyInDomain(NegatedRef(bvar), r_j, Domain(i).Complement());
-
-      direct_clauses[i]->add_literals(bvar);
-      inverse_clauses[j]->add_literals(bvar);
+    const Domain domain = context->DomainOf(f_i);
+    for (const ClosedInterval& interval : domain) {
+      for (int64_t j = interval.start; j <= interval.end; ++j) {
+        // We have f[i] == j <=> r[j] == i;
+        const int r_j = ct->inverse().f_inverse(j);
+        int r_j_i;
+        if (context->HasVarValueEncoding(r_j, i, &r_j_i)) {
+          context->InsertVarValueEncoding(r_j_i, f_i, j);
+        } else {
+          const int f_i_j = context->GetOrCreateVarValueEncoding(f_i, j);
+          context->InsertVarValueEncoding(f_i_j, r_j, i);
+        }
+      }
     }
   }
 
@@ -420,13 +568,13 @@ void ExpandElement(ConstraintProto* ct, PresolveContext* context) {
   }
 
   bool all_constants = true;
-  absl::flat_hash_map<int64, int> constant_var_values_usage;
-  std::vector<int64> constant_var_values;
-  std::vector<int64> invalid_indices;
+  absl::flat_hash_map<int64_t, int> constant_var_values_usage;
+  std::vector<int64_t> constant_var_values;
+  std::vector<int64_t> invalid_indices;
   Domain index_domain = context->DomainOf(index_ref);
   Domain target_domain = context->DomainOf(target_ref);
   for (const ClosedInterval& interval : index_domain) {
-    for (int64 v = interval.start; v <= interval.end; ++v) {
+    for (int64_t v = interval.start; v <= interval.end; ++v) {
       const int var = element.vars(v);
       const Domain var_domain = context->DomainOf(var);
       if (var_domain.IntersectionWith(target_domain).IsEmpty()) {
@@ -438,7 +586,7 @@ void ExpandElement(ConstraintProto* ct, PresolveContext* context) {
         break;
       }
 
-      const int64 value = var_domain.Min();
+      const int64_t value = var_domain.Min();
       if (constant_var_values_usage[value]++ == 0) {
         constant_var_values.push_back(value);
       }
@@ -461,7 +609,7 @@ void ExpandElement(ConstraintProto* ct, PresolveContext* context) {
   // no longer valid for the target variable. They are created only for values
   // that have multiples literals supporting them.
   // Order is not important.
-  absl::flat_hash_map<int64, BoolArgumentProto*> supports;
+  absl::flat_hash_map<int64_t, BoolArgumentProto*> supports;
   if (all_constants && target_ref != index_ref) {
     if (!context->IntersectDomainWith(
             target_ref, Domain::FromValues(constant_var_values))) {
@@ -477,7 +625,7 @@ void ExpandElement(ConstraintProto* ct, PresolveContext* context) {
     }
 
     for (const ClosedInterval& interval : target_domain) {
-      for (int64 v = interval.start; v <= interval.end; ++v) {
+      for (int64_t v = interval.start; v <= interval.end; ++v) {
         const int usage = gtl::FindOrDie(constant_var_values_usage, v);
         if (usage > 1) {
           const int lit = context->GetOrCreateVarValueEncoding(target_ref, v);
@@ -495,7 +643,7 @@ void ExpandElement(ConstraintProto* ct, PresolveContext* context) {
   auto* bool_or = context->working_model->add_constraints()->mutable_bool_or();
 
   for (const ClosedInterval& interval : index_domain) {
-    for (int64 v = interval.start; v <= interval.end; ++v) {
+    for (int64_t v = interval.start; v <= interval.end; ++v) {
       const int var = element.vars(v);
       const int index_lit = context->GetOrCreateVarValueEncoding(index_ref, v);
       const Domain var_domain = context->DomainOf(var);
@@ -512,7 +660,7 @@ void ExpandElement(ConstraintProto* ct, PresolveContext* context) {
         context->AddImplyInDomain(index_lit, var, target_domain);
       } else if (var_domain.Size() == 1) {
         if (all_constants) {
-          const int64 value = var_domain.Min();
+          const int64_t value = var_domain.Min();
           if (constant_var_values_usage[value] > 1) {
             // The encoding literal for 'value' of the target_ref has been
             // created before.
@@ -541,10 +689,10 @@ void ExpandElement(ConstraintProto* ct, PresolveContext* context) {
   }
 
   if (all_constants) {
-    const int64 var_min = target_domain.Min();
+    const int64_t var_min = target_domain.Min();
 
     // Scan all values to find the one with the most literals attached.
-    int64 most_frequent_value = kint64max;
+    int64_t most_frequent_value = std::numeric_limits<int64_t>::max();
     int usage = -1;
     for (const auto it : constant_var_values_usage) {
       if (it.second > usage ||
@@ -561,7 +709,7 @@ void ExpandElement(ConstraintProto* ct, PresolveContext* context) {
     // coefficients are positive).
     // TODO(user): Benchmark if using base is always beneficial.
     // TODO(user): Try not to create this if max_usage == 1.
-    const int64 base =
+    const int64_t base =
         usage > 2 && usage > size / 10 ? most_frequent_value : var_min;
     if (base != var_min) {
       VLOG(3) << "expand element: choose " << base << " with usage " << usage
@@ -570,15 +718,15 @@ void ExpandElement(ConstraintProto* ct, PresolveContext* context) {
 
     LinearConstraintProto* const linear =
         context->working_model->add_constraints()->mutable_linear();
-    int64 rhs = -base;
+    int64_t rhs = -base;
     linear->add_vars(target_ref);
     linear->add_coeffs(-1);
     for (const ClosedInterval& interval : index_domain) {
-      for (int64 v = interval.start; v <= interval.end; ++v) {
+      for (int64_t v = interval.start; v <= interval.end; ++v) {
         const int ref = element.vars(v);
         const int index_lit =
             context->GetOrCreateVarValueEncoding(index_ref, v);
-        const int64 delta = context->DomainOf(ref).Min() - base;
+        const int64_t delta = context->DomainOf(ref).Min() - base;
         if (RefIsPositive(index_lit)) {
           linear->add_vars(index_lit);
           linear->add_coeffs(delta);
@@ -600,36 +748,52 @@ void ExpandElement(ConstraintProto* ct, PresolveContext* context) {
 }
 
 // Adds clauses so that literals[i] true <=> encoding[value[i]] true.
-// This also implicitely use the fact that exactly one alternative is true.
+// This also implicitly use the fact that exactly one alternative is true.
 void LinkLiteralsAndValues(
-    const std::vector<int>& value_literals, const std::vector<int64>& values,
-    const absl::flat_hash_map<int64, int>& target_encoding,
+    const std::vector<int>& value_literals, const std::vector<int64_t>& values,
+    const absl::flat_hash_map<int64_t, int>& target_encoding,
     PresolveContext* context) {
   CHECK_EQ(value_literals.size(), values.size());
 
   // TODO(user): Make sure this does not appear in the profile.
-  std::map<int, std::vector<int>> value_literals_per_target_value;
+  // We use a map to make this method deterministic.
+  std::map<int, std::vector<int>> value_literals_per_target_literal;
 
   // If a value is false (i.e not possible), then the tuple with this
   // value is false too (i.e not possible). Conversely, if the tuple is
   // selected, the value must be selected.
   for (int i = 0; i < values.size(); ++i) {
-    const int64 v = values[i];
+    const int64_t v = values[i];
     CHECK(target_encoding.contains(v));
     const int lit = gtl::FindOrDie(target_encoding, v);
-    value_literals_per_target_value[v].push_back(value_literals[i]);
-    context->AddImplication(value_literals[i], lit);
+    value_literals_per_target_literal[lit].push_back(value_literals[i]);
   }
 
   // If all tuples supporting a value are false, then this value must be
   // false.
-  for (const auto& it : value_literals_per_target_value) {
-    BoolArgumentProto* const bool_or =
-        context->working_model->add_constraints()->mutable_bool_or();
-    const int lit = gtl::FindOrDie(target_encoding, it.first);
-    bool_or->add_literals(NegatedRef(lit));
-    for (const int lit : it.second) {
-      bool_or->add_literals(lit);
+  for (const auto& it : value_literals_per_target_literal) {
+    const int target_literal = it.first;
+    switch (it.second.size()) {
+      case 0: {
+        if (!context->SetLiteralToFalse(target_literal)) {
+          return;
+        }
+        break;
+      }
+      case 1: {
+        context->StoreBooleanEqualityRelation(target_literal,
+                                              it.second.front());
+        break;
+      }
+      default: {
+        BoolArgumentProto* const bool_or =
+            context->working_model->add_constraints()->mutable_bool_or();
+        bool_or->add_literals(NegatedRef(target_literal));
+        for (const int value_literal : it.second) {
+          bool_or->add_literals(value_literal);
+          context->AddImplication(value_literal, target_literal);
+        }
+      }
     }
   }
 }
@@ -638,8 +802,8 @@ void ExpandAutomaton(ConstraintProto* ct, PresolveContext* context) {
   AutomatonConstraintProto& proto = *ct->mutable_automaton();
 
   if (proto.vars_size() == 0) {
-    const int64 initial_state = proto.starting_state();
-    for (const int64 final_state : proto.final_states()) {
+    const int64_t initial_state = proto.starting_state();
+    for (const int64_t final_state : proto.final_states()) {
       if (initial_state == final_state) {
         context->UpdateRuleStats("automaton: empty constraint");
         ct->Clear();
@@ -657,17 +821,17 @@ void ExpandAutomaton(ConstraintProto* ct, PresolveContext* context) {
   const std::vector<int> vars = {proto.vars().begin(), proto.vars().end()};
 
   // Compute the set of reachable state at each time point.
-  const absl::flat_hash_set<int64> final_states({proto.final_states().begin(),
-                                                 proto.final_states().end()});
-  std::vector<absl::flat_hash_set<int64>> reachable_states(n + 1);
+  const absl::flat_hash_set<int64_t> final_states(
+      {proto.final_states().begin(), proto.final_states().end()});
+  std::vector<absl::flat_hash_set<int64_t>> reachable_states(n + 1);
   reachable_states[0].insert(proto.starting_state());
 
   // Forward pass.
   for (int time = 0; time < n; ++time) {
     for (int t = 0; t < proto.transition_tail_size(); ++t) {
-      const int64 tail = proto.transition_tail(t);
-      const int64 label = proto.transition_label(t);
-      const int64 head = proto.transition_head(t);
+      const int64_t tail = proto.transition_tail(t);
+      const int64_t label = proto.transition_label(t);
+      const int64_t head = proto.transition_head(t);
       if (!reachable_states[time].contains(tail)) continue;
       if (!context->DomainContains(vars[time], label)) continue;
       if (time == n - 1 && !final_states.contains(head)) continue;
@@ -677,11 +841,11 @@ void ExpandAutomaton(ConstraintProto* ct, PresolveContext* context) {
 
   // Backward pass.
   for (int time = n - 1; time >= 0; --time) {
-    absl::flat_hash_set<int64> new_set;
+    absl::flat_hash_set<int64_t> new_set;
     for (int t = 0; t < proto.transition_tail_size(); ++t) {
-      const int64 tail = proto.transition_tail(t);
-      const int64 label = proto.transition_label(t);
-      const int64 head = proto.transition_head(t);
+      const int64_t tail = proto.transition_tail(t);
+      const int64_t label = proto.transition_label(t);
+      const int64_t head = proto.transition_head(t);
 
       if (!reachable_states[time].contains(tail)) continue;
       if (!context->DomainContains(vars[time], label)) continue;
@@ -696,22 +860,22 @@ void ExpandAutomaton(ConstraintProto* ct, PresolveContext* context) {
   // initial state, and at time n we should be in one of the final states. We
   // don't need to create Booleans at at time when there is just one possible
   // state (like at time zero).
-  absl::flat_hash_map<int64, int> encoding;
-  absl::flat_hash_map<int64, int> in_encoding;
-  absl::flat_hash_map<int64, int> out_encoding;
+  absl::flat_hash_map<int64_t, int> encoding;
+  absl::flat_hash_map<int64_t, int> in_encoding;
+  absl::flat_hash_map<int64_t, int> out_encoding;
   bool removed_values = false;
 
   for (int time = 0; time < n; ++time) {
     // All these vector have the same size. We will use them to enforce a
     // local table constraint representing one step of the automaton at the
     // given time.
-    std::vector<int64> in_states;
-    std::vector<int64> transition_values;
-    std::vector<int64> out_states;
+    std::vector<int64_t> in_states;
+    std::vector<int64_t> transition_values;
+    std::vector<int64_t> out_states;
     for (int i = 0; i < proto.transition_label_size(); ++i) {
-      const int64 tail = proto.transition_tail(i);
-      const int64 label = proto.transition_label(i);
-      const int64 head = proto.transition_head(i);
+      const int64_t tail = proto.transition_tail(i);
+      const int64_t label = proto.transition_label(i);
+      const int64_t head = proto.transition_head(i);
 
       if (!reachable_states[time].contains(tail)) continue;
       if (!reachable_states[time + 1].contains(head)) continue;
@@ -746,7 +910,7 @@ void ExpandAutomaton(ConstraintProto* ct, PresolveContext* context) {
       tuple_literals.push_back(NegatedRef(bool_var));
     } else {
       // Note that we do not need the ExactlyOneConstraint(tuple_literals)
-      // because it is already implicitely encoded since we have exactly one
+      // because it is already implicitly encoded since we have exactly one
       // transition value.
       LinearConstraintProto* const exactly_one =
           context->working_model->add_constraints()->mutable_linear();
@@ -762,7 +926,7 @@ void ExpandAutomaton(ConstraintProto* ct, PresolveContext* context) {
 
     // Fully encode vars[time].
     {
-      std::vector<int64> s = transition_values;
+      std::vector<int64_t> s = transition_values;
       gtl::STLSortAndRemoveDuplicates(&s);
 
       encoding.clear();
@@ -773,7 +937,7 @@ void ExpandAutomaton(ConstraintProto* ct, PresolveContext* context) {
 
       // Fully encode the variable.
       for (const ClosedInterval& interval : context->DomainOf(vars[time])) {
-        for (int64 v = interval.start; v <= interval.end; ++v) {
+        for (int64_t v = interval.start; v <= interval.end; ++v) {
           encoding[v] = context->GetOrCreateVarValueEncoding(vars[time], v);
         }
       }
@@ -781,7 +945,7 @@ void ExpandAutomaton(ConstraintProto* ct, PresolveContext* context) {
 
     // For each possible out states, create one Boolean variable.
     {
-      std::vector<int64> s = out_states;
+      std::vector<int64_t> s = out_states;
       gtl::STLSortAndRemoveDuplicates(&s);
 
       out_encoding.clear();
@@ -790,7 +954,7 @@ void ExpandAutomaton(ConstraintProto* ct, PresolveContext* context) {
         out_encoding[s.front()] = var;
         out_encoding[s.back()] = NegatedRef(var);
       } else if (s.size() > 2) {
-        for (const int64 state : s) {
+        for (const int64_t state : s) {
           out_encoding[state] = context->NewBoolVar();
         }
       }
@@ -817,29 +981,543 @@ void ExpandAutomaton(ConstraintProto* ct, PresolveContext* context) {
   ct->Clear();
 }
 
+void ExpandNegativeTable(ConstraintProto* ct, PresolveContext* context) {
+  TableConstraintProto& table = *ct->mutable_table();
+  const int num_vars = table.vars_size();
+  const int num_original_tuples = table.values_size() / num_vars;
+  std::vector<std::vector<int64_t>> tuples(num_original_tuples);
+  int count = 0;
+  for (int i = 0; i < num_original_tuples; ++i) {
+    for (int j = 0; j < num_vars; ++j) {
+      tuples[i].push_back(table.values(count++));
+    }
+  }
+
+  if (tuples.empty()) {  // Early exit.
+    context->UpdateRuleStats("table: empty negated constraint");
+    ct->Clear();
+    return;
+  }
+
+  // Compress tuples.
+  const int64_t any_value = std::numeric_limits<int64_t>::min();
+  std::vector<int64_t> domain_sizes;
+  for (int i = 0; i < num_vars; ++i) {
+    domain_sizes.push_back(context->DomainOf(table.vars(i)).Size());
+  }
+  CompressTuples(domain_sizes, any_value, &tuples);
+
+  // For each tuple, forbid the variables values to be this tuple.
+  std::vector<int> clause;
+  for (const std::vector<int64_t>& tuple : tuples) {
+    clause.clear();
+    for (int i = 0; i < num_vars; ++i) {
+      const int64_t value = tuple[i];
+      if (value == any_value) continue;
+
+      const int literal =
+          context->GetOrCreateVarValueEncoding(table.vars(i), value);
+      clause.push_back(NegatedRef(literal));
+    }
+    if (!clause.empty()) {
+      BoolArgumentProto* bool_or =
+          context->working_model->add_constraints()->mutable_bool_or();
+      for (const int lit : clause) {
+        bool_or->add_literals(lit);
+      }
+    }
+  }
+  context->UpdateRuleStats("table: expanded negated constraint");
+  ct->Clear();
+}
+
+void ExpandLinMin(ConstraintProto* ct, PresolveContext* context) {
+  ConstraintProto* const lin_max = context->working_model->add_constraints();
+  for (int i = 0; i < ct->enforcement_literal_size(); ++i) {
+    lin_max->add_enforcement_literal(ct->enforcement_literal(i));
+  }
+
+  // Target
+  SetToNegatedLinearExpression(ct->lin_min().target(),
+                               lin_max->mutable_lin_max()->mutable_target());
+
+  for (int i = 0; i < ct->lin_min().exprs_size(); ++i) {
+    LinearExpressionProto* const expr = lin_max->mutable_lin_max()->add_exprs();
+    SetToNegatedLinearExpression(ct->lin_min().exprs(i), expr);
+  }
+  ct->Clear();
+}
+
+// Add the implications and clauses to link one variable of a table to the
+// literals controling if the tuples are possible or not. The parallel vectors
+// (tuple_literals, values) contains all valid projected tuples. The
+// tuples_with_any vector provides a list of tuple_literals that will support
+// any value.
+void ProcessOneVariable(const std::vector<int>& tuple_literals,
+                        const std::vector<int64_t>& values, int variable,
+                        const std::vector<int>& tuples_with_any,
+                        PresolveContext* context) {
+  VLOG(2) << "Process var(" << variable << ") with domain "
+          << context->DomainOf(variable) << " and " << values.size()
+          << " active tuples, and " << tuples_with_any.size() << " any tuples";
+  CHECK_EQ(tuple_literals.size(), values.size());
+  std::vector<std::pair<int64_t, int>> pairs;
+
+  // Collect pairs of value-literal.
+  for (int i = 0; i < values.size(); ++i) {
+    const int64_t value = values[i];
+    CHECK(context->DomainContains(variable, value));
+    pairs.emplace_back(value, tuple_literals[i]);
+  }
+
+  // Regroup literal with the same value and add for each the clause: If all the
+  // tuples containing a value are false, then this value must be false too.
+  std::vector<int> selected;
+  std::sort(pairs.begin(), pairs.end());
+  for (int i = 0; i < pairs.size();) {
+    selected.clear();
+    const int64_t value = pairs[i].first;
+    for (; i < pairs.size() && pairs[i].first == value; ++i) {
+      selected.push_back(pairs[i].second);
+    }
+
+    CHECK(!selected.empty() || !tuples_with_any.empty());
+    if (selected.size() == 1 && tuples_with_any.empty()) {
+      context->InsertVarValueEncoding(selected.front(), variable, value);
+    } else {
+      const int value_literal =
+          context->GetOrCreateVarValueEncoding(variable, value);
+      BoolArgumentProto* no_support =
+          context->working_model->add_constraints()->mutable_bool_or();
+      for (const int lit : selected) {
+        no_support->add_literals(lit);
+        context->AddImplication(lit, value_literal);
+      }
+      for (const int lit : tuples_with_any) {
+        no_support->add_literals(lit);
+      }
+
+      // And the "value" literal.
+      no_support->add_literals(NegatedRef(value_literal));
+    }
+  }
+}
+
+// Simpler encoding for table constraints with 2 variables.
+void AddSizeTwoTable(
+    const std::vector<int>& vars,
+    const std::vector<std::vector<int64_t>>& tuples,
+    const std::vector<absl::flat_hash_set<int64_t>>& values_per_var,
+    PresolveContext* context) {
+  CHECK_EQ(vars.size(), 2);
+  const int left_var = vars[0];
+  const int right_var = vars[1];
+  if (context->DomainOf(left_var).Size() == 1 ||
+      context->DomainOf(right_var).Size() == 1) {
+    // A table constraint with at most one variable not fixed is trivially
+    // enforced after domain reduction.
+    return;
+  }
+
+  std::map<int, std::vector<int>> left_to_right;
+  std::map<int, std::vector<int>> right_to_left;
+
+  for (const auto& tuple : tuples) {
+    const int64_t left_value(tuple[0]);
+    const int64_t right_value(tuple[1]);
+    CHECK(context->DomainContains(left_var, left_value));
+    CHECK(context->DomainContains(right_var, right_value));
+
+    const int left_literal =
+        context->GetOrCreateVarValueEncoding(left_var, left_value);
+    const int right_literal =
+        context->GetOrCreateVarValueEncoding(right_var, right_value);
+    left_to_right[left_literal].push_back(right_literal);
+    right_to_left[right_literal].push_back(left_literal);
+  }
+
+  int num_implications = 0;
+  int num_clause_added = 0;
+  int num_large_clause_added = 0;
+  auto add_support_constraint =
+      [context, &num_clause_added, &num_large_clause_added, &num_implications](
+          int lit, const std::vector<int>& support_literals,
+          int max_support_size) {
+        if (support_literals.size() == max_support_size) return;
+        if (support_literals.size() == 1) {
+          context->AddImplication(lit, support_literals.front());
+          num_implications++;
+        } else {
+          BoolArgumentProto* bool_or =
+              context->working_model->add_constraints()->mutable_bool_or();
+          for (const int support_literal : support_literals) {
+            bool_or->add_literals(support_literal);
+          }
+          bool_or->add_literals(NegatedRef(lit));
+          num_clause_added++;
+          if (support_literals.size() > max_support_size / 2) {
+            num_large_clause_added++;
+          }
+        }
+      };
+
+  for (const auto& it : left_to_right) {
+    add_support_constraint(it.first, it.second, values_per_var[1].size());
+  }
+  for (const auto& it : right_to_left) {
+    add_support_constraint(it.first, it.second, values_per_var[0].size());
+  }
+  VLOG(2) << "Table: 2 variables, " << tuples.size() << " tuples encoded using "
+          << num_clause_added << " clauses, including "
+          << num_large_clause_added << " large clauses, " << num_implications
+          << " implications";
+}
+
+void ExpandPositiveTable(ConstraintProto* ct, PresolveContext* context) {
+  const TableConstraintProto& table = ct->table();
+  const std::vector<int> vars(table.vars().begin(), table.vars().end());
+  const int num_vars = table.vars_size();
+  const int num_original_tuples = table.values_size() / num_vars;
+
+  // Read tuples flat array and recreate the vector of tuples.
+  std::vector<std::vector<int64_t>> tuples(num_original_tuples);
+  int count = 0;
+  for (int tuple_index = 0; tuple_index < num_original_tuples; ++tuple_index) {
+    for (int var_index = 0; var_index < num_vars; ++var_index) {
+      tuples[tuple_index].push_back(table.values(count++));
+    }
+  }
+
+  // Compute the set of possible values for each variable (from the table).
+  // Remove invalid tuples along the way.
+  std::vector<absl::flat_hash_set<int64_t>> values_per_var(num_vars);
+  int new_size = 0;
+  for (int tuple_index = 0; tuple_index < num_original_tuples; ++tuple_index) {
+    bool keep = true;
+    for (int var_index = 0; var_index < num_vars; ++var_index) {
+      const int64_t value = tuples[tuple_index][var_index];
+      if (!context->DomainContains(vars[var_index], value)) {
+        keep = false;
+        break;
+      }
+    }
+    if (keep) {
+      for (int var_index = 0; var_index < num_vars; ++var_index) {
+        values_per_var[var_index].insert(tuples[tuple_index][var_index]);
+      }
+      std::swap(tuples[tuple_index], tuples[new_size]);
+      new_size++;
+    }
+  }
+  tuples.resize(new_size);
+  const int num_valid_tuples = tuples.size();
+
+  if (tuples.empty()) {
+    context->UpdateRuleStats("table: empty");
+    return (void)context->NotifyThatModelIsUnsat();
+  }
+
+  // Update variable domains. It is redundant with presolve, but we could be
+  // here with presolve = false.
+  // Also counts the number of fixed variables.
+  int num_fixed_variables = 0;
+  for (int var_index = 0; var_index < num_vars; ++var_index) {
+    CHECK(context->IntersectDomainWith(
+        vars[var_index],
+        Domain::FromValues({values_per_var[var_index].begin(),
+                            values_per_var[var_index].end()})));
+    if (context->DomainOf(vars[var_index]).Size() == 1) {
+      num_fixed_variables++;
+    }
+  }
+
+  if (num_fixed_variables == num_vars - 1) {
+    context->UpdateRuleStats("table: one variable not fixed");
+    ct->Clear();
+    return;
+  } else if (num_fixed_variables == num_vars) {
+    context->UpdateRuleStats("table: all variables fixed");
+    ct->Clear();
+    return;
+  }
+
+  // Tables with two variables do not need tuple literals.
+  if (num_vars == 2) {
+    AddSizeTwoTable(vars, tuples, values_per_var, context);
+    context->UpdateRuleStats(
+        "table: expanded positive constraint with two variables");
+    ct->Clear();
+    return;
+  }
+
+  // It is easier to compute this before compression, as compression will merge
+  // tuples.
+  int num_prefix_tuples = 0;
+  {
+    absl::flat_hash_set<absl::Span<const int64_t>> prefixes;
+    for (const std::vector<int64_t>& tuple : tuples) {
+      prefixes.insert(absl::MakeSpan(tuple.data(), num_vars - 1));
+    }
+    num_prefix_tuples = prefixes.size();
+  }
+
+  // TODO(user): reinvestigate ExploreSubsetOfVariablesAndAddNegatedTables.
+
+  // Compress tuples.
+  const int64_t any_value = std::numeric_limits<int64_t>::min();
+  std::vector<int64_t> domain_sizes;
+  for (int i = 0; i < num_vars; ++i) {
+    domain_sizes.push_back(values_per_var[i].size());
+  }
+  const int num_tuples_before_compression = tuples.size();
+  CompressTuples(domain_sizes, any_value, &tuples);
+  const int num_compressed_tuples = tuples.size();
+  if (num_compressed_tuples < num_tuples_before_compression) {
+    context->UpdateRuleStats("table: compress tuples");
+  }
+
+  if (num_compressed_tuples == 1) {
+    // Domains are propagated. We can remove the constraint.
+    context->UpdateRuleStats("table: one tuple");
+    ct->Clear();
+    return;
+  }
+
+  // Detect if prefix tuples are all different.
+  const bool prefixes_are_all_different = num_prefix_tuples == num_valid_tuples;
+  if (prefixes_are_all_different) {
+    context->UpdateRuleStats(
+        "TODO table: last value implied by previous values");
+  }
+  // TODO(user): if 2 table constraints share the same valid prefix, the
+  // tuple literals can be reused.
+  // TODO(user): investigate different encoding for prefix tables. Maybe
+  // we can remove the need to create tuple literals.
+
+  // Debug message to log the status of the expansion.
+  if (VLOG_IS_ON(2)) {
+    // Compute the maximum number of prefix tuples.
+    int64_t max_num_prefix_tuples = 1;
+    for (int var_index = 0; var_index + 1 < num_vars; ++var_index) {
+      max_num_prefix_tuples =
+          CapProd(max_num_prefix_tuples, values_per_var[var_index].size());
+    }
+
+    std::string message =
+        absl::StrCat("Table: ", num_vars,
+                     " variables, original tuples = ", num_original_tuples);
+    if (num_valid_tuples != num_original_tuples) {
+      absl::StrAppend(&message, ", valid tuples = ", num_valid_tuples);
+    }
+    if (prefixes_are_all_different) {
+      if (num_prefix_tuples < max_num_prefix_tuples) {
+        absl::StrAppend(&message, ", partial prefix = ", num_prefix_tuples, "/",
+                        max_num_prefix_tuples);
+      } else {
+        absl::StrAppend(&message, ", full prefix = true");
+      }
+    } else {
+      absl::StrAppend(&message, ", num prefix tuples = ", num_prefix_tuples);
+    }
+    if (num_compressed_tuples != num_valid_tuples) {
+      absl::StrAppend(&message,
+                      ", compressed tuples = ", num_compressed_tuples);
+    }
+    VLOG(2) << message;
+  }
+
+  // Log if we have only two tuples.
+  if (num_compressed_tuples == 2) {
+    context->UpdateRuleStats("TODO table: two tuples");
+  }
+
+  // Create one Boolean variable per tuple to indicate if it can still be
+  // selected or not. Note that we don't enforce exactly one tuple to be
+  // selected as this is costly.
+  //
+  // TODO(user): Investigate adding the at_most_one if the number of tuples
+  // is small.
+  // TODO(user): Investigate it we could recover a linear constraint:
+  //       var = sum(tuple_literals[i] * values[i])
+  //   It could be done here or along the deductions grouping.
+  std::vector<int> tuple_literals(num_compressed_tuples);
+  BoolArgumentProto* at_least_one_tuple =
+      context->working_model->add_constraints()->mutable_bool_or();
+
+  // If we want to enumerate all solutions, we should not add new variables that
+  // can take more than one value for a given feasible solution, otherwise we
+  // will have a lot more solution than needed.
+  //
+  // TODO(user): Alternatively, we could mark those variable so that their
+  // value do not count when excluding solution, but we do not have a
+  // mecanism for that yet. It might not be easy to track them down when we
+  // replace them with equivalent variable too.
+  //
+  // TODO(user): We use keep_all_feasible_solutions as a proxy for enumerate
+  // all solution, but the concept are slightly different though.
+  BoolArgumentProto* at_most_one_tuple = nullptr;
+  if (context->keep_all_feasible_solutions) {
+    at_most_one_tuple =
+        context->working_model->add_constraints()->mutable_at_most_one();
+  }
+
+  for (int var_index = 0; var_index < num_compressed_tuples; ++var_index) {
+    tuple_literals[var_index] = context->NewBoolVar();
+    at_least_one_tuple->add_literals(tuple_literals[var_index]);
+    if (at_most_one_tuple != nullptr) {
+      at_most_one_tuple->add_literals(tuple_literals[var_index]);
+    }
+  }
+
+  std::vector<int> active_tuple_literals;
+  std::vector<int64_t> active_values;
+  std::vector<int> any_tuple_literals;
+  for (int var_index = 0; var_index < num_vars; ++var_index) {
+    if (values_per_var[var_index].size() == 1) continue;
+
+    active_tuple_literals.clear();
+    active_values.clear();
+    any_tuple_literals.clear();
+    for (int tuple_index = 0; tuple_index < tuple_literals.size();
+         ++tuple_index) {
+      const int64_t value = tuples[tuple_index][var_index];
+      const int tuple_literal = tuple_literals[tuple_index];
+
+      if (value == any_value) {
+        any_tuple_literals.push_back(tuple_literal);
+      } else {
+        active_tuple_literals.push_back(tuple_literal);
+        active_values.push_back(value);
+      }
+    }
+
+    if (!active_tuple_literals.empty()) {
+      ProcessOneVariable(active_tuple_literals, active_values, vars[var_index],
+                         any_tuple_literals, context);
+    }
+  }
+
+  context->UpdateRuleStats("table: expanded positive constraint");
+  ct->Clear();
+}
+
+void ExpandAllDiff(bool expand_non_permutations, ConstraintProto* ct,
+                   PresolveContext* context) {
+  AllDifferentConstraintProto& proto = *ct->mutable_all_diff();
+  if (proto.vars_size() <= 2) return;
+
+  const int num_vars = proto.vars_size();
+
+  Domain union_of_domains = context->DomainOf(proto.vars(0));
+  for (int i = 1; i < num_vars; ++i) {
+    union_of_domains =
+        union_of_domains.UnionWith(context->DomainOf(proto.vars(i)));
+  }
+
+  const bool is_permutation = proto.vars_size() == union_of_domains.Size();
+
+  if (!is_permutation && !expand_non_permutations) return;
+
+  // Collect all possible variables that can take each value, and add one linear
+  // equation per value stating that this value can be assigned at most once, or
+  // exactly once in case of permutation.
+  for (const ClosedInterval& interval : union_of_domains) {
+    for (int64_t v = interval.start; v <= interval.end; ++v) {
+      // Collect references which domain contains v.
+      std::vector<int> possible_refs;
+      int fixed_variable_count = 0;
+      for (const int ref : proto.vars()) {
+        if (!context->DomainContains(ref, v)) continue;
+        possible_refs.push_back(ref);
+        if (context->DomainOf(ref).Size() == 1) {
+          fixed_variable_count++;
+        }
+      }
+
+      if (fixed_variable_count > 1) {
+        // Violates the definition of AllDifferent.
+        return (void)context->NotifyThatModelIsUnsat();
+      } else if (fixed_variable_count == 1) {
+        // Remove values from other domains.
+        for (const int ref : possible_refs) {
+          if (context->DomainOf(ref).Size() == 1) continue;
+          if (!context->IntersectDomainWith(ref, Domain(v).Complement())) {
+            VLOG(1) << "Empty domain for a variable in ExpandAllDiff()";
+            return;
+          }
+        }
+      }
+
+      LinearConstraintProto* at_most_or_equal_one =
+          context->working_model->add_constraints()->mutable_linear();
+      int lb = is_permutation ? 1 : 0;
+      int ub = 1;
+      for (const int ref : possible_refs) {
+        DCHECK(context->DomainContains(ref, v));
+        DCHECK_GT(context->DomainOf(ref).Size(), 1);
+        const int encoding = context->GetOrCreateVarValueEncoding(ref, v);
+        if (RefIsPositive(encoding)) {
+          at_most_or_equal_one->add_vars(encoding);
+          at_most_or_equal_one->add_coeffs(1);
+        } else {
+          at_most_or_equal_one->add_vars(PositiveRef(encoding));
+          at_most_or_equal_one->add_coeffs(-1);
+          lb--;
+          ub--;
+        }
+      }
+      at_most_or_equal_one->add_domain(lb);
+      at_most_or_equal_one->add_domain(ub);
+    }
+  }
+  if (is_permutation) {
+    context->UpdateRuleStats("alldiff: permutation expanded");
+  } else {
+    context->UpdateRuleStats("alldiff: expanded");
+  }
+  ct->Clear();
+}
+
 }  // namespace
 
-void ExpandCpModel(PresolveOptions options, PresolveContext* context) {
+void ExpandCpModel(PresolveContext* context) {
+  if (context->params().disable_constraint_expansion()) return;
   if (context->ModelIsUnsat()) return;
+
+  // None of the function here need to be run twice. This is because we never
+  // create constraint that need to be expanded during presolve.
+  if (context->ModelIsExpanded()) return;
 
   // Make sure all domains are initialized.
   context->InitializeNewDomains();
 
+  // Clear the precedence cache.
+  context->ClearPrecedenceCache();
+
   const int num_constraints = context->working_model->constraints_size();
   for (int i = 0; i < num_constraints; ++i) {
     ConstraintProto* const ct = context->working_model->mutable_constraints(i);
+    bool skip = false;
     switch (ct->constraint_case()) {
       case ConstraintProto::ConstraintCase::kReservoir:
-        ExpandReservoir(ct, context);
+        if (context->params().expand_reservoir_constraints()) {
+          ExpandReservoir(ct, context);
+        }
         break;
       case ConstraintProto::ConstraintCase::kIntMod:
         ExpandIntMod(ct, context);
         break;
+      case ConstraintProto::ConstraintCase::kIntDiv:
+        ExpandIntDiv(ct, context);
+        break;
       case ConstraintProto::ConstraintCase::kIntProd:
         ExpandIntProd(ct, context);
         break;
+      case ConstraintProto::ConstraintCase::kLinMin:
+        ExpandLinMin(ct, context);
+        break;
       case ConstraintProto::ConstraintCase::kElement:
-        if (options.parameters.expand_element_constraints()) {
+        if (context->params().expand_element_constraints()) {
           ExpandElement(ct, context);
         }
         break;
@@ -847,23 +1525,45 @@ void ExpandCpModel(PresolveOptions options, PresolveContext* context) {
         ExpandInverse(ct, context);
         break;
       case ConstraintProto::ConstraintCase::kAutomaton:
-        if (options.parameters.expand_automaton_constraints()) {
+        if (context->params().expand_automaton_constraints()) {
           ExpandAutomaton(ct, context);
         }
         break;
+      case ConstraintProto::ConstraintCase::kTable:
+        if (ct->table().negated()) {
+          ExpandNegativeTable(ct, context);
+        } else if (context->params().expand_table_constraints()) {
+          ExpandPositiveTable(ct, context);
+        }
+        break;
+      case ConstraintProto::ConstraintCase::kAllDiff:
+        ExpandAllDiff(context->params().expand_alldiff_constraints(), ct,
+                      context);
+        break;
       default:
+        skip = true;
         break;
     }
+    if (skip) continue;  // Nothing was done for this constraint.
 
-    // Update variable-contraint graph.
+    // Update variable-constraint graph.
     context->UpdateNewConstraintsVariableUsage();
     if (ct->constraint_case() == ConstraintProto::CONSTRAINT_NOT_SET) {
       context->UpdateConstraintVariableUsage(i);
     }
 
     // Early exit if the model is unsat.
-    if (context->ModelIsUnsat()) return;
+    if (context->ModelIsUnsat()) {
+      SOLVER_LOG(context->logger(), "UNSAT after expansion of ",
+                 ProtobufShortDebugString(*ct));
+      return;
+    }
   }
+
+  // The precedence cache can become invalid during presolve as it does not
+  // handle variable substitution. It is safer just to clear it at the end
+  // of the expansion phase.
+  context->ClearPrecedenceCache();
 
   // Make sure the context is consistent.
   context->InitializeNewDomains();
@@ -873,6 +1573,8 @@ void ExpandCpModel(PresolveOptions options, PresolveContext* context) {
     FillDomainInProto(context->DomainOf(i),
                       context->working_model->mutable_variables(i));
   }
+
+  context->NotifyThatModelIsExpanded();
 }
 
 }  // namespace sat

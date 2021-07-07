@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -32,7 +32,6 @@ syntax = "proto2";
 option java_package = "com.google.ortools.linearsolver";
 option java_multiple_files = true;
 
-// import "google/protobuf/wrappers.proto";
 import "ortools/util/optional_boolean.proto";
 
 package operations_research;
@@ -152,7 +151,7 @@ message MPSosConstraint {
     SOS1_DEFAULT = 0;
     // At most two consecutive variables from `var_index` can be non-zero (i.e.
     // for some i, var_index[i] and var_index[i+1]). See
-    // http://www.eudoxus.com/lp-training/5/5-6-special-ordered-sets-of-type-2
+    // https://en.wikipedia.org/wiki/Special_ordered_set#Types_of_SOS
     SOS2 = 1;
   }
   optional Type type = 1 [default = SOS1_DEFAULT];
@@ -180,7 +179,7 @@ message MPSosConstraint {
 // rotated Second-Order Cones are always accepted. Other forms may or may not be
 // accepted depending on the underlying solver used.
 // See https://scip.zib.de/doc/html/cons__quadratic_8h.php and
-// https://www.gurobi.com/documentation/8.1/refman/constraints.html#subsubsection:QuadraticConstraints
+// https://www.gurobi.com/documentation/9.0/refman/constraints.html#subsubsection:QuadraticConstraints
 message MPQuadraticConstraint {
   // Sparse representation of linear terms in the quadratic constraint, where
   // term i is var_index[i] * coefficient[i].
@@ -297,9 +296,6 @@ message MPModelProto {
 
 // To support 'unspecified' double value in proto3, the simplest is to wrap
 // any double value in a nested message (has_XXX works for message fields).
-// We don't use google/protobuf/wrappers.proto because depending on it makes
-// the following android integration test fail:
-// http://sponge/c4bce1fd-41bd-4d0b-b4ca-fc04d4d64621
 message OptionalDouble {
   optional double value = 1;
 }
@@ -388,7 +384,7 @@ message MPModelDeltaProto {
   // NOTE(user): We may also add more deltas, eg. objective offset.
 }
 
-// Next id: 9.
+// Next id: 12.
 message MPModelRequest {
   // The model to be optimized by the server.
   optional MPModelProto model = 1;
@@ -402,19 +398,16 @@ message MPModelRequest {
     GLOP_LINEAR_PROGRAMMING = 2;  // Recommended default for LP models.
     CLP_LINEAR_PROGRAMMING = 0;
     GLPK_LINEAR_PROGRAMMING = 1;
-    GUROBI_LINEAR_PROGRAMMING = 6;    // Commercial, needs a valid license.
-    XPRESS_LINEAR_PROGRAMMING = 101;  // Commercial, needs a valid license.
-    CPLEX_LINEAR_PROGRAMMING = 10;  // Commercial, needs a valid
-    // license.
+    GUROBI_LINEAR_PROGRAMMING = 6;  // Commercial, needs a valid license.
+    XPRESS_LINEAR_PROGRAMMING = 101;  // Commercial, needs a valid license. NOLINT
+    CPLEX_LINEAR_PROGRAMMING = 10;  // Commercial, needs a valid license. NOLINT
 
     SCIP_MIXED_INTEGER_PROGRAMMING = 3;  // Recommended default for MIP models.
     GLPK_MIXED_INTEGER_PROGRAMMING = 4;
     CBC_MIXED_INTEGER_PROGRAMMING = 5;
     GUROBI_MIXED_INTEGER_PROGRAMMING = 7;  // Commercial, needs a valid license.
-    XPRESS_MIXED_INTEGER_PROGRAMMING =
-        102;  // Commercial, needs a valid license.
-    CPLEX_MIXED_INTEGER_PROGRAMMING = 11;  // Commercial, needs a
-    // valid license.
+    XPRESS_MIXED_INTEGER_PROGRAMMING = 102;  // Commercial, needs a valid license. NOLINT
+    CPLEX_MIXED_INTEGER_PROGRAMMING = 11;  // Commercial, needs a valid license. NOLINT
     BOP_INTEGER_PROGRAMMING = 12;
 
     // WARNING: This solver will currently interpret all variables as integer,
@@ -455,14 +448,27 @@ message MPModelRequest {
   //
   // If the option format is not understood by the solver, the request will be
   // rejected and yield an RPC Application error with code
-  // MPSOLVER_MODEL_INVALID_SOLVER_PARAMETERS.
+  // MPSOLVER_MODEL_INVALID_SOLVER_PARAMETERS, unless you have set
+  // ignore_solver_specific_parameters_failure=true (in which case they are
+  // simply ignored).
   optional string solver_specific_parameters = 5;
+  optional bool ignore_solver_specific_parameters_failure = 9 [default = false];
 
 
   // Advanced usage: model "delta". If used, "model" must be unset. See the
   // definition of MPModelDeltaProto.
   optional MPModelDeltaProto model_delta = 8;
 
+
+
+  // Controls the recovery of additional solutions, if any, saved by the
+  // underlying solver back in the MPSolutionResponse.additional_solutions.
+  // The repeated field will be length
+  //    min(populate_addition_solutions_up_to,
+  //        #additional_solutions_available_in_underlying_solver)
+  // These additional solutions may have a worse objective than the main
+  // solution returned in the response.
+  optional int32 populate_additional_solutions_up_to = 11 [default = 0];
 }
 
 // Status returned by the solver. They follow a hierarchical nomenclature, to
@@ -542,6 +548,12 @@ enum MPSolverResponseStatus {
 
 }
 
+message MPSolution {
+  optional double objective_value = 1;
+  repeated double variable_value = 2 [packed = true];
+}
+
+// Next id: 9.
 message MPSolutionResponse {
   // Result of the optimization.
   optional /*required*/ MPSolverResponseStatus status = 1
@@ -585,4 +597,11 @@ message MPSolutionResponse {
   // is actually a linear program).
   // These are set iff 'status' is OPTIMAL or FEASIBLE.
   repeated double reduced_cost = 6 [packed = true];
+
+  // [Advanced usage.]
+  // If `MPModelRequest.populate_additional_solutions_up_to` > 0, up to that
+  // number of additional solutions may be populated here, if available. These
+  // additional solutions are different than the main solution described by the
+  // above fields `objective_value` and `variable_value`.
+  repeated MPSolution additional_solutions = 8;
 }

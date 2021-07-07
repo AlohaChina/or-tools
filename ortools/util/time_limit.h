@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -38,13 +38,13 @@
  * Enables changing the behavior of the TimeLimit class to use -b usertime
  * instead of \b walltime. This is mainly useful for benchmarks.
  */
-DECLARE_bool(time_limit_use_usertime);
+ABSL_DECLARE_FLAG(bool, time_limit_use_usertime);
 
 /**
  * Adds support to measure the number of executed instructions in the TimeLimit
  * class.
  */
-DECLARE_bool(time_limit_use_instruction_count);
+ABSL_DECLARE_FLAG(bool, time_limit_use_instruction_count);
 
 namespace operations_research {
 
@@ -267,9 +267,7 @@ class TimeLimit {
    * i.e. \c LimitReached() returns true when the value of
    * external_boolean_as_limit is true whatever the time limits are.
    *
-   * Note 1: The external_boolean_as_limit can be modified during solve.
-   *
-   * Note 2: \c ResetLimitFromParameters() will set this Boolean to false.
+   * Note : The external_boolean_as_limit can be modified during solve.
    */
   void RegisterExternalBooleanAsLimit(
       std::atomic<bool>* external_boolean_as_limit) {
@@ -285,7 +283,7 @@ class TimeLimit {
 
   /**
    * Sets new time limits. Note that this does not reset the running max nor
-   * any registered external boolean or calls to RegisterSigintHandler().
+   * any registered external Boolean.
    */
   template <typename Parameters>
   void ResetLimitFromParameters(const Parameters& parameters);
@@ -304,12 +302,12 @@ class TimeLimit {
     return "inst_retired:any_p:u";
   }
 
-  mutable int64 start_ns_;  // Not const! this is initialized after instruction
-                            // counter initialization.
-  int64 last_ns_;
-  int64 limit_ns_;  // Not const! See the code of LimitReached().
-  const int64 safety_buffer_ns_;
-  RunningMax<int64> running_max_;
+  mutable int64_t start_ns_;  // Not const! this is initialized after
+                              // instruction counter initialization.
+  int64_t last_ns_;
+  int64_t limit_ns_;  // Not const! See the code of LimitReached().
+  const int64_t safety_buffer_ns_;
+  RunningMax<int64_t> running_max_;
 
   // Only used when FLAGS_time_limit_use_usertime is true.
   UserTimer user_timer_;
@@ -389,9 +387,9 @@ class SharedTimeLimit {
 
  private:
   mutable absl::Mutex mutex_;
-  TimeLimit* time_limit_ GUARDED_BY(mutex_);
-  std::atomic<bool> stopped_boolean_ GUARDED_BY(mutex_);
-  std::atomic<bool>* stopped_ GUARDED_BY(mutex_);
+  TimeLimit* time_limit_ ABSL_GUARDED_BY(mutex_);
+  std::atomic<bool> stopped_boolean_ ABSL_GUARDED_BY(mutex_);
+  std::atomic<bool>* stopped_ ABSL_GUARDED_BY(mutex_);
 };
 
 /**
@@ -472,7 +470,7 @@ class NestedTimeLimit {
 
 inline TimeLimit::TimeLimit(double limit_in_seconds, double deterministic_limit,
                             double instruction_limit)
-    : safety_buffer_ns_(static_cast<int64>(kSafetyBufferSeconds * 1e9)),
+    : safety_buffer_ns_(static_cast<int64_t>(kSafetyBufferSeconds * 1e9)),
       running_max_(kHistorySize),
       external_boolean_as_limit_(nullptr) {
   ResetTimers(limit_in_seconds, deterministic_limit, instruction_limit);
@@ -481,19 +479,16 @@ inline TimeLimit::TimeLimit(double limit_in_seconds, double deterministic_limit,
 inline void TimeLimit::ResetTimers(double limit_in_seconds,
                                    double deterministic_limit,
                                    double instruction_limit) {
-  if (external_boolean_as_limit_ != nullptr) {
-    *external_boolean_as_limit_ = false;
-  }
   elapsed_deterministic_time_ = 0.0;
   deterministic_limit_ = deterministic_limit;
   instruction_limit_ = instruction_limit;
 
-  if (FLAGS_time_limit_use_usertime) {
+  if (absl::GetFlag(FLAGS_time_limit_use_usertime)) {
     user_timer_.Start();
     limit_in_seconds_ = limit_in_seconds;
   }
 #ifdef HAS_PERF_SUBSYSTEM
-  if (FLAGS_time_limit_use_instruction_count) {
+  if (absl::GetFlag(FLAGS_time_limit_use_instruction_count)) {
     perf_subsystem_.CleanUp();
     perf_subsystem_.AddEvent(GetInstructionRetiredEventName());
     perf_subsystem_.StartCollecting();
@@ -503,7 +498,7 @@ inline void TimeLimit::ResetTimers(double limit_in_seconds,
   last_ns_ = start_ns_;
   limit_ns_ = limit_in_seconds >= 1e-9 * (kint64max - start_ns_)
                   ? kint64max
-                  : static_cast<int64>(limit_in_seconds * 1e9) + start_ns_;
+                  : static_cast<int64_t>(limit_in_seconds * 1e9) + start_ns_;
 }
 
 template <typename Parameters>
@@ -526,7 +521,7 @@ inline void TimeLimit::MergeWithGlobalTimeLimit(TimeLimit* other) {
 
 inline double TimeLimit::ReadInstructionCounter() {
 #ifdef HAS_PERF_SUBSYSTEM
-  if (FLAGS_time_limit_use_instruction_count) {
+  if (absl::GetFlag(FLAGS_time_limit_use_instruction_count)) {
     return perf_subsystem_.ReadCounters().GetScaledOrDie(
         GetInstructionRetiredEventName());
   }
@@ -550,17 +545,17 @@ inline bool TimeLimit::LimitReached() {
   }
 #endif  // HAS_PERF_SUBSYSTEM
 
-  const int64 current_ns = absl::GetCurrentTimeNanos();
+  const int64_t current_ns = absl::GetCurrentTimeNanos();
   running_max_.Add(std::max(safety_buffer_ns_, current_ns - last_ns_));
   last_ns_ = current_ns;
   if (current_ns + running_max_.GetCurrentMax() >= limit_ns_) {
-    if (FLAGS_time_limit_use_usertime) {
+    if (absl::GetFlag(FLAGS_time_limit_use_usertime)) {
       // To avoid making many system calls, we only check the user time when
       // the "absolute" time limit has been reached. Note that the user time
       // should advance more slowly, so this is correct.
       const double time_left_s = limit_in_seconds_ - user_timer_.Get();
       if (time_left_s > kSafetyBufferSeconds) {
-        limit_ns_ = static_cast<int64>(time_left_s * 1e9) + last_ns_;
+        limit_ns_ = static_cast<int64_t>(time_left_s * 1e9) + last_ns_;
         return false;
       }
     }
@@ -574,9 +569,9 @@ inline bool TimeLimit::LimitReached() {
 
 inline double TimeLimit::GetTimeLeft() const {
   if (limit_ns_ == kint64max) return std::numeric_limits<double>::infinity();
-  const int64 delta_ns = limit_ns_ - absl::GetCurrentTimeNanos();
+  const int64_t delta_ns = limit_ns_ - absl::GetCurrentTimeNanos();
   if (delta_ns < 0) return 0.0;
-  if (FLAGS_time_limit_use_usertime) {
+  if (absl::GetFlag(FLAGS_time_limit_use_usertime)) {
     return std::max(limit_in_seconds_ - user_timer_.Get(), 0.0);
   } else {
     return delta_ns * 1e-9;

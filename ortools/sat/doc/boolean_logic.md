@@ -26,7 +26,6 @@
       * [Product of two Boolean Variables](#product-of-two-boolean-variables)
          * [Python code](#python-code-3)
 
-<!-- Added by: lperron, at: Thu Nov 14 21:15:53 CET 2019 -->
 
 <!--te-->
 
@@ -49,9 +48,6 @@ negation of `x`.
 ```python
 """Code sample to demonstrate Boolean variable and literals."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 from ortools.sat.python import cp_model
 
@@ -96,16 +92,17 @@ int main() {
 ### Java code
 
 ```java
+package com.google.ortools.sat.samples;
+
+import com.google.ortools.Loader;
 import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.IntVar;
 import com.google.ortools.sat.Literal;
 
 /** Code sample to demonstrate Boolean variable and literals. */
 public class LiteralSampleSat {
-
-  static { System.loadLibrary("jniortools"); }
-
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     CpModel model = new CpModel();
     IntVar x = model.newBoolVar("x");
     Literal notX = x.not();
@@ -122,12 +119,12 @@ using Google.OrTools.Sat;
 
 public class LiteralSampleSat
 {
-  static void Main()
-  {
-    CpModel model = new CpModel();
-    IntVar x = model.NewBoolVar("x");
-    ILiteral not_x = x.Not();
-  }
+    static void Main()
+    {
+        CpModel model = new CpModel();
+        IntVar x = model.NewBoolVar("x");
+        ILiteral not_x = x.Not();
+    }
 }
 ```
 
@@ -148,9 +145,6 @@ constraints. For instance, we can add a constraint Or(x, not(y)).
 ```python
 """Code sample to demonstrates a simple Boolean constraint."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 from ortools.sat.python import cp_model
 
@@ -196,16 +190,17 @@ int main() {
 ### Java code
 
 ```java
+package com.google.ortools.sat.samples;
+
+import com.google.ortools.Loader;
 import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.IntVar;
 import com.google.ortools.sat.Literal;
 
 /** Code sample to demonstrates a simple Boolean constraint. */
 public class BoolOrSampleSat {
-
-  static { System.loadLibrary("jniortools"); }
-
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     CpModel model = new CpModel();
     IntVar x = model.newBoolVar("x");
     IntVar y = model.newBoolVar("y");
@@ -222,15 +217,15 @@ using Google.OrTools.Sat;
 
 public class BoolOrSampleSat
 {
-  static void Main()
-  {
-    CpModel model = new CpModel();
+    static void Main()
+    {
+        CpModel model = new CpModel();
 
-    IntVar x = model.NewBoolVar("x");
-    IntVar y = model.NewBoolVar("y");
+        IntVar x = model.NewBoolVar("x");
+        IntVar y = model.NewBoolVar("y");
 
-    model.AddBoolOr(new ILiteral[] { x, y.Not() });
-  }
+        model.AddBoolOr(new ILiteral[] { x, y.Not() });
+    }
 }
 ```
 
@@ -255,10 +250,6 @@ then is written as Or(not b, x) and Or(not b, not y).
 
 ```python
 """Simple model with a reified constraint."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 from ortools.sat.python import cp_model
 
@@ -326,6 +317,9 @@ int main() {
 ### Java code
 
 ```java
+package com.google.ortools.sat.samples;
+
+import com.google.ortools.Loader;
 import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.IntVar;
 import com.google.ortools.sat.Literal;
@@ -341,10 +335,8 @@ import com.google.ortools.sat.Literal;
  * constraints must be used.
  */
 public class ReifiedSampleSat {
-
-  static { System.loadLibrary("jniortools"); }
-
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     CpModel model = new CpModel();
 
     IntVar x = model.newBoolVar("x");
@@ -373,25 +365,25 @@ using Google.OrTools.Sat;
 
 public class ReifiedSampleSat
 {
-  static void Main()
-  {
-    CpModel model = new CpModel();
+    static void Main()
+    {
+        CpModel model = new CpModel();
 
-    IntVar x = model.NewBoolVar("x");
-    IntVar y = model.NewBoolVar("y");
-    IntVar b = model.NewBoolVar("b");
+        IntVar x = model.NewBoolVar("x");
+        IntVar y = model.NewBoolVar("y");
+        IntVar b = model.NewBoolVar("b");
 
-    //  First version using a half-reified bool and.
-    model.AddBoolAnd(new ILiteral[] {x, y.Not()}).OnlyEnforceIf(b);
+        //  First version using a half-reified bool and.
+        model.AddBoolAnd(new ILiteral[] { x, y.Not() }).OnlyEnforceIf(b);
 
-    // Second version using implications.
-    model.AddImplication(b, x);
-    model.AddImplication(b, y.Not());
+        // Second version using implications.
+        model.AddImplication(b, x);
+        model.AddImplication(b, y.Not());
 
-    // Third version using bool or.
-    model.AddBoolOr(new ILiteral[] {b.Not(), x});
-    model.AddBoolOr(new ILiteral[] {b.Not(), y.Not()});
-  }
+        // Third version using bool or.
+        model.AddBoolOr(new ILiteral[] { b.Not(), x });
+        model.AddBoolOr(new ILiteral[] { b.Not(), y.Not() });
+    }
 }
 ```
 
@@ -418,9 +410,6 @@ code samples output this truth table:
 ```python
 """Code sample that encodes the product of two Boolean variables."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 from ortools.sat.python import cp_model
 
@@ -445,7 +434,8 @@ def BooleanProductSampleSat():
   # Create a solver and solve.
   solver = cp_model.CpSolver()
   solution_printer = cp_model.VarArraySolutionPrinter([x, y, p])
-  solver.SearchForAllSolutions(model, solution_printer)
+  solver.parameters.enumerate_all_solutions = True
+  solver.Solve(model, solution_printer)
 
 
 BooleanProductSampleSat()

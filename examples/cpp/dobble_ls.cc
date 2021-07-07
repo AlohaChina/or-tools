@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -30,8 +30,12 @@
 // search operators and local search filters.
 
 #include <algorithm>
+#include <cstdint>
+#include <cstdlib>
 #include <vector>
 
+#include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
 #include "absl/random/random.h"
 #include "absl/strings/str_format.h"
 #include "ortools/base/commandlineflags.h"
@@ -40,18 +44,19 @@
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/bitset.h"
 
-DEFINE_int32(symbols_per_card, 8, "Number of symbols per card.");
-DEFINE_int32(ls_seed, 1,
-             "Seed for the random number generator (used by "
-             "the Local Neighborhood Search).");
-DEFINE_bool(use_filter, true, "Use filter in the local search to prune moves.");
-DEFINE_int32(num_swaps, 4,
-             "If num_swap > 0, the search for an optimal "
-             "solution will be allowed to use an operator that swaps the "
-             "symbols of up to num_swap pairs ((card1, symbol on card1), "
-             "(card2, symbol on card2)).");
-DEFINE_int32(time_limit_in_ms, 60000,
-             "Time limit for the global search in ms.");
+ABSL_FLAG(int, symbols_per_card, 8, "Number of symbols per card.");
+ABSL_FLAG(int, ls_seed, 1,
+          "Seed for the random number generator (used by "
+          "the Local Neighborhood Search).");
+ABSL_FLAG(bool, use_filter, true,
+          "Use filter in the local search to prune moves.");
+ABSL_FLAG(int, num_swaps, 4,
+          "If num_swap > 0, the search for an optimal "
+          "solution will be allowed to use an operator that swaps the "
+          "symbols of up to num_swap pairs ((card1, symbol on card1), "
+          "(card2, symbol on card2)).");
+ABSL_FLAG(int, time_limit_in_ms, 60000,
+          "Time limit for the global search in ms.");
 
 namespace operations_research {
 
@@ -374,7 +379,7 @@ class SwapSymbolsOnCardPairs : public DobbleOperator {
                          int num_symbols_per_card, int max_num_swaps)
       : DobbleOperator(card_symbol_vars, num_cards, num_symbols,
                        num_symbols_per_card),
-        rand_(FLAGS_ls_seed),
+        rand_(absl::GetFlag(FLAGS_ls_seed)),
         max_num_swaps_(max_num_swaps) {
     CHECK_GE(max_num_swaps, 2);
   }
@@ -469,7 +474,7 @@ class DobbleFilter : public IntVarLocalSearchFilter {
   // which is the difference between the current delta and the last
   // delta that was given to Accept() -- but we don't use it here.
   bool Accept(const Assignment* delta, const Assignment* unused_deltadelta,
-              int64 objective_min, int64 objective_max) override {
+              int64_t objective_min, int64_t objective_max) override {
     const Assignment::IntContainer& solution_delta = delta->IntVarContainer();
     const int solution_delta_size = solution_delta.Size();
 
@@ -531,9 +536,9 @@ class DobbleFilter : public IntVarLocalSearchFilter {
  private:
   // Undo information after an evaluation.
   struct UndoChange {
-    UndoChange(int c, uint64 b) : card(c), bitset(b) {}
+    UndoChange(int c, uint64_t b) : card(c), bitset(b) {}
     int card;
-    uint64 bitset;
+    uint64_t bitset;
   };
 
   int VarIndex(int card, int symbol) { return card * num_symbols_ + symbol; }
@@ -549,7 +554,7 @@ class DobbleFilter : public IntVarLocalSearchFilter {
     for (int i = 0; i < touched_cards.size(); ++i) {
       const int touched = touched_cards[i];
       SetBit64(&temporary_bitset_, touched);
-      const uint64 card_bitset = symbol_bitmask_per_card_[touched];
+      const uint64_t card_bitset = symbol_bitmask_per_card_[touched];
       const std::vector<int>& row_cost = violation_costs_[touched];
       for (int other_card = 0; other_card < num_cards_; ++other_card) {
         if (!IsBitSet64(&temporary_bitset_, other_card)) {
@@ -569,7 +574,7 @@ class DobbleFilter : public IntVarLocalSearchFilter {
     const int solution_delta_size = solution_delta.Size();
     const int kUnassigned = -1;
     for (int index = 0; index < solution_delta_size; ++index) {
-      int64 touched_var = kUnassigned;
+      int64_t touched_var = kUnassigned;
       FindIndex(solution_delta.Element(index).Var(), &touched_var);
       CHECK_NE(touched_var, kUnassigned);
       const int card = touched_var / num_symbols_;
@@ -616,15 +621,15 @@ class DobbleFilter : public IntVarLocalSearchFilter {
     return true;
   }
 
-  int ViolationCost(uint64 cardinality) const {
+  int ViolationCost(uint64_t cardinality) const {
     return (cardinality > 0 ? cardinality - 1 : 1);
   }
 
   const int num_cards_;
   const int num_symbols_;
   const int num_symbols_per_card_;
-  uint64 temporary_bitset_;
-  std::vector<uint64> symbol_bitmask_per_card_;
+  uint64_t temporary_bitset_;
+  std::vector<uint64_t> symbol_bitmask_per_card_;
   std::vector<std::vector<int> > violation_costs_;
   std::vector<UndoChange> restore_information_;
 };
@@ -689,7 +694,8 @@ void SolveDobble(int num_cards, int num_symbols, int num_symbols_per_card) {
 
   // Search.
   LOG(INFO) << "Solving with Local Search";
-  LOG(INFO) << "  - time limit = " << FLAGS_time_limit_in_ms << " ms";
+  LOG(INFO) << "  - time limit = " << absl::GetFlag(FLAGS_time_limit_in_ms)
+            << " ms";
 
   // Start a DecisionBuilder phase to find a first solution, using the
   // strategy "Pick some random, yet unassigned card symbol variable
@@ -704,22 +710,24 @@ void SolveDobble(int num_cards, int num_symbols, int num_symbols_per_card) {
       all_card_symbol_vars, num_cards, num_symbols, num_symbols_per_card));
   operators.push_back(switch_operator);
   LOG(INFO) << "  - add switch operator";
-  if (FLAGS_num_swaps > 0) {
-    LocalSearchOperator* const swaps_operator = solver.RevAlloc(
-        new SwapSymbolsOnCardPairs(all_card_symbol_vars, num_cards, num_symbols,
-                                   num_symbols_per_card, FLAGS_num_swaps));
+  if (absl::GetFlag(FLAGS_num_swaps) > 0) {
+    LocalSearchOperator* const swaps_operator =
+        solver.RevAlloc(new SwapSymbolsOnCardPairs(
+            all_card_symbol_vars, num_cards, num_symbols, num_symbols_per_card,
+            absl::GetFlag(FLAGS_num_swaps)));
     operators.push_back(swaps_operator);
-    LOG(INFO) << "  - add swaps operator with at most " << FLAGS_num_swaps
-              << " swaps";
+    LOG(INFO) << "  - add swaps operator with at most "
+              << absl::GetFlag(FLAGS_num_swaps) << " swaps";
   }
 
   // Creates filter.
   std::vector<LocalSearchFilter*> filters;
-  if (FLAGS_use_filter) {
+  if (absl::GetFlag(FLAGS_use_filter)) {
     filters.push_back(solver.RevAlloc(new DobbleFilter(
         all_card_symbol_vars, num_cards, num_symbols, num_symbols_per_card)));
   }
-
+  LocalSearchFilterManager* ls_manager =
+      solver.RevAlloc(new LocalSearchFilterManager(std::move(filters)));
   // Main decision builder that regroups the first solution decision
   // builder and the combination of local search operators and
   // filters.
@@ -731,7 +739,7 @@ void SolveDobble(int num_cards, int num_symbols, int num_symbols_per_card) {
           nullptr,  // Limit the search for improving move, we will stop
                     // the exploration of the local search at the first
                     // improving solution (first accept).
-          filters));
+          ls_manager));
 
   std::vector<SearchMonitor*> monitors;
   // Optimize var search monitor.
@@ -743,8 +751,8 @@ void SolveDobble(int num_cards, int num_symbols, int num_symbols_per_card) {
   monitors.push_back(log);
 
   // Search limit.
-  SearchLimit* const time_limit =
-      solver.MakeLimit(FLAGS_time_limit_in_ms, kint64max, kint64max, kint64max);
+  SearchLimit* const time_limit = solver.MakeTimeLimit(
+      absl::Milliseconds(absl::GetFlag(FLAGS_time_limit_in_ms)));
   monitors.push_back(time_limit);
 
   // And solve!
@@ -753,10 +761,11 @@ void SolveDobble(int num_cards, int num_symbols, int num_symbols_per_card) {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  google::InitGoogleLogging(argv[0]);
+  absl::ParseCommandLine(argc, argv);
   // These constants comes directly from the dobble game.
   // There are actually 55 cards, but we can create up to 57 cards.
-  const int kSymbolsPerCard = FLAGS_symbols_per_card;
+  const int kSymbolsPerCard = absl::GetFlag(FLAGS_symbols_per_card);
   const int kCards = kSymbolsPerCard * (kSymbolsPerCard - 1) + 1;
   const int kSymbols = kCards;
   operations_research::SolveDobble(kCards, kSymbols, kSymbolsPerCard);

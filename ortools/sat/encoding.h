@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -18,6 +18,7 @@
 #ifndef OR_TOOLS_SAT_ENCODING_H_
 #define OR_TOOLS_SAT_ENCODING_H_
 
+#include <cstdint>
 #include <deque>
 #include <vector>
 
@@ -100,7 +101,7 @@ class EncodingNode {
 
   // Fix the right-side variables with indices >= to the given upper_bound to
   // false.
-  void ApplyUpperBound(int64 upper_bound, SatSolver* solver);
+  void ApplyUpperBound(int64_t upper_bound, SatSolver* solver);
 
   void set_weight(Coefficient w) { weight_ = w; }
   Coefficient weight() const { return weight_; }
@@ -127,9 +128,18 @@ class EncodingNode {
 };
 
 // Note that we use <= because on 32 bits architecture, the size will actually
+// be smaller than 64 bytes. One exception is with visual studio on windows, in
+// debug mode, where the struct is bigger.
+#if defined(_M_X64) && defined(_DEBUG)
+// In debug, with msvc, std::Vector<T> is 32
+static_assert(sizeof(EncodingNode) == 72,
+              "ERROR_EncodingNode_is_not_well_compacted");
+#else
+// Note that we use <= because on 32 bits architecture, the size will actually
 // be smaller than 64 bytes.
-COMPILE_ASSERT(sizeof(EncodingNode) <= 64,
-               ERROR_EncodingNode_is_not_well_compacted);
+static_assert(sizeof(EncodingNode) <= 64,
+              "ERROR_EncodingNode_is_not_well_compacted");
+#endif
 
 // Merges the two given EncodingNodes by creating a new node that corresponds to
 // the sum of the two given ones. Only the left-most binary variable is created

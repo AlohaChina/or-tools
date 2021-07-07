@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -55,12 +55,12 @@ CircuitPropagator::CircuitPropagator(const int num_nodes,
     }
 
     if (assignment_.LiteralIsTrue(literal)) {
-      CHECK_EQ(next_[tail], -1)
-          << "Trivially UNSAT or duplicate arcs while adding " << tail << " -> "
-          << head;
-      CHECK_EQ(prev_[head], -1)
-          << "Trivially UNSAT or duplicate arcs while adding " << tail << " -> "
-          << head;
+      if (next_[tail] != -1 || prev_[head] != -1) {
+        VLOG(1) << "Trivially UNSAT or duplicate arcs while adding " << tail
+                << " -> " << head;
+        model->GetOrCreate<SatSolver>()->NotifyThatModelIsUnsat();
+        return;
+      }
       AddArc(tail, head, kNoLiteralIndex);
       continue;
     }
@@ -224,6 +224,35 @@ bool CircuitPropagator::Propagate() {
       if (start_node == n) break;
     }
 
+    // TODO(user): we can fail early in more case, like no more possible path
+    // to any of the mandatory node.
+    if (options_.multiple_subcircuit_through_zero) {
+      // Any cycle must contain zero.
+      if (start_node == end_node && !in_current_path_[0]) {
+        FillReasonForPath(start_node, trail_->MutableConflict());
+        return false;
+      }
+
+      // An incomplete path cannot be closed except if one of the end-points
+      // is zero.
+      if (start_node != end_node && start_node != 0 && end_node != 0) {
+        const auto it = graph_.find({end_node, start_node});
+        if (it == graph_.end()) continue;
+        const Literal literal = it->second;
+        if (assignment_.LiteralIsFalse(literal)) continue;
+
+        std::vector<Literal>* reason = trail_->GetEmptyVectorToStoreReason();
+        FillReasonForPath(start_node, reason);
+        if (!trail_->EnqueueWithStoredReason(literal.Negated())) {
+          return false;
+        }
+      }
+
+      // None of the other propagation below are valid in case of multiple
+      // circuits.
+      continue;
+    }
+
     // Check if we miss any node that must be in the circuit. Note that the ones
     // for which self_arcs_[i] is kFalseLiteralIndex are first. This is good as
     // it will produce shorter reason. Otherwise we prefer the first that was
@@ -271,7 +300,6 @@ bool CircuitPropagator::Propagate() {
     // If we have a cycle, we can propagate all the other nodes to point to
     // themselves. Otherwise there is nothing else to do.
     if (start_node != end_node) continue;
-    if (options_.multiple_subcircuit_through_zero) continue;
     BooleanVariable variable_with_same_reason = kNoBooleanVariable;
     for (int node = 0; node < num_nodes_; ++node) {
       if (in_current_path_[node]) continue;
@@ -466,33 +494,6 @@ std::function<void(Model*)> ExactlyOnePerRowAndPerColumn(
       }
     }
   };
-}
-
-int ReindexArcs(std::vector<int>* tails, std::vector<int>* heads,
-                std::vector<Literal>* literals) {
-  const int num_arcs = tails->size();
-  if (num_arcs == 0) return 0;
-
-  // Put all nodes in a set.
-  std::set<int> nodes;
-  for (int arc = 0; arc < num_arcs; ++arc) {
-    nodes.insert((*tails)[arc]);
-    nodes.insert((*heads)[arc]);
-  }
-
-  // Compute the new indices while keeping a stable order.
-  int new_index = 0;
-  std::vector<int> mapping(*--nodes.end() + 1);
-  for (const int node : nodes) {
-    mapping[node] = new_index++;
-  }
-
-  // Remap the arcs.
-  for (int arc = 0; arc < num_arcs; ++arc) {
-    (*tails)[arc] = mapping[(*tails)[arc]];
-    (*heads)[arc] = mapping[(*heads)[arc]];
-  }
-  return nodes.size();
 }
 
 std::function<void(Model*)> SubcircuitConstraint(

@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -29,6 +29,7 @@
 #ifndef OR_TOOLS_LP_DATA_SPARSE_H_
 #define OR_TOOLS_LP_DATA_SPARSE_H_
 
+#include <cstdint>
 #include <string>
 
 #include "ortools/base/integral_types.h"
@@ -696,6 +697,11 @@ class TriangularMatrix : private CompactSparseMatrix {
                                 const RowPermutation& row_perm,
                                 SparseColumn* lower, SparseColumn* upper);
 
+  // This is used to compute the deterministic time of a matrix factorization.
+  int64_t NumFpOperationsInLastPermutedLowerSparseSolve() const {
+    return num_fp_operations_;
+  }
+
   // To be used in DEBUG mode by the client code. This check that the matrix is
   // lower- (resp. upper-) triangular without any permutation and that there is
   // no zero on the diagonal. We can't do that on each Solve() that require so,
@@ -774,6 +780,7 @@ class TriangularMatrix : private CompactSparseMatrix {
   mutable std::vector<RowIndex> nodes_to_explore_;
 
   // For PermutedLowerSparseSolve().
+  int64_t num_fp_operations_;
   mutable std::vector<RowIndex> lower_column_rows_;
   mutable std::vector<RowIndex> upper_column_rows_;
   mutable DenseColumn initially_all_zero_scratchpad_;

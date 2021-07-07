@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,7 +12,9 @@
 // limitations under the License.
 
 // [START program]
+package com.google.ortools.constraintsolver.samples;
 // [START import]
+import com.google.ortools.Loader;
 import com.google.ortools.constraintsolver.DecisionBuilder;
 import com.google.ortools.constraintsolver.IntVar;
 import com.google.ortools.constraintsolver.Solver;
@@ -21,13 +23,12 @@ import java.util.logging.Logger;
 
 /** Simple CP Program.*/
 public class SimpleCpProgram {
-  static {
-    System.loadLibrary("jniortools");
-  }
+  private SimpleCpProgram() {}
 
   private static final Logger logger = Logger.getLogger(SimpleCpProgram.class.getName());
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     // Instantiate the solver.
     // [START solver]
     Solver solver = new Solver("CpSimple");

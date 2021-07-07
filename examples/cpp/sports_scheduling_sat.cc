@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -26,7 +26,7 @@
 //  - If team A meets team B, the reverse match cannot happen less that 6 weeks
 //    after.
 //
-// We model this problem with three matrices of variables, each with
+// In the opponent model, we use three matrices of variables, each with
 // num_teams rows and 2*(num_teams - 1) columns: the var at position [i][j]
 // corresponds to the match of team #i at day #j. There are
 // 2*(num_teams - 1) columns because each team meets num_teams - 1
@@ -38,23 +38,31 @@
 // - The 'signed_opponent' var [i][j] is the 'opponent' var [i][j] +
 //   num_teams * the 'home_away' var [i][j].
 //
-// This aggregated variable will be useful to state constraints of the model
-// and to do search on it.
+// In the fixture model, we have a cube of Boolean variables fixtures.
+//   fixtures[d][i][j] is true if team i plays team j at home on day d.
+// We also introduces a variable at_home[d][i] which is true if team i
+// plays any opponent at home on day d.
 
+#include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
+#include "absl/strings/str_join.h"
 #include "ortools/base/commandlineflags.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/sat/cp_model.h"
+#include "ortools/sat/cp_model.pb.h"
+#include "ortools/sat/model.h"
 
 // Problem main flags.
-DEFINE_int32(num_teams, 10, "Number of teams in the problem.");
-DEFINE_string(params, "", "Sat parameters.");
+ABSL_FLAG(int, num_teams, 10, "Number of teams in the problem.");
+ABSL_FLAG(std::string, params, "", "Sat parameters.");
+ABSL_FLAG(int, model, 1, "1 = opponent model, 2 = fixture model");
 
 namespace operations_research {
 namespace sat {
 
-void FirstModel(int num_teams) {
+void OpponentModel(int num_teams) {
   const int num_days = 2 * num_teams - 2;
   const int kNoRematch = 6;
 
@@ -160,8 +168,8 @@ void FirstModel(int num_teams) {
   builder.Minimize(LinearExpr::BooleanSum(breaks));
 
   Model model;
-  if (!FLAGS_params.empty()) {
-    model.Add(NewSatParameters(FLAGS_params));
+  if (!absl::GetFlag(FLAGS_params).empty()) {
+    model.Add(NewSatParameters(absl::GetFlag(FLAGS_params)));
   }
 
   const CpSolverResponse response = SolveCpModel(builder.Build(), &model);
@@ -185,7 +193,7 @@ void FirstModel(int num_teams) {
   }
 }
 
-void SecondModel(int num_teams) {
+void FixtureModel(int num_teams) {
   const int num_days = 2 * num_teams - 2;
   //  const int kNoRematch = 6;
   const int matches_per_day = num_teams - 1;
@@ -216,13 +224,12 @@ void SecondModel(int num_teams) {
     }
   }
 
-  // Each day, Team t plays either at home or away.
+  // Each day, Team t plays another team, either at home or away.
   for (int d = 0; d < num_days; ++d) {
     for (int team = 0; team < num_teams; ++team) {
       std::vector<BoolVar> possible_opponents;
       for (int other = 0; other < num_teams; ++other) {
-        if (team == other)
-          continue;
+        if (team == other) continue;
         possible_opponents.push_back(fixtures[d][team][other]);
         possible_opponents.push_back(fixtures[d][other][team]);
       }
@@ -233,8 +240,7 @@ void SecondModel(int num_teams) {
   // Each fixture happens once per season.
   for (int team = 0; team < num_teams; ++team) {
     for (int other = 0; other < num_teams; ++other) {
-      if (team == other)
-        continue;
+      if (team == other) continue;
       std::vector<BoolVar> possible_days;
       for (int d = 0; d < num_days; ++d) {
         possible_days.push_back(fixtures[d][team][other]);
@@ -246,8 +252,7 @@ void SecondModel(int num_teams) {
   // Meet each opponent once per season.
   for (int team = 0; team < num_teams; ++team) {
     for (int other = 0; other < num_teams; ++other) {
-      if (team == other)
-        continue;
+      if (team == other) continue;
       std::vector<BoolVar> first_half;
       std::vector<BoolVar> second_half;
       for (int d = 0; d < matches_per_day; ++d) {
@@ -265,8 +270,7 @@ void SecondModel(int num_teams) {
   for (int d = 0; d < num_days; ++d) {
     for (int team = 0; team < num_teams; ++team) {
       for (int other = 0; other < num_teams; ++other) {
-        if (team == other)
-          continue;
+        if (team == other) continue;
         builder.AddImplication(fixtures[d][team][other], at_home[d][team]);
         builder.AddImplication(fixtures[d][team][other],
                                Not(at_home[d][other]));
@@ -305,26 +309,32 @@ void SecondModel(int num_teams) {
   builder.Minimize(LinearExpr::BooleanSum(breaks));
 
   Model model;
-  if (!FLAGS_params.empty()) {
-    model.Add(NewSatParameters(FLAGS_params));
+  if (!absl::GetFlag(FLAGS_params).empty()) {
+    model.Add(NewSatParameters(absl::GetFlag(FLAGS_params)));
   }
 
   const CpSolverResponse response = SolveCpModel(builder.Build(), &model);
   LOG(INFO) << CpSolverResponseStats(response);
 }
 
-} // namespace sat
-} // namespace operations_research
+}  // namespace sat
+}  // namespace operations_research
 
 static const char kUsage[] =
     "Usage: see flags.\nThis program runs a sports scheduling problem."
     "There is no output besides the debug LOGs of the solver.";
 
-int main(int argc, char **argv) {
-  gflags::SetUsageMessage(kUsage);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  CHECK_EQ(0, FLAGS_num_teams % 2) << "The number of teams must be even";
-  CHECK_GE(FLAGS_num_teams, 2) << "At least 2 teams";
-  operations_research::sat::SecondModel(FLAGS_num_teams);
+int main(int argc, char** argv) {
+  absl::SetFlag(&FLAGS_logtostderr, true);
+  google::InitGoogleLogging(kUsage);
+  absl::ParseCommandLine(argc, argv);
+  CHECK_EQ(0, absl::GetFlag(FLAGS_num_teams) % 2)
+      << "The number of teams must be even";
+  CHECK_GE(absl::GetFlag(FLAGS_num_teams), 2) << "At least 2 teams";
+  if (absl::GetFlag(FLAGS_model) == 1) {
+    operations_research::sat::OpponentModel(absl::GetFlag(FLAGS_num_teams));
+  } else {
+    operations_research::sat::FixtureModel(absl::GetFlag(FLAGS_num_teams));
+  }
   return EXIT_SUCCESS;
 }

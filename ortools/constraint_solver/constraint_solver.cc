@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -18,8 +18,10 @@
 #include "ortools/constraint_solver/constraint_solver.h"
 
 #include <csetjmp>
+#include <cstdint>
 #include <deque>
 #include <iosfwd>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -35,61 +37,63 @@
 #include "ortools/base/map_util.h"
 #include "ortools/base/recordio.h"
 #include "ortools/base/stl_util.h"
+#include "ortools/base/sysinfo.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/tuple_set.h"
 #include "zlib.h"
 
 // These flags are used to set the fields in the DefaultSolverParameters proto.
-DEFINE_bool(cp_trace_propagation, false,
-            "Trace propagation events (constraint and demon executions,"
-            " variable modifications).");
-DEFINE_bool(cp_trace_search, false, "Trace search events");
-DEFINE_bool(cp_print_added_constraints, false,
-            "show all constraints added to the solver.");
-DEFINE_bool(cp_print_model, false,
-            "use PrintModelVisitor on model before solving.");
-DEFINE_bool(cp_model_stats, false,
-            "use StatisticsModelVisitor on model before solving.");
-DEFINE_bool(cp_disable_solve, false,
-            "Force failure at the beginning of a search.");
-DEFINE_string(cp_profile_file, "", "Export profiling overview to file.");
-DEFINE_bool(cp_print_local_search_profile, false,
-            "Print local search profiling data after solving.");
-DEFINE_bool(cp_name_variables, false, "Force all variables to have names.");
-DEFINE_bool(cp_name_cast_variables, false,
-            "Name variables casted from expressions");
-DEFINE_bool(cp_use_small_table, true,
-            "Use small compact table constraint when possible.");
-DEFINE_bool(cp_use_cumulative_edge_finder, true,
-            "Use the O(n log n) cumulative edge finding algorithm described "
-            "in 'Edge Finding Filtering Algorithm for Discrete  Cumulative "
-            "Resources in O(kn log n)' by Petr Vilim, CP 2009.");
-DEFINE_bool(cp_use_cumulative_time_table, true,
-            "Use a O(n^2) cumulative time table propagation algorithm.");
-DEFINE_bool(cp_use_cumulative_time_table_sync, false,
-            "Use a synchronized O(n^2 log n) cumulative time table propagation "
-            "algorithm.");
-DEFINE_bool(cp_use_sequence_high_demand_tasks, true,
-            "Use a sequence constraints for cumulative tasks that have a "
-            "demand greater than half of the capacity of the resource.");
-DEFINE_bool(cp_use_all_possible_disjunctions, true,
-            "Post temporal disjunctions for all pairs of tasks sharing a "
-            "cumulative resource and that cannot overlap because the sum of "
-            "their demand exceeds the capacity.");
-DEFINE_int32(cp_max_edge_finder_size, 50,
-             "Do not post the edge finder in the cumulative constraints if "
-             "it contains more than this number of tasks");
-DEFINE_bool(cp_diffn_use_cumulative, true,
-            "Diffn constraint adds redundant cumulative constraint");
-DEFINE_bool(cp_use_element_rmq, true,
-            "If true, rmq's will be used in element expressions.");
-DEFINE_int32(cp_check_solution_period, 1,
-             "Number of solutions explored between two solution checks during "
-             "local search.");
-DEFINE_int64(cp_random_seed, 12345,
-             "Random seed used in several (but not all) random number "
-             "generators used by the CP solver. Use -1 to auto-generate an"
-             "undeterministic random seed.");
+ABSL_FLAG(bool, cp_trace_propagation, false,
+          "Trace propagation events (constraint and demon executions,"
+          " variable modifications).");
+ABSL_FLAG(bool, cp_trace_search, false, "Trace search events");
+ABSL_FLAG(bool, cp_print_added_constraints, false,
+          "show all constraints added to the solver.");
+ABSL_FLAG(bool, cp_print_model, false,
+          "use PrintModelVisitor on model before solving.");
+ABSL_FLAG(bool, cp_model_stats, false,
+          "use StatisticsModelVisitor on model before solving.");
+ABSL_FLAG(bool, cp_disable_solve, false,
+          "Force failure at the beginning of a search.");
+ABSL_FLAG(std::string, cp_profile_file, "",
+          "Export profiling overview to file.");
+ABSL_FLAG(bool, cp_print_local_search_profile, false,
+          "Print local search profiling data after solving.");
+ABSL_FLAG(bool, cp_name_variables, false, "Force all variables to have names.");
+ABSL_FLAG(bool, cp_name_cast_variables, false,
+          "Name variables casted from expressions");
+ABSL_FLAG(bool, cp_use_small_table, true,
+          "Use small compact table constraint when possible.");
+ABSL_FLAG(bool, cp_use_cumulative_edge_finder, true,
+          "Use the O(n log n) cumulative edge finding algorithm described "
+          "in 'Edge Finding Filtering Algorithm for Discrete  Cumulative "
+          "Resources in O(kn log n)' by Petr Vilim, CP 2009.");
+ABSL_FLAG(bool, cp_use_cumulative_time_table, true,
+          "Use a O(n^2) cumulative time table propagation algorithm.");
+ABSL_FLAG(bool, cp_use_cumulative_time_table_sync, false,
+          "Use a synchronized O(n^2 log n) cumulative time table propagation "
+          "algorithm.");
+ABSL_FLAG(bool, cp_use_sequence_high_demand_tasks, true,
+          "Use a sequence constraints for cumulative tasks that have a "
+          "demand greater than half of the capacity of the resource.");
+ABSL_FLAG(bool, cp_use_all_possible_disjunctions, true,
+          "Post temporal disjunctions for all pairs of tasks sharing a "
+          "cumulative resource and that cannot overlap because the sum of "
+          "their demand exceeds the capacity.");
+ABSL_FLAG(int, cp_max_edge_finder_size, 50,
+          "Do not post the edge finder in the cumulative constraints if "
+          "it contains more than this number of tasks");
+ABSL_FLAG(bool, cp_diffn_use_cumulative, true,
+          "Diffn constraint adds redundant cumulative constraint");
+ABSL_FLAG(bool, cp_use_element_rmq, true,
+          "If true, rmq's will be used in element expressions.");
+ABSL_FLAG(int, cp_check_solution_period, 1,
+          "Number of solutions explored between two solution checks during "
+          "local search.");
+ABSL_FLAG(int64_t, cp_random_seed, 12345,
+          "Random seed used in several (but not all) random number "
+          "generators used by the CP solver. Use -1 to auto-generate an"
+          "undeterministic random seed.");
 
 void ConstraintSolverFailsHere() { VLOG(3) << "Fail"; }
 
@@ -120,31 +124,37 @@ ConstraintSolverParameters Solver::DefaultSolverParameters() {
   params.set_trail_block_size(8000);
   params.set_array_split_size(16);
   params.set_store_names(true);
-  params.set_profile_propagation(!FLAGS_cp_profile_file.empty());
-  params.set_trace_propagation(FLAGS_cp_trace_propagation);
-  params.set_trace_search(FLAGS_cp_trace_search);
-  params.set_name_all_variables(FLAGS_cp_name_variables);
-  params.set_profile_file(FLAGS_cp_profile_file);
-  params.set_profile_local_search(FLAGS_cp_print_local_search_profile);
-  params.set_print_local_search_profile(FLAGS_cp_print_local_search_profile);
-  params.set_print_model(FLAGS_cp_print_model);
-  params.set_print_model_stats(FLAGS_cp_model_stats);
-  params.set_disable_solve(FLAGS_cp_disable_solve);
-  params.set_name_cast_variables(FLAGS_cp_name_cast_variables);
-  params.set_print_added_constraints(FLAGS_cp_print_added_constraints);
-  params.set_use_small_table(FLAGS_cp_use_small_table);
-  params.set_use_cumulative_edge_finder(FLAGS_cp_use_cumulative_edge_finder);
-  params.set_use_cumulative_time_table(FLAGS_cp_use_cumulative_time_table);
+  params.set_profile_propagation(!absl::GetFlag(FLAGS_cp_profile_file).empty());
+  params.set_trace_propagation(absl::GetFlag(FLAGS_cp_trace_propagation));
+  params.set_trace_search(absl::GetFlag(FLAGS_cp_trace_search));
+  params.set_name_all_variables(absl::GetFlag(FLAGS_cp_name_variables));
+  params.set_profile_file(absl::GetFlag(FLAGS_cp_profile_file));
+  params.set_profile_local_search(
+      absl::GetFlag(FLAGS_cp_print_local_search_profile));
+  params.set_print_local_search_profile(
+      absl::GetFlag(FLAGS_cp_print_local_search_profile));
+  params.set_print_model(absl::GetFlag(FLAGS_cp_print_model));
+  params.set_print_model_stats(absl::GetFlag(FLAGS_cp_model_stats));
+  params.set_disable_solve(absl::GetFlag(FLAGS_cp_disable_solve));
+  params.set_name_cast_variables(absl::GetFlag(FLAGS_cp_name_cast_variables));
+  params.set_print_added_constraints(
+      absl::GetFlag(FLAGS_cp_print_added_constraints));
+  params.set_use_small_table(absl::GetFlag(FLAGS_cp_use_small_table));
+  params.set_use_cumulative_edge_finder(
+      absl::GetFlag(FLAGS_cp_use_cumulative_edge_finder));
+  params.set_use_cumulative_time_table(
+      absl::GetFlag(FLAGS_cp_use_cumulative_time_table));
   params.set_use_cumulative_time_table_sync(
-      FLAGS_cp_use_cumulative_time_table_sync);
+      absl::GetFlag(FLAGS_cp_use_cumulative_time_table_sync));
   params.set_use_sequence_high_demand_tasks(
-      FLAGS_cp_use_sequence_high_demand_tasks);
+      absl::GetFlag(FLAGS_cp_use_sequence_high_demand_tasks));
   params.set_use_all_possible_disjunctions(
-      FLAGS_cp_use_all_possible_disjunctions);
-  params.set_max_edge_finder_size(FLAGS_cp_max_edge_finder_size);
-  params.set_diffn_use_cumulative(FLAGS_cp_diffn_use_cumulative);
-  params.set_use_element_rmq(FLAGS_cp_use_element_rmq);
-  params.set_check_solution_period(FLAGS_cp_check_solution_period);
+      absl::GetFlag(FLAGS_cp_use_all_possible_disjunctions));
+  params.set_max_edge_finder_size(absl::GetFlag(FLAGS_cp_max_edge_finder_size));
+  params.set_diffn_use_cumulative(absl::GetFlag(FLAGS_cp_diffn_use_cumulative));
+  params.set_use_element_rmq(absl::GetFlag(FLAGS_cp_use_element_rmq));
+  params.set_check_solution_period(
+      absl::GetFlag(FLAGS_cp_check_solution_period));
   return params;
 }
 
@@ -190,13 +200,13 @@ Solver::DemonPriority Demon::priority() const {
 std::string Demon::DebugString() const { return "Demon"; }
 
 void Demon::inhibit(Solver* const s) {
-  if (stamp_ < kuint64max) {
-    s->SaveAndSetValue(&stamp_, kuint64max);
+  if (stamp_ < std::numeric_limits<uint64_t>::max()) {
+    s->SaveAndSetValue(&stamp_, std::numeric_limits<uint64_t>::max());
   }
 }
 
 void Demon::desinhibit(Solver* const s) {
-  if (stamp_ == kuint64max) {
+  if (stamp_ == std::numeric_limits<uint64_t>::max()) {
     s->SaveAndSetValue(&stamp_, s->stamp() - 1);
   }
 }
@@ -207,7 +217,7 @@ extern void CleanVariableOnFail(IntVar* const var);
 
 class Queue {
  public:
-  static const int64 kTestPeriod = 10000;
+  static constexpr int64_t kTestPeriod = 10000;
 
   explicit Queue(Solver* const s)
       : solver_(s),
@@ -349,7 +359,7 @@ class Queue {
 
   void increase_stamp() { stamp_++; }
 
-  uint64 stamp() const { return stamp_; }
+  uint64_t stamp() const { return stamp_; }
 
   void set_action_on_fail(Solver::Action a) {
     DCHECK(clean_variable_ == nullptr);
@@ -391,10 +401,10 @@ class Queue {
   Solver* const solver_;
   std::deque<Demon*> var_queue_;
   std::deque<Demon*> delayed_queue_;
-  uint64 stamp_;
+  uint64_t stamp_;
   // The number of nested freeze levels. The queue is frozen if and only if
   // freeze_level_ > 0.
-  uint32 freeze_level_;
+  uint32_t freeze_level_;
   bool in_process_;
   Solver::Action clean_action_;
   IntVar* clean_variable_;
@@ -575,7 +585,7 @@ class ZlibTrailPacker : public TrailPacker<T> {
   }
 
  private:
-  const uint64 tmp_size_;
+  const uint64_t tmp_size_;
   std::unique_ptr<char[]> tmp_block_;
   DISALLOW_COPY_AND_ASSIGN(ZlibTrailPacker<T>);
 };
@@ -659,7 +669,7 @@ class CompressedTrail {
     ++current_;
     ++size_;
   }
-  int64 size() const { return size_; }
+  int64_t size() const { return size_; }
 
  private:
   struct Block {
@@ -715,15 +725,15 @@ extern void RestoreBoolValue(IntVar* const var);
 
 struct Trail {
   CompressedTrail<int> rev_ints_;
-  CompressedTrail<int64> rev_int64s_;
-  CompressedTrail<uint64> rev_uint64s_;
+  CompressedTrail<int64_t> rev_int64s_;
+  CompressedTrail<uint64_t> rev_uint64s_;
   CompressedTrail<double> rev_doubles_;
   CompressedTrail<void*> rev_ptrs_;
   std::vector<IntVar*> rev_boolvar_list_;
   std::vector<bool*> rev_bools_;
   std::vector<bool> rev_bool_value_;
   std::vector<int*> rev_int_memory_;
-  std::vector<int64*> rev_int64_memory_;
+  std::vector<int64_t*> rev_int64_memory_;
   std::vector<double*> rev_double_memory_;
   std::vector<BaseObject*> rev_object_memory_;
   std::vector<BaseObject**> rev_object_array_memory_;
@@ -749,7 +759,7 @@ struct Trail {
     // Incorrect trail size after backtrack.
     target = m->rev_int64_index_;
     for (int curr = rev_int64s_.size(); curr > target; --curr) {
-      const addrval<int64>& cell = rev_int64s_.Back();
+      const addrval<int64_t>& cell = rev_int64s_.Back();
       cell.restore();
       rev_int64s_.PopBack();
     }
@@ -757,7 +767,7 @@ struct Trail {
     // Incorrect trail size after backtrack.
     target = m->rev_uint64_index_;
     for (int curr = rev_uint64s_.size(); curr > target; --curr) {
-      const addrval<uint64>& cell = rev_uint64s_.Back();
+      const addrval<uint64_t>& cell = rev_uint64s_.Back();
       cell.restore();
       rev_uint64s_.PopBack();
     }
@@ -850,12 +860,12 @@ void Solver::InternalSaveValue(int* valptr) {
   trail_->rev_ints_.PushBack(addrval<int>(valptr));
 }
 
-void Solver::InternalSaveValue(int64* valptr) {
-  trail_->rev_int64s_.PushBack(addrval<int64>(valptr));
+void Solver::InternalSaveValue(int64_t* valptr) {
+  trail_->rev_int64s_.PushBack(addrval<int64_t>(valptr));
 }
 
-void Solver::InternalSaveValue(uint64* valptr) {
-  trail_->rev_uint64s_.PushBack(addrval<uint64>(valptr));
+void Solver::InternalSaveValue(uint64_t* valptr) {
+  trail_->rev_uint64s_.PushBack(addrval<uint64_t>(valptr));
 }
 
 void Solver::InternalSaveValue(double* valptr) {
@@ -886,7 +896,7 @@ int* Solver::SafeRevAllocArray(int* ptr) {
   return ptr;
 }
 
-int64* Solver::SafeRevAllocArray(int64* ptr) {
+int64_t* Solver::SafeRevAllocArray(int64_t* ptr) {
   check_alloc_state();
   trail_->rev_int64_memory_.push_back(ptr);
   return ptr;
@@ -898,9 +908,9 @@ double* Solver::SafeRevAllocArray(double* ptr) {
   return ptr;
 }
 
-uint64* Solver::SafeRevAllocArray(uint64* ptr) {
+uint64_t* Solver::SafeRevAllocArray(uint64_t* ptr) {
   check_alloc_state();
-  trail_->rev_int64_memory_.push_back(reinterpret_cast<int64*>(ptr));
+  trail_->rev_int64_memory_.push_back(reinterpret_cast<int64_t*>(ptr));
   return ptr;
 }
 
@@ -1008,9 +1018,9 @@ class Search {
   void push_monitor(SearchMonitor* const m);
   void Clear();
   void IncrementSolutionCounter() { ++solution_counter_; }
-  int64 solution_counter() const { return solution_counter_; }
+  int64_t solution_counter() const { return solution_counter_; }
   void IncrementUncheckedSolutionCounter() { ++unchecked_solution_counter_; }
-  int64 unchecked_solution_counter() const {
+  int64_t unchecked_solution_counter() const {
     return unchecked_solution_counter_;
   }
   void set_decision_builder(DecisionBuilder* const db) {
@@ -1063,8 +1073,8 @@ class Search {
   std::vector<StateMarker*> marker_stack_;
   std::vector<SearchMonitor*> monitors_;
   jmp_buf fail_buffer_;
-  int64 solution_counter_;
-  int64 unchecked_solution_counter_;
+  int64_t solution_counter_;
+  int64_t unchecked_solution_counter_;
   DecisionBuilder* decision_builder_;
   bool created_by_solve_;
   Solver::BranchSelector selector_;
@@ -1432,7 +1442,7 @@ void Solver::Init() {
   optimization_direction_ = NOT_SET;
   timer_ = absl::make_unique<ClockTimer>();
   searches_.assign(1, new Search(this, 0));
-  fail_stamp_ = GG_ULONGLONG(1);
+  fail_stamp_ = uint64_t{1};
   balancing_decision_ = absl::make_unique<BalancingDecision>();
   fail_intercept_ = nullptr;
   true_constraint_ = nullptr;
@@ -1508,9 +1518,9 @@ std::string Solver::DebugString() const {
   return out;
 }
 
-int64 Solver::MemoryUsage() { return GetProcessMemoryUsage(); }
+int64_t Solver::MemoryUsage() { return GetProcessMemoryUsage(); }
 
-int64 Solver::wall_time() const {
+int64_t Solver::wall_time() const {
   return absl::ToInt64Milliseconds(timer_->GetDuration());
 }
 
@@ -1518,9 +1528,11 @@ absl::Time Solver::Now() const {
   return absl::FromUnixSeconds(0) + timer_->GetDuration();
 }
 
-int64 Solver::solutions() const { return TopLevelSearch()->solution_counter(); }
+int64_t Solver::solutions() const {
+  return TopLevelSearch()->solution_counter();
+}
 
-int64 Solver::unchecked_solutions() const {
+int64_t Solver::unchecked_solutions() const {
   return TopLevelSearch()->unchecked_solution_counter();
 }
 
@@ -1535,6 +1547,16 @@ bool Solver::IsUncheckedSolutionLimitReached() {
 void Solver::TopPeriodicCheck() { TopLevelSearch()->PeriodicCheck(); }
 
 int Solver::TopProgressPercent() { return TopLevelSearch()->ProgressPercent(); }
+
+ConstraintSolverStatistics Solver::GetConstraintSolverStatistics() const {
+  ConstraintSolverStatistics stats;
+  stats.set_num_branches(branches());
+  stats.set_num_failures(failures());
+  stats.set_num_solutions(solutions());
+  stats.set_bytes_used(MemoryUsage());
+  stats.set_duration_seconds(absl::ToDoubleSeconds(timer_->GetDuration()));
+  return stats;
+}
 
 void Solver::PushState() {
   StateInfo info;
@@ -1623,9 +1645,9 @@ void Solver::EnqueueAll(const SimpleRevFIFO<Demon*>& demons) {
   queue_->EnqueueAll(demons);
 }
 
-uint64 Solver::stamp() const { return queue_->stamp(); }
+uint64_t Solver::stamp() const { return queue_->stamp(); }
 
-uint64 Solver::fail_stamp() const { return fail_stamp_; }
+uint64_t Solver::fail_stamp() const { return fail_stamp_; }
 
 void Solver::set_action_on_fail(Action a) {
   queue_->set_action_on_fail(std::move(a));
@@ -2486,7 +2508,6 @@ std::ostream& operator<<(std::ostream& out, const BaseObject* const o) {
 // ---------- PropagationBaseObject ---------
 
 std::string PropagationBaseObject::name() const {
-  // TODO(user) : merge with GetName() code to remove a std::string copy.
   return solver_->GetName(this);
 }
 
@@ -2521,14 +2542,14 @@ void Decision::Accept(DecisionVisitor* const visitor) const {
   visitor->VisitUnknownDecision();
 }
 
-void DecisionVisitor::VisitSetVariableValue(IntVar* const var, int64 value) {}
-void DecisionVisitor::VisitSplitVariableDomain(IntVar* const var, int64 value,
+void DecisionVisitor::VisitSetVariableValue(IntVar* const var, int64_t value) {}
+void DecisionVisitor::VisitSplitVariableDomain(IntVar* const var, int64_t value,
                                                bool lower) {}
 void DecisionVisitor::VisitUnknownDecision() {}
 void DecisionVisitor::VisitScheduleOrPostpone(IntervalVar* const var,
-                                              int64 est) {}
+                                              int64_t est) {}
 void DecisionVisitor::VisitScheduleOrExpedite(IntervalVar* const var,
-                                              int64 est) {}
+                                              int64_t est) {}
 void DecisionVisitor::VisitRankFirstInterval(SequenceVar* const sequence,
                                              int index) {}
 
@@ -2740,7 +2761,7 @@ void ModelVisitor::VisitIntegerVariable(const IntVar* const variable,
 
 void ModelVisitor::VisitIntegerVariable(const IntVar* const variable,
                                         const std::string& operation,
-                                        int64 value, IntVar* const delegate) {
+                                        int64_t value, IntVar* const delegate) {
   if (delegate != nullptr) {
     delegate->Accept(this);
   }
@@ -2748,7 +2769,7 @@ void ModelVisitor::VisitIntegerVariable(const IntVar* const variable,
 
 void ModelVisitor::VisitIntervalVariable(const IntervalVar* const variable,
                                          const std::string& operation,
-                                         int64 value,
+                                         int64_t value,
                                          IntervalVar* const delegate) {
   if (delegate != nullptr) {
     delegate->Accept(this);
@@ -2762,11 +2783,10 @@ void ModelVisitor::VisitSequenceVariable(const SequenceVar* const variable) {
 }
 
 void ModelVisitor::VisitIntegerArgument(const std::string& arg_name,
-                                        int64 value) {}
+                                        int64_t value) {}
 
-void ModelVisitor::VisitIntegerArrayArgument(const std::string& arg_name,
-                                             const std::vector<int64>& values) {
-}
+void ModelVisitor::VisitIntegerArrayArgument(
+    const std::string& arg_name, const std::vector<int64_t>& values) {}
 
 void ModelVisitor::VisitIntegerMatrixArgument(const std::string& arg_name,
                                               const IntTupleSet& tuples) {}
@@ -2807,9 +2827,10 @@ void ModelVisitor::VisitSequenceArrayArgument(
 // ----- Helpers -----
 
 void ModelVisitor::VisitInt64ToBoolExtension(Solver::IndexFilter1 filter,
-                                             int64 index_min, int64 index_max) {
+                                             int64_t index_min,
+                                             int64_t index_max) {
   if (filter != nullptr) {
-    std::vector<int64> cached_results;
+    std::vector<int64_t> cached_results;
     for (int i = index_min; i <= index_max; ++i) {
       cached_results.push_back(filter(i));
     }
@@ -2822,9 +2843,9 @@ void ModelVisitor::VisitInt64ToBoolExtension(Solver::IndexFilter1 filter,
 }
 
 void ModelVisitor::VisitInt64ToInt64Extension(
-    const Solver::IndexEvaluator1& eval, int64 index_min, int64 index_max) {
+    const Solver::IndexEvaluator1& eval, int64_t index_min, int64_t index_max) {
   CHECK(eval != nullptr);
-  std::vector<int64> cached_results;
+  std::vector<int64_t> cached_results;
   for (int i = index_min; i <= index_max; ++i) {
     cached_results.push_back(eval(i));
   }
@@ -2837,9 +2858,9 @@ void ModelVisitor::VisitInt64ToInt64Extension(
 
 void ModelVisitor::VisitInt64ToInt64AsArray(const Solver::IndexEvaluator1& eval,
                                             const std::string& arg_name,
-                                            int64 index_max) {
+                                            int64_t index_max) {
   CHECK(eval != nullptr);
-  std::vector<int64> cached_results;
+  std::vector<int64_t> cached_results;
   for (int i = 0; i <= index_max; ++i) {
     cached_results.push_back(eval(i));
   }
@@ -2964,102 +2985,104 @@ class Trace : public PropagationMonitor {
   }
 
   // IntExpr modifiers.
-  void SetMin(IntExpr* const expr, int64 new_min) override {
+  void SetMin(IntExpr* const expr, int64_t new_min) override {
     for (PropagationMonitor* const monitor : monitors_) {
       monitor->SetMin(expr, new_min);
     }
   }
 
-  void SetMax(IntExpr* const expr, int64 new_max) override {
+  void SetMax(IntExpr* const expr, int64_t new_max) override {
     for (PropagationMonitor* const monitor : monitors_) {
       monitor->SetMax(expr, new_max);
     }
   }
 
-  void SetRange(IntExpr* const expr, int64 new_min, int64 new_max) override {
+  void SetRange(IntExpr* const expr, int64_t new_min,
+                int64_t new_max) override {
     for (PropagationMonitor* const monitor : monitors_) {
       monitor->SetRange(expr, new_min, new_max);
     }
   }
 
   // IntVar modifiers.
-  void SetMin(IntVar* const var, int64 new_min) override {
+  void SetMin(IntVar* const var, int64_t new_min) override {
     for (PropagationMonitor* const monitor : monitors_) {
       monitor->SetMin(var, new_min);
     }
   }
 
-  void SetMax(IntVar* const var, int64 new_max) override {
+  void SetMax(IntVar* const var, int64_t new_max) override {
     for (PropagationMonitor* const monitor : monitors_) {
       monitor->SetMax(var, new_max);
     }
   }
 
-  void SetRange(IntVar* const var, int64 new_min, int64 new_max) override {
+  void SetRange(IntVar* const var, int64_t new_min, int64_t new_max) override {
     for (PropagationMonitor* const monitor : monitors_) {
       monitor->SetRange(var, new_min, new_max);
     }
   }
 
-  void RemoveValue(IntVar* const var, int64 value) override {
+  void RemoveValue(IntVar* const var, int64_t value) override {
     ForAll(monitors_, &PropagationMonitor::RemoveValue, var, value);
   }
 
-  void SetValue(IntVar* const var, int64 value) override {
+  void SetValue(IntVar* const var, int64_t value) override {
     ForAll(monitors_, &PropagationMonitor::SetValue, var, value);
   }
 
-  void RemoveInterval(IntVar* const var, int64 imin, int64 imax) override {
+  void RemoveInterval(IntVar* const var, int64_t imin, int64_t imax) override {
     ForAll(monitors_, &PropagationMonitor::RemoveInterval, var, imin, imax);
   }
 
-  void SetValues(IntVar* const var, const std::vector<int64>& values) override {
+  void SetValues(IntVar* const var,
+                 const std::vector<int64_t>& values) override {
     ForAll(monitors_, &PropagationMonitor::SetValues, var, values);
   }
 
   void RemoveValues(IntVar* const var,
-                    const std::vector<int64>& values) override {
+                    const std::vector<int64_t>& values) override {
     ForAll(monitors_, &PropagationMonitor::RemoveValues, var, values);
   }
 
   // IntervalVar modifiers.
-  void SetStartMin(IntervalVar* const var, int64 new_min) override {
+  void SetStartMin(IntervalVar* const var, int64_t new_min) override {
     ForAll(monitors_, &PropagationMonitor::SetStartMin, var, new_min);
   }
 
-  void SetStartMax(IntervalVar* const var, int64 new_max) override {
+  void SetStartMax(IntervalVar* const var, int64_t new_max) override {
     ForAll(monitors_, &PropagationMonitor::SetStartMax, var, new_max);
   }
 
-  void SetStartRange(IntervalVar* const var, int64 new_min,
-                     int64 new_max) override {
+  void SetStartRange(IntervalVar* const var, int64_t new_min,
+                     int64_t new_max) override {
     ForAll(monitors_, &PropagationMonitor::SetStartRange, var, new_min,
            new_max);
   }
 
-  void SetEndMin(IntervalVar* const var, int64 new_min) override {
+  void SetEndMin(IntervalVar* const var, int64_t new_min) override {
     ForAll(monitors_, &PropagationMonitor::SetEndMin, var, new_min);
   }
 
-  void SetEndMax(IntervalVar* const var, int64 new_max) override {
+  void SetEndMax(IntervalVar* const var, int64_t new_max) override {
     ForAll(monitors_, &PropagationMonitor::SetEndMax, var, new_max);
   }
 
-  void SetEndRange(IntervalVar* const var, int64 new_min,
-                   int64 new_max) override {
+  void SetEndRange(IntervalVar* const var, int64_t new_min,
+                   int64_t new_max) override {
     ForAll(monitors_, &PropagationMonitor::SetEndRange, var, new_min, new_max);
   }
 
-  void SetDurationMin(IntervalVar* const var, int64 new_min) override {
+  void SetDurationMin(IntervalVar* const var, int64_t new_min) override {
     ForAll(monitors_, &PropagationMonitor::SetDurationMin, var, new_min);
   }
 
-  void SetDurationMax(IntervalVar* const var, int64 new_max) override {
+  void SetDurationMax(IntervalVar* const var, int64_t new_max) override {
     ForAll(monitors_, &PropagationMonitor::SetDurationMax, var, new_max);
   }
 
-  void SetDurationRange(IntervalVar* const var, int64 new_min,
-                        int64 new_max) override {
+  void SetDurationRange(IntervalVar* const var, int64_t new_min,
+                        int64_t new_max) override {
     ForAll(monitors_, &PropagationMonitor::SetDurationRange, var, new_min,
            new_max);
   }

@@ -1,4 +1,4 @@
-# Copyright 2010-2018 Google LLC
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -12,7 +12,6 @@
 # limitations under the License.
 """Simple unit tests for python/linear_solver.swig. Not exhaustive."""
 
-from __future__ import print_function
 
 from google.protobuf import text_format
 from ortools.linear_solver import linear_solver_pb2

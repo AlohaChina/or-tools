@@ -4,8 +4,14 @@ This directory contains a next-gen Constraint Programming (CP) solver with
 clause learning. It is built on top of an efficient SAT/max-SAT solver whose
 code is also in this directory.
 
+The technology started in 2009. A complete presentation is available
+[here](https://people.eng.unimelb.edu.au/pstuckey/PPDP2013.pdf).
+
+CP-SAT was described during the CPAIOR 2020 masterclass. The recording is
+available [here](https://www.youtube.com/watch?v=lmy1ddn4cyw).
+
 To begin, skim
-[cp_model.proto](../sat/cp_model.proto) to
+[cp_model.proto](../cp_model.proto) to
 understand how optimization problems can be modeled using the solver. You can
 then solve a model with the functions in
 [cp_model_solver.h](../sat/cp_model_solver.h).
@@ -20,7 +26,7 @@ then solve a model with the functions in
 
 The optimization model description and related utilities:
 
-*   [cp_model.proto](../sat/cp_model.proto):
+*   [cp_model.proto](../cp_model.proto):
     Proto describing a general Constraint Programming model.
 *   [cp_model_utils.h](../sat/cp_model_utils.h):
     Utilities to manipulate and create a cp_model.proto.
@@ -117,7 +123,6 @@ Scheduling constraints:
     Propagation algorithms for the disjunctive scheduling constraint.
 *   [cumulative.h](../sat/cumulative.h),
     [timetable.h](../sat/timetable.h),
-    [overload_checker.h](../sat/overload_checker.h),
     [timetable_edgefinding.h](../sat/timetable_edgefinding.h):
     Propagation algorithms for the cumulative scheduling constraint.
 *   [cumulative_energy.h](../sat/cumulative_energy.h):

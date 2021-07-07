@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -19,14 +19,18 @@
 // Data is for 1 bin and 10 items. Scaling is done my having m bins and m copies
 // of each items.
 
+#include <cstdint>
 #include <vector>
 
+#include "absl/flags/flag.h"
+#include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/logging.h"
 #include "ortools/sat/cp_model.h"
 
-DEFINE_int32(size, 16, "scaling factor of the model");
-DEFINE_string(params, "", "Sat parameters");
+ABSL_FLAG(int, size, 16, "scaling factor of the model");
+ABSL_FLAG(std::string, params, "", "Sat parameters");
 
 namespace operations_research {
 namespace sat {
@@ -62,9 +66,9 @@ void MultiKnapsackSat(int scaling, const std::string& params) {
   }
 
   // Fill up scaled values, weights, volumes;
-  std::vector<int64> values(num_items);
-  std::vector<int64> weights(num_items);
-  std::vector<int64> volumes(num_items);
+  std::vector<int64_t> values(num_items);
+  std::vector<int64_t> weights(num_items);
+  std::vector<int64_t> volumes(num_items);
   for (int i = 0; i < num_items; ++i) {
     const int index = i % kNumItems;
     weights[i] = kItemsWeights[index];
@@ -107,7 +111,9 @@ void MultiKnapsackSat(int scaling, const std::string& params) {
 
 int main(int argc, char** argv) {
   absl::SetFlag(&FLAGS_logtostderr, true);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  operations_research::sat::MultiKnapsackSat(FLAGS_size, FLAGS_params);
+  google::InitGoogleLogging(argv[0]);
+  absl::ParseCommandLine(argc, argv);
+  operations_research::sat::MultiKnapsackSat(absl::GetFlag(FLAGS_size),
+                                             absl::GetFlag(FLAGS_params));
   return EXIT_SUCCESS;
 }

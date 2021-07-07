@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -54,9 +54,9 @@
 %}
 
 // Convert std::vector<IndexT> to/from int arrays.
-VECTOR_AS_CSHARP_ARRAY(IndexT, int, int, CpIntVector);
+VECTOR_AS_CSHARP_ARRAY(IndexT, int, int, IntVector);
 // Convert std::vector<std::vector<IndexT>> to/from two-dimensional int arrays.
-JAGGED_MATRIX_AS_CSHARP_ARRAY(IndexT, int, int, CpIntVectorVector);
+JAGGED_MATRIX_AS_CSHARP_ARRAY(IndexT, int, int, IntVectorVector);
 
 %enddef  // DEFINE_INDEX_TYPE
 

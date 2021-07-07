@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,13 +15,14 @@
 #define OR_TOOLS_SAT_PRESOLVE_UTIL_H_
 
 #include <algorithm>
+#include <cstdint>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "ortools/base/int_type.h"
-#include "ortools/base/int_type_indexed_vector.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
+#include "ortools/base/strong_vector.h"
 #include "ortools/sat/cp_model.pb.h"
 #include "ortools/sat/cp_model_utils.h"
 #include "ortools/util/bitset.h"
@@ -76,16 +77,16 @@ class DomainDeductions {
     return Index(ref >= 0 ? 2 * ref : -2 * ref - 1);
   }
 
-  std::vector<int> tmp_num_occurences_;
+  std::vector<int> tmp_num_occurrences_;
 
   SparseBitset<Index> something_changed_;
-  gtl::ITIVector<Index, std::vector<int>> enforcement_to_vars_;
+  absl::StrongVector<Index, std::vector<int>> enforcement_to_vars_;
   absl::flat_hash_map<std::pair<Index, int>, Domain> deductions_;
 };
 
 // Replaces the variable var in ct using the definition constraint.
 // Currently the coefficient in the definition must be 1 or -1.
-void SubstituteVariable(int var, int64 var_coeff_in_definition,
+void SubstituteVariable(int var, int64_t var_coeff_in_definition,
                         const ConstraintProto& definition, ConstraintProto* ct);
 
 }  // namespace sat

@@ -1,4 +1,5 @@
-# Copyright 2010-2018 Google LLC
+#!/usr/bin/env python3
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -11,10 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Code sample to demonstrate how an interval can span across a break."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 from ortools.sat.python import cp_model
 
@@ -73,10 +70,12 @@ def SchedulingWithCalendarSampleSat():
 
     # Force the solver to follow the decision strategy exactly.
     solver.parameters.search_branching = cp_model.FIXED_SEARCH
+    # Enumerate all solutions.
+    solver.parameters.enumerate_all_solutions = True
 
     # Search and print all solutions.
     solution_printer = VarArraySolutionPrinter([start, duration, across])
-    solver.SearchForAllSolutions(model, solution_printer)
+    solver.Solve(model, solution_printer)
 
 
 SchedulingWithCalendarSampleSat()

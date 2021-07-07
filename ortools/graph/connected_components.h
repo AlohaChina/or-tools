@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -82,18 +82,26 @@ class DenseConnectedComponentsFinder {
  public:
   DenseConnectedComponentsFinder() {}
 
+  // We support copy and move construction.
   DenseConnectedComponentsFinder(const DenseConnectedComponentsFinder&) =
-      delete;
+      default;
   DenseConnectedComponentsFinder& operator=(
-      const DenseConnectedComponentsFinder&) = delete;
+      const DenseConnectedComponentsFinder&) = default;
+  DenseConnectedComponentsFinder(DenseConnectedComponentsFinder&&) = default;
+  DenseConnectedComponentsFinder& operator=(DenseConnectedComponentsFinder&&) =
+      default;
 
   // The main API is the same as ConnectedComponentsFinder (below): see the
   // homonymous functions there.
-  void AddEdge(int node1, int node2);
+  bool AddEdge(int node1, int node2);
   bool Connected(int node1, int node2);
   int GetSize(int node);
   int GetNumberOfComponents() const { return num_components_; }
   int GetNumberOfNodes() const { return parent_.size(); }
+
+  // Gets the current set of root nodes in sorted order. Runs in amortized
+  // O(#components) time.
+  const std::vector<int>& GetComponentRoots();
 
   // Sets the number of nodes in the graph. The graph can only grow: this
   // dies if "num_nodes" is lower or equal to any of the values ever given
@@ -120,6 +128,11 @@ class DenseConnectedComponentsFinder {
   std::vector<int> rank_;
   // Number of connected components.
   int num_components_ = 0;
+  // The current roots.  This is maintained lazily by GetComponentRoots().
+  std::vector<int> roots_;
+  // The number of nodes that existed the last time GetComponentRoots() was
+  // called.
+  int num_nodes_at_last_get_roots_call_ = 0;
 };
 
 namespace internal {
@@ -141,8 +154,8 @@ struct ConnectedComponentsTypeHelper {
   // like a hash functor.
   template <typename U>
   struct SelectContainer<
-      U, absl::enable_if_t<std::is_integral<decltype(
-             std::declval<const U&>()(std::declval<const T&>()))>::value>> {
+      U, absl::enable_if_t<std::is_integral<decltype(std::declval<const U&>()(
+             std::declval<const T&>()))>::value>> {
     using Set = absl::flat_hash_set<T, CompareOrHashT>;
     using Map = absl::flat_hash_map<T, int, CompareOrHashT>;
   };
@@ -201,9 +214,11 @@ class ConnectedComponentsFinder {
 
   // Adds an edge in the graph.  Also adds both endpoint nodes as necessary.
   // It is not an error to add the same edge twice.  Self-edges are OK too.
-  void AddEdge(T node1, T node2) {
-    delegate_.AddEdge(LookupOrInsertNode<false>(node1),
-                      LookupOrInsertNode<false>(node2));
+  // Returns true if the two nodes are newly connected, and false if they were
+  // already connected.
+  bool AddEdge(T node1, T node2) {
+    return delegate_.AddEdge(LookupOrInsertNode<false>(node1),
+                             LookupOrInsertNode<false>(node2));
   }
 
   // Returns true iff both nodes are in the same connected component.

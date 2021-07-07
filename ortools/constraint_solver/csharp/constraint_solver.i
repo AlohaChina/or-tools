@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -21,7 +21,7 @@ using System.Collections.Generic;
 %}
 
 %include "enumsimple.swg"
-%include "stdint.i"
+
 %include "exception.i"
 %include "std_vector.i"
 %include "std_common.i"
@@ -98,24 +98,24 @@ struct FailureProtect {
 %enddef  // PROTECT_FROM_FAILURE
 
 namespace operations_research {
-PROTECT_FROM_FAILURE(IntExpr::SetValue(int64 v), arg1->solver());
-PROTECT_FROM_FAILURE(IntExpr::SetMin(int64 v), arg1->solver());
-PROTECT_FROM_FAILURE(IntExpr::SetMax(int64 v), arg1->solver());
-PROTECT_FROM_FAILURE(IntExpr::SetRange(int64 l, int64 u), arg1->solver());
-PROTECT_FROM_FAILURE(IntVar::RemoveValue(int64 v), arg1->solver());
-PROTECT_FROM_FAILURE(IntVar::RemoveValues(const std::vector<int64>& values),
+PROTECT_FROM_FAILURE(IntExpr::SetValue(int64_t v), arg1->solver());
+PROTECT_FROM_FAILURE(IntExpr::SetMin(int64_t v), arg1->solver());
+PROTECT_FROM_FAILURE(IntExpr::SetMax(int64_t v), arg1->solver());
+PROTECT_FROM_FAILURE(IntExpr::SetRange(int64_t l, int64_t u), arg1->solver());
+PROTECT_FROM_FAILURE(IntVar::RemoveValue(int64_t v), arg1->solver());
+PROTECT_FROM_FAILURE(IntVar::RemoveValues(const std::vector<int64_t>& values),
                      arg1->solver());
-PROTECT_FROM_FAILURE(IntervalVar::SetStartMin(int64 m), arg1->solver());
-PROTECT_FROM_FAILURE(IntervalVar::SetStartMax(int64 m), arg1->solver());
-PROTECT_FROM_FAILURE(IntervalVar::SetStartRange(int64 mi, int64 ma),
+PROTECT_FROM_FAILURE(IntervalVar::SetStartMin(int64_t m), arg1->solver());
+PROTECT_FROM_FAILURE(IntervalVar::SetStartMax(int64_t m), arg1->solver());
+PROTECT_FROM_FAILURE(IntervalVar::SetStartRange(int64_t mi, int64_t ma),
                      arg1->solver());
-PROTECT_FROM_FAILURE(IntervalVar::SetDurationMin(int64 m), arg1->solver());
-PROTECT_FROM_FAILURE(IntervalVar::SetDurationMax(int64 m), arg1->solver());
-PROTECT_FROM_FAILURE(IntervalVar::SetDurationRange(int64 mi, int64 ma),
+PROTECT_FROM_FAILURE(IntervalVar::SetDurationMin(int64_t m), arg1->solver());
+PROTECT_FROM_FAILURE(IntervalVar::SetDurationMax(int64_t m), arg1->solver());
+PROTECT_FROM_FAILURE(IntervalVar::SetDurationRange(int64_t mi, int64_t ma),
                      arg1->solver());
-PROTECT_FROM_FAILURE(IntervalVar::SetEndMin(int64 m), arg1->solver());
-PROTECT_FROM_FAILURE(IntervalVar::SetEndMax(int64 m), arg1->solver());
-PROTECT_FROM_FAILURE(IntervalVar::SetEndRange(int64 mi, int64 ma),
+PROTECT_FROM_FAILURE(IntervalVar::SetEndMin(int64_t m), arg1->solver());
+PROTECT_FROM_FAILURE(IntervalVar::SetEndMax(int64_t m), arg1->solver());
+PROTECT_FROM_FAILURE(IntervalVar::SetEndRange(int64_t mi, int64_t ma),
                      arg1->solver());
 PROTECT_FROM_FAILURE(IntervalVar::SetPerformed(bool val), arg1->solver());
 PROTECT_FROM_FAILURE(Solver::AddConstraint(Constraint* const c), arg1);
@@ -125,25 +125,13 @@ PROTECT_FROM_FAILURE(Solver::Fail(), arg1);
 
 // ############ END DUPLICATED CODE BLOCK ############
 
-%apply int64 * INOUT { int64 *const marker };
-%apply int64 * OUTPUT { int64 *l, int64 *u, int64 *value };
+%apply int64_t * INOUT { int64_t *const marker };
+%apply int64_t * OUTPUT { int64_t *l, int64_t *u, int64_t *value };
 
 // Since knapsack_solver.i and constraint_solver.i both need to
 // instantiate the vector template, but their csharp_wrap.cc
 // files end up being compiled into the same .dll, we must name the
 // vector template differently.
-
-%template(CpIntVector) std::vector<int>;
-// IMPORTANT(corentinl) this template for vec<vec<T>> must be call BEFORE
-// we redefine typemap of vec<T> in VECTOR_AS_CSHARP_ARRAY
-VECTOR_AS_CSHARP_ARRAY(int, int, int, CpIntVector);
-
-%template(CpInt64Vector) std::vector<int64>;
-// IMPORTANT(corentinl) this template for vec<vec<T>> must be call BEFORE
-// we redefine typemap of vec<T> in VECTOR_AS_CSHARP_ARRAY
-%template(CpInt64VectorVector) std::vector<std::vector<int64> >;
-VECTOR_AS_CSHARP_ARRAY(int64, int64, long, CpInt64Vector);
-JAGGED_MATRIX_AS_CSHARP_ARRAY(int64, int64, long, CpInt64VectorVector);
 
 // TupleSet depends on the previous typemaps
 %include "ortools/util/csharp/tuple_set.i"
@@ -206,34 +194,34 @@ DEFINE_ARGS_TO_R_CALLBACK(
   void, *(void(*)()), (), ())
 
 DEFINE_ARGS_TO_R_CALLBACK(
-  std::function<int(int64)>, LongToInt,
-  int, *(int(*)(int64)), (int64 t), (t))
+  std::function<int(int64_t)>, LongToInt,
+  int, *(int(*)(int64_t)), (int64_t t), (t))
 
 DEFINE_ARGS_TO_R_CALLBACK(
-  std::function<int64(int64)>, LongToLong,
-  int64, *(int64(*)(int64)), (int64 t), (t))
+  std::function<int64_t(int64_t)>, LongToLong,
+  int64_t, *(int64_t(*)(int64_t)), (int64_t t), (t))
 DEFINE_ARGS_TO_R_CALLBACK(
-  std::function<int64(int64, int64)>, LongLongToLong,
-  int64, *(int64(*)(int64, int64)), (int64 t, int64 u), (t, u))
+  std::function<int64_t(int64_t, int64_t)>, LongLongToLong,
+  int64_t, *(int64_t(*)(int64_t, int64_t)), (int64_t t, int64_t u), (t, u))
 DEFINE_ARGS_TO_R_CALLBACK(
-  std::function<int64(int64, int64, int64)>, LongLongLongToLong,
-  int64, *(int64(*)(int64, int64, int64)), (int64 t, int64 u, int64 v), (t, u, v))
+  std::function<int64_t(int64_t, int64_t, int64_t)>, LongLongLongToLong,
+  int64_t, *(int64_t(*)(int64_t, int64_t, int64_t)), (int64_t t, int64_t u, int64_t v), (t, u, v))
 
 DEFINE_ARGS_TO_R_CALLBACK(
-  std::function<int64(int, int)>, IntIntToLong,
-  int64, *(int64(*)(int, int)), (int t, int u), (t, u))
+  std::function<int64_t(int, int)>, IntIntToLong,
+  int64_t, *(int64_t(*)(int, int)), (int t, int u), (t, u))
 
 DEFINE_ARGS_TO_R_CALLBACK(
-  std::function<bool(int64)>, LongToBoolean,
-  bool, *(bool(*)(int64)), (int64 t), (t))
+  std::function<bool(int64_t)>, LongToBoolean,
+  bool, *(bool(*)(int64_t)), (int64_t t), (t))
 
 DEFINE_ARGS_TO_R_CALLBACK(
-  std::function<bool(int64, int64, int64)>, LongLongLongToBoolean,
-  bool, *(bool(*)(int64, int64, int64)), (int64 t, int64 u, int64 v), (t, u, v))
+  std::function<bool(int64_t, int64_t, int64_t)>, LongLongLongToBoolean,
+  bool, *(bool(*)(int64_t, int64_t, int64_t)), (int64_t t, int64_t u, int64_t v), (t, u, v))
 
 DEFINE_ARGS_TO_R_CALLBACK(
-  std::function<void(int64)>, LongToVoid,
-  void, *(void(*)(int64)), (int64 t), (t))
+  std::function<void(int64_t)>, LongToVoid,
+  void, *(void(*)(int64_t)), (int64_t t), (t))
 
 #undef DEFINE_ARGS_TO_R_CALLBACK
 #undef DEFINE_VOID_TO_STRING_CALLBACK
@@ -410,6 +398,7 @@ namespace operations_research {
 %ignore Solver::SetBranchSelector;
 %ignore Solver::MakeApplyBranchSelector;
 %ignore Solver::MakeAtMost;
+%ignore Solver::Now;
 %ignore Solver::demon_profiler;
 %ignore Solver::set_fail_intercept;
 %ignore Solver::tmp_vector_;
@@ -437,37 +426,37 @@ namespace operations_research {
   Constraint* MapTo(const std::vector<IntVar*>& vars) {
     return $self->solver()->MakeMapDomain($self->Var(), vars);
   }
-  IntExpr* IndexOf(const std::vector<int64>& vars) {
+  IntExpr* IndexOf(const std::vector<int64_t>& vars) {
     return $self->solver()->MakeElement(vars, $self->Var());
   }
   IntExpr* IndexOf(const std::vector<IntVar*>& vars) {
     return $self->solver()->MakeElement(vars, $self->Var());
   }
-  IntVar* IsEqual(int64 value) {
+  IntVar* IsEqual(int64_t value) {
     return $self->solver()->MakeIsEqualCstVar($self->Var(), value);
   }
-  IntVar* IsDifferent(int64 value) {
+  IntVar* IsDifferent(int64_t value) {
     return $self->solver()->MakeIsDifferentCstVar($self->Var(), value);
   }
-  IntVar* IsGreater(int64 value) {
+  IntVar* IsGreater(int64_t value) {
     return $self->solver()->MakeIsGreaterCstVar($self->Var(), value);
   }
-  IntVar* IsGreaterOrEqual(int64 value) {
+  IntVar* IsGreaterOrEqual(int64_t value) {
     return $self->solver()->MakeIsGreaterOrEqualCstVar($self->Var(), value);
   }
-  IntVar* IsLess(int64 value) {
+  IntVar* IsLess(int64_t value) {
     return $self->solver()->MakeIsLessCstVar($self->Var(), value);
   }
-  IntVar* IsLessOrEqual(int64 value) {
+  IntVar* IsLessOrEqual(int64_t value) {
     return $self->solver()->MakeIsLessOrEqualCstVar($self->Var(), value);
   }
-  IntVar* IsMember(const std::vector<int64>& values) {
+  IntVar* IsMember(const std::vector<int64_t>& values) {
     return $self->solver()->MakeIsMemberVar($self->Var(), values);
   }
   IntVar* IsMember(const std::vector<int>& values) {
     return $self->solver()->MakeIsMemberVar($self->Var(), values);
   }
-  Constraint* Member(const std::vector<int64>& values) {
+  Constraint* Member(const std::vector<int64_t>& values) {
     return $self->solver()->MakeMemberCt($self->Var(), values);
   }
   Constraint* Member(const std::vector<int>& values) {
@@ -491,10 +480,10 @@ namespace operations_research {
   IntVar* IsLessOrEqual(IntExpr* const other) {
     return $self->solver()->MakeIsLessOrEqualVar($self->Var(), other->Var());
   }
-  OptimizeVar* Minimize(long step) {
+  OptimizeVar* Minimize(int64_t step) {
     return $self->solver()->MakeMinimize($self->Var(), step);
   }
-  OptimizeVar* Maximize(long step) {
+  OptimizeVar* Maximize(int64_t step) {
     return $self->solver()->MakeMaximize($self->Var(), step);
   }
 }
@@ -564,52 +553,52 @@ namespace operations_research {
   Constraint* StartsAtStart(IntervalVar* other) {
     return $self->solver()->MakeIntervalVarRelation($self, operations_research::Solver::STARTS_AT_START, other);
   }
-  Constraint* EndsAfterEndWithDelay(IntervalVar* other, int64 delay) {
+  Constraint* EndsAfterEndWithDelay(IntervalVar* other, int64_t delay) {
     return $self->solver()->MakeIntervalVarRelationWithDelay($self, operations_research::Solver::ENDS_AFTER_END, other, delay);
   }
-  Constraint* EndsAfterStartWithDelay(IntervalVar* other, int64 delay) {
+  Constraint* EndsAfterStartWithDelay(IntervalVar* other, int64_t delay) {
     return $self->solver()->MakeIntervalVarRelationWithDelay($self, operations_research::Solver::ENDS_AFTER_START, other, delay);
   }
-  Constraint* EndsAtEndWithDelay(IntervalVar* other, int64 delay) {
+  Constraint* EndsAtEndWithDelay(IntervalVar* other, int64_t delay) {
     return $self->solver()->MakeIntervalVarRelationWithDelay($self, operations_research::Solver::ENDS_AT_END, other, delay);
   }
-  Constraint* EndsAtStartWithDelay(IntervalVar* other, int64 delay) {
+  Constraint* EndsAtStartWithDelay(IntervalVar* other, int64_t delay) {
     return $self->solver()->MakeIntervalVarRelationWithDelay($self, operations_research::Solver::ENDS_AT_START, other, delay);
   }
-  Constraint* StartsAfterEndWithDelay(IntervalVar* other, int64 delay) {
+  Constraint* StartsAfterEndWithDelay(IntervalVar* other, int64_t delay) {
     return $self->solver()->MakeIntervalVarRelationWithDelay($self, operations_research::Solver::STARTS_AFTER_END, other, delay);
   }
-  Constraint* StartsAfterStartWithDelay(IntervalVar* other, int64 delay) {
+  Constraint* StartsAfterStartWithDelay(IntervalVar* other, int64_t delay) {
     return $self->solver()->MakeIntervalVarRelationWithDelay($self, operations_research::Solver::STARTS_AFTER_START, other, delay);
   }
-  Constraint* StartsAtEndWithDelay(IntervalVar* other, int64 delay) {
+  Constraint* StartsAtEndWithDelay(IntervalVar* other, int64_t delay) {
     return $self->solver()->MakeIntervalVarRelationWithDelay($self, operations_research::Solver::STARTS_AT_END, other, delay);
   }
-  Constraint* StartsAtStartWithDelay(IntervalVar* other, int64 delay) {
+  Constraint* StartsAtStartWithDelay(IntervalVar* other, int64_t delay) {
     return $self->solver()->MakeIntervalVarRelationWithDelay($self, operations_research::Solver::STARTS_AT_START, other, delay);
   }
-  Constraint* EndsAfter(int64 date) {
+  Constraint* EndsAfter(int64_t date) {
     return $self->solver()->MakeIntervalVarRelation($self, operations_research::Solver::ENDS_AFTER, date);
   }
-  Constraint* EndsAt(int64 date) {
+  Constraint* EndsAt(int64_t date) {
     return $self->solver()->MakeIntervalVarRelation($self, operations_research::Solver::ENDS_AT, date);
   }
-  Constraint* EndsBefore(int64 date) {
+  Constraint* EndsBefore(int64_t date) {
     return $self->solver()->MakeIntervalVarRelation($self, operations_research::Solver::ENDS_BEFORE, date);
   }
-  Constraint* StartsAfter(int64 date) {
+  Constraint* StartsAfter(int64_t date) {
     return $self->solver()->MakeIntervalVarRelation($self, operations_research::Solver::STARTS_AFTER, date);
   }
-  Constraint* StartsAt(int64 date) {
+  Constraint* StartsAt(int64_t date) {
     return $self->solver()->MakeIntervalVarRelation($self, operations_research::Solver::STARTS_AT, date);
   }
-  Constraint* StartsBefore(int64 date) {
+  Constraint* StartsBefore(int64_t date) {
     return $self->solver()->MakeIntervalVarRelation($self, operations_research::Solver::STARTS_BEFORE, date);
   }
-  Constraint* CrossesDate(int64 date) {
+  Constraint* CrossesDate(int64_t date) {
     return $self->solver()->MakeIntervalVarRelation($self, operations_research::Solver::CROSS_DATE, date);
   }
-  Constraint* AvoidsDate(int64 date) {
+  Constraint* AvoidsDate(int64_t date) {
     return $self->solver()->MakeIntervalVarRelation($self, operations_research::Solver::AVOID_DATE, date);
   }
   IntervalVar* RelaxedMax() {
@@ -702,6 +691,12 @@ namespace operations_research {
 // Methods:
 %rename (IsCrossed) SearchLimit::crossed;
 
+// RegularLimit
+%feature("director") RegularLimit;
+%unignore RegularLimit;
+%ignore RegularLimit::duration_limit;
+%ignore RegularLimit::AbsoluteSolverDeadline;
+
 // Searchlog
 %unignore SearchLog;
 // Ignored:
@@ -709,7 +704,8 @@ namespace operations_research {
 %ignore SearchLog::SearchLog(
     Solver* const s, OptimizeVar* const obj, IntVar* const var,
     double scaling_factor, double offset,
-    std::function<std::string()> display_callback, int period);
+    std::function<std::string()> display_callback,
+    bool display_on_new_solutions_only, int period);
 // Methods:
 %unignore SearchLog::Maintain;
 %unignore SearchLog::OutputDecision;
@@ -827,6 +823,13 @@ namespace operations_research {
 %unignore LocalSearchFilter::Synchronize;
 %unignore LocalSearchFilter::IsIncremental;
 
+// LocalSearchFilterManager
+%feature("director") LocalSearchFilterManager;
+%unignore LocalSearchFilterManager;
+// Methods:
+%unignore LocalSearchFilterManager::Accept;
+%unignore LocalSearchFilterManager::Synchronize;
+
 // IntVarLocalSearchFilter
 %feature("director") IntVarLocalSearchFilter;
 %unignore IntVarLocalSearchFilter;
@@ -858,7 +861,7 @@ namespace operations_research {
 // Extend IntVarLocalSearchFilter with an intuitive API.
 %extend IntVarLocalSearchFilter {
   int Index(IntVar* const var) {
-    int64 index = -1;
+    int64_t index = -1;
     $self->FindIndex(var, &index);
     return index;
   }
@@ -910,29 +913,29 @@ public delegate string VoidToString();
 // Used to wrap std::function<bool()>
 public delegate bool VoidToBoolean();
 
-// Used to wrap std::function<int(int64)>
+// Used to wrap std::function<int(int64_t)>
 public delegate int LongToInt(long t);
 
-// Used to wrap IndexEvaluator1 (std::function<int64(int64)>)
+// Used to wrap IndexEvaluator1 (std::function<int64_t(int64_t)>)
 public delegate long LongToLong(long t);
-// Used to wrap IndexEvaluator2 (std::function<int64(int64, int64)>)
+// Used to wrap IndexEvaluator2 (std::function<int64_t(int64_t, int64_t)>)
 public delegate long LongLongToLong(long t, long u);
-// Used to wrap IndexEvaluator3 (std::function<int64(int64, int64, int64)>)
+// Used to wrap IndexEvaluator3 (std::function<int64_t(int64_t, int64_t, int64_t)>)
 public delegate long LongLongLongToLong(long t, long u, long v);
 
-// Used to wrap std::function<int64(int, int)>
+// Used to wrap std::function<int64_t(int, int)>
 public delegate long IntIntToLong(int t, int u);
 
-// Used to wrap IndexFilter1 (std::function<bool(int64)>)
+// Used to wrap IndexFilter1 (std::function<bool(int64_t)>)
 public delegate bool LongToBoolean(long t);
 
-// Used to wrap std::function<bool(int64, int64, int64)>
+// Used to wrap std::function<bool(int64_t, int64_t, int64_t)>
 public delegate bool LongLongLongToBoolean(long t, long u, long v);
 
 // Used to wrap std::function<void(Solver*)>
 public delegate void SolverToVoid(Solver s);
 
-// Used to wrap ObjectiveWatcher (std::function<void(int64)>)
+// Used to wrap ObjectiveWatcher (std::function<void(int64_t)>)
 public delegate void LongToVoid(long t);
 
 // Used to wrap Closure (std::function<void()>)
@@ -972,7 +975,7 @@ namespace operations_research {
 %include "ortools/constraint_solver/constraint_solveri.h"
 
 namespace operations_research {
-%template(RevInteger) Rev<int64>;
+%template(RevInteger) Rev<int64_t>;
 %template(RevBool) Rev<bool>;
 typedef Assignment::AssignmentContainer AssignmentContainer;
 %template(AssignmentIntContainer) AssignmentContainer<IntVar, IntVarElement>;

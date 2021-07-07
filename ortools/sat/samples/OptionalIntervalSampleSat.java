@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,6 +11,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+package com.google.ortools.sat.samples;
+
+import com.google.ortools.Loader;
 import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.IntVar;
 import com.google.ortools.sat.IntervalVar;
@@ -18,11 +21,8 @@ import com.google.ortools.sat.Literal;
 
 /** Code sample to demonstrates how to build an optional interval. */
 public class OptionalIntervalSampleSat {
-  static {
-    System.loadLibrary("jniortools");
-  }
-
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     CpModel model = new CpModel();
     int horizon = 100;
     IntVar startVar = model.newIntVar(0, horizon, "start");

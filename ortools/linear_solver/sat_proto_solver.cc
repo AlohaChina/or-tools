@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,8 +13,10 @@
 
 #include "ortools/linear_solver/sat_proto_solver.h"
 
+#include <cstdint>
 #include <vector>
 
+#include "absl/status/statusor.h"
 #include "ortools/linear_solver/linear_solver.pb.h"
 #include "ortools/linear_solver/model_validator.h"
 #include "ortools/linear_solver/sat_solver_utils.h"
@@ -23,6 +25,7 @@
 #include "ortools/sat/cp_model_solver.h"
 #include "ortools/sat/lp_utils.h"
 #include "ortools/sat/sat_parameters.pb.h"
+#include "ortools/util/logging.h"
 #include "ortools/util/time_limit.h"
 
 namespace operations_research {
@@ -34,6 +37,13 @@ using google::protobuf::Message;
 #else
 using google::protobuf::Message;
 #endif
+
+// Proto-lite disables some features of protos (see
+// go/abp-libraries/proto2-lite) and messages inherit from MessageLite directly
+// instead of inheriting from Message (which is itself a specialization of
+// MessageLite).
+constexpr bool kProtoLiteSatParameters =
+    !std::is_base_of<Message, sat::SatParameters>::value;
 
 MPSolverResponseStatus ToMPSolverResponseStatus(sat::CpSolverStatus status,
                                                 bool has_objective) {
@@ -55,7 +65,7 @@ MPSolverResponseStatus ToMPSolverResponseStatus(sat::CpSolverStatus status,
 }
 }  // namespace
 
-util::StatusOr<MPSolutionResponse> SatSolveProto(
+absl::StatusOr<MPSolutionResponse> SatSolveProto(
     MPModelRequest request, std::atomic<bool>* interrupt_solve) {
   // By default, we use 8 threads as it allows to try a good set of orthogonal
   // parameters. This can be overridden by the user.
@@ -63,13 +73,20 @@ util::StatusOr<MPSolutionResponse> SatSolveProto(
   params.set_num_search_workers(8);
   params.set_log_search_progress(request.enable_internal_solver_output());
   if (request.has_solver_specific_parameters()) {
-    // If code is compiled with proto-lite runtime, `solver_specific_parameters`
-    // should be encoded as non-human readable string from `SerializeAsString`.
-    if (!std::is_base_of<Message, sat::SatParameters>::value) {
-      CHECK(params.MergeFromString(request.solver_specific_parameters()));
+    // See EncodeSatParametersAsString() documentation.
+    if (kProtoLiteSatParameters) {
+      if (!params.MergeFromString(request.solver_specific_parameters())) {
+        return absl::InvalidArgumentError(
+            "solver_specific_parameters is not a valid binary stream of the "
+            "SatParameters proto");
+      }
     } else {
-      ProtobufTextFormatMergeFromString(request.solver_specific_parameters(),
-                                        &params);
+      if (!ProtobufTextFormatMergeFromString(
+              request.solver_specific_parameters(), &params)) {
+        return absl::InvalidArgumentError(
+            "solver_specific_parameters is not a valid textual representation "
+            "of the SatParameters proto");
+      }
     }
   }
   if (request.has_solver_time_limit_seconds()) {
@@ -77,24 +94,35 @@ util::StatusOr<MPSolutionResponse> SatSolveProto(
         static_cast<double>(request.solver_time_limit_seconds()) / 1000.0);
   }
 
+  // TODO(user): We do not support all the parameters here. In particular the
+  // logs before the solver is called will not be appended to the response. Fix
+  // that, and remove code duplication for the logger config. One way should be
+  // to not touch/configure anything if the logger is already created while
+  // calling SolveCpModel() and call a common config function from here or from
+  // inside Solve()?
+  SolverLogger logger;
+  logger.EnableLogging(params.log_search_progress());
+  logger.SetLogToStdOut(params.log_to_stdout());
+
   MPSolutionResponse response;
   if (!ExtractValidMPModelInPlaceOrPopulateResponseStatus(&request,
                                                           &response)) {
-    if (params.log_search_progress()) {
+    if (logger.LoggingIsEnabled()) {
       // This is needed for our benchmark scripts.
       sat::CpSolverResponse cp_response;
       cp_response.set_status(sat::CpSolverStatus::MODEL_INVALID);
-      LOG(INFO) << CpSolverResponseStats(cp_response);
+      SOLVER_LOG(&logger, CpSolverResponseStats(cp_response));
     }
     return response;
   }
 
+  // Note(user): the LP presolvers API is a bit weird and keep a reference to
+  // the given GlopParameters, so we need to make sure it outlive them.
+  const glop::GlopParameters glop_params;
   MPModelProto* const mp_model = request.mutable_model();
-  std::unique_ptr<glop::ShiftVariableBoundsPreprocessor>
-      shift_bounds_preprocessor;
-
+  std::vector<std::unique_ptr<glop::Preprocessor>> for_postsolve;
   const auto status =
-      ApplyMipPresolveSteps(mp_model, &shift_bounds_preprocessor);
+      ApplyMipPresolveSteps(glop_params, mp_model, &for_postsolve, &logger);
   if (status == MPSolverResponseStatus::MPSOLVER_INFEASIBLE) {
     if (params.log_search_progress()) {
       // This is needed for our benchmark scripts.
@@ -106,11 +134,29 @@ util::StatusOr<MPSolutionResponse> SatSolveProto(
     response.set_status_str("Problem proven infeasible during MIP presolve");
     return response;
   }
-  const std::vector<double> var_scaling =
-      sat::ScaleContinuousVariables(params.mip_var_scaling(), mp_model);
+
+  // We need to do that before the automatic detection of integers.
+  RemoveNearZeroTerms(params, mp_model, &logger);
+
+  SOLVER_LOG(&logger, "");
+  SOLVER_LOG(&logger, "Scaling to pure integer problem.");
+
+  const int num_variables = mp_model->variable_size();
+  std::vector<double> var_scaling(num_variables, 1.0);
+  if (params.mip_automatically_scale_variables()) {
+    var_scaling = sat::DetectImpliedIntegers(mp_model, &logger);
+  }
+  if (params.mip_var_scaling() != 1.0) {
+    const std::vector<double> other_scaling = sat::ScaleContinuousVariables(
+        params.mip_var_scaling(), params.mip_max_bound(), mp_model);
+    for (int i = 0; i < var_scaling.size(); ++i) {
+      var_scaling[i] *= other_scaling[i];
+    }
+  }
 
   sat::CpModelProto cp_model;
-  if (!ConvertMPModelProtoToCpModelProto(params, *mp_model, &cp_model)) {
+  if (!ConvertMPModelProtoToCpModelProto(params, *mp_model, &cp_model,
+                                         &logger)) {
     if (params.log_search_progress()) {
       // This is needed for our benchmark scripts.
       sat::CpSolverResponse cp_response;
@@ -124,37 +170,43 @@ util::StatusOr<MPSolutionResponse> SatSolveProto(
   DCHECK_EQ(cp_model.variables().size(), var_scaling.size());
   DCHECK_EQ(cp_model.variables().size(), mp_model->variable().size());
 
-  // Copy and scale the hint if there is one. Note that we need to shift it
-  // accordingly if we shifted the domains of the variables.
+  // Copy and scale the hint if there is one.
   if (request.model().has_solution_hint()) {
     auto* cp_model_hint = cp_model.mutable_solution_hint();
     const int size = request.model().solution_hint().var_index().size();
-    glop::DenseRow offsets(glop::ColIndex(size), 0.0);
-    if (shift_bounds_preprocessor != nullptr) {
-      offsets = shift_bounds_preprocessor->offsets();
-    }
     for (int i = 0; i < size; ++i) {
       const int var = request.model().solution_hint().var_index(i);
       if (var >= var_scaling.size()) continue;
+
+      // To handle weird hint input values, we cap any large value to +/-
+      // mip_max_bound() which is also the min/max value of any variable once
+      // scaled.
+      double value =
+          request.model().solution_hint().var_value(i) * var_scaling[var];
+      if (std::abs(value) > params.mip_max_bound()) {
+        value = value > 0 ? params.mip_max_bound() : -params.mip_max_bound();
+      }
+
       cp_model_hint->add_vars(var);
-      cp_model_hint->add_values(static_cast<int64>(
-          std::round((request.model().solution_hint().var_value(i) -
-                      offsets[glop::ColIndex(i)]) *
-                     var_scaling[var])));
+      cp_model_hint->add_values(static_cast<int64_t>(std::round(value)));
     }
   }
 
   // We no longer need the request. Reclaim its memory.
-  const int num_vars = mp_model->variable_size();
+  const int old_num_variables = mp_model->variable().size();
+  const int old_num_constraints = mp_model->constraint().size();
   request.Clear();
 
-  // Solve.
+  // Configure model.
   sat::Model sat_model;
+  sat_model.Register<SolverLogger>(&logger);
   sat_model.Add(NewSatParameters(params));
   if (interrupt_solve != nullptr) {
     sat_model.GetOrCreate<TimeLimit>()->RegisterExternalBooleanAsLimit(
         interrupt_solve);
   }
+
+  // Solve.
   const sat::CpSolverResponse cp_response =
       sat::SolveCpModel(cp_model, &sat_model);
 
@@ -169,20 +221,34 @@ util::StatusOr<MPSolutionResponse> SatSolveProto(
     response.set_best_objective_bound(cp_response.best_objective_bound());
 
     // Postsolve the bound shift and scaling.
-    glop::ProblemSolution solution(glop::RowIndex(0), glop::ColIndex(num_vars));
-    for (int v = 0; v < num_vars; ++v) {
+    glop::ProblemSolution solution((glop::RowIndex(old_num_constraints)),
+                                   (glop::ColIndex(old_num_variables)));
+    for (int v = 0; v < solution.primal_values.size(); ++v) {
       solution.primal_values[glop::ColIndex(v)] =
           static_cast<double>(cp_response.solution(v)) / var_scaling[v];
     }
-    if (shift_bounds_preprocessor) {
-      shift_bounds_preprocessor->RecoverSolution(&solution);
+    for (int i = for_postsolve.size(); --i >= 0;) {
+      for_postsolve[i]->RecoverSolution(&solution);
     }
-
-    for (int v = 0; v < num_vars; ++v) {
+    for (int v = 0; v < solution.primal_values.size(); ++v) {
       response.add_variable_value(solution.primal_values[glop::ColIndex(v)]);
     }
   }
 
   return response;
 }
+
+std::string EncodeSatParametersAsString(const sat::SatParameters& parameters) {
+  if (kProtoLiteSatParameters) {
+    // Here we use SerializeToString() instead of SerializeAsString() since the
+    // later ignores errors and returns an empty string instead (which can be a
+    // valid value when no fields are set).
+    std::string bytes;
+    CHECK(parameters.SerializeToString(&bytes));
+    return bytes;
+  }
+
+  return parameters.ShortDebugString();
+}
+
 }  // namespace operations_research

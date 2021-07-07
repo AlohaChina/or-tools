@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -64,20 +64,20 @@ class AffineRelation {
   //
   // IMPORTANT: we do not check for integer overflow, but that could be added
   // if it is needed.
-  bool TryAdd(int x, int y, int64 coeff, int64 offset);
+  bool TryAdd(int x, int y, int64_t coeff, int64_t offset);
 
   // Same as TryAdd() with the option to disallow the use of a given
   // representative.
-  bool TryAdd(int x, int y, int64 coeff, int64 offset, bool allow_rep_x,
+  bool TryAdd(int x, int y, int64_t coeff, int64_t offset, bool allow_rep_x,
               bool allow_rep_y);
 
   // Returns a valid relation of the form x = coeff * representative + offset.
   // Note that this can return x = x. Non-const because of path-compression.
   struct Relation {
     int representative;
-    int64 coeff;
-    int64 offset;
-    Relation(int r, int64 c, int64 o)
+    int64_t coeff;
+    int64_t offset;
+    Relation(int r, int64_t c, int64_t o)
         : representative(r), coeff(c), offset(o) {}
     const bool operator==(const Relation& other) const {
       return representative == other.representative && coeff == other.coeff &&
@@ -86,6 +86,23 @@ class AffineRelation {
   };
   Relation Get(int x) const;
 
+  // Advanced usage. This is a bit hacky and will just decrease the class size
+  // of a variable without any extra checks. Use with care. In particular when
+  // this is called, then x should never be used anymore in any of the non const
+  // calls of this class.
+  void IgnoreFromClassSize(int x) {
+    if (x >= size_.size()) return;  // never seen here.
+    CHECK_NE(size_[x], kSizeForRemovedEntry) << x;
+    const int r = Get(x).representative;
+    if (r != x) {
+      CHECK_GT(size_[r], 1);
+      size_[r]--;
+    } else {
+      CHECK_EQ(size_[r], 1);
+    }
+    size_[x] = kSizeForRemovedEntry;
+  }
+
   // Returns the size of the class of x.
   int ClassSize(int x) const {
     if (x >= representative_.size()) return 1;
@@ -93,6 +110,8 @@ class AffineRelation {
   }
 
  private:
+  const int kSizeForRemovedEntry = 0;
+
   void IncreaseSizeOfMemberVectors(int new_size) {
     if (new_size <= representative_.size()) return;
     for (int i = representative_.size(); i < new_size; ++i) {
@@ -127,8 +146,8 @@ class AffineRelation {
 
   // The offset and coefficient such that
   // variable[index] = coeff * variable[representative_[index]] + offset;
-  mutable std::vector<int64> coeff_;
-  mutable std::vector<int64> offset_;
+  mutable std::vector<int64_t> coeff_;
+  mutable std::vector<int64_t> offset_;
 
   // The size of each representative "tree", used to get a good complexity when
   // we have the choice of which tree to merge into the other.
@@ -142,17 +161,20 @@ class AffineRelation {
   mutable std::vector<int> tmp_path_;
 };
 
-inline bool AffineRelation::TryAdd(int x, int y, int64 coeff, int64 offset) {
+inline bool AffineRelation::TryAdd(int x, int y, int64_t coeff,
+                                   int64_t offset) {
   return TryAdd(x, y, coeff, offset, true, true);
 }
 
-inline bool AffineRelation::TryAdd(int x, int y, int64 coeff, int64 offset,
+inline bool AffineRelation::TryAdd(int x, int y, int64_t coeff, int64_t offset,
                                    bool allow_rep_x, bool allow_rep_y) {
   CHECK_NE(coeff, 0);
   CHECK_NE(x, y);
   CHECK_GE(x, 0);
   CHECK_GE(y, 0);
   IncreaseSizeOfMemberVectors(std::max(x, y) + 1);
+  CHECK_NE(size_[x], kSizeForRemovedEntry) << x;
+  CHECK_NE(size_[y], kSizeForRemovedEntry) << y;
   CompressPath(x);
   CompressPath(y);
   const int rep_x = representative_[x];
@@ -162,9 +184,9 @@ inline bool AffineRelation::TryAdd(int x, int y, int64 coeff, int64 offset,
   // TODO(user): It should be possible to optimize this code block a bit, for
   // instance depending on the magnitude of new_coeff vs coeff_x, we may already
   // know that one of the two merge is not possible.
-  const int64 coeff_x = coeff_[x];
-  const int64 new_coeff = coeff * coeff_[y];
-  const int64 new_offset = coeff * offset_[y] + offset - offset_[x];
+  const int64_t coeff_x = coeff_[x];
+  const int64_t new_coeff = coeff * coeff_[y];
+  const int64_t new_offset = coeff * offset_[y] + offset - offset_[x];
   const bool condition1 =
       allow_rep_y && (new_coeff % coeff_x == 0) && (new_offset % coeff_x == 0);
   const bool condition2 = allow_rep_x && (coeff_x % new_coeff == 0) &&

@@ -36,26 +36,39 @@ clean_archive:
 	-$(DEL) $(DATA_INSTALL_DIR)$(ARCHIVE_EXT)
 
 $(TEMP_ARCHIVE_DIR):
-	-$(MKDIR_P) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)
+	$(MKDIR_P) $(TEMP_ARCHIVE_DIR)
+
+$(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR): | $(TEMP_ARCHIVE_DIR)
+	$(MKDIR) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)
+
+$(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples: | $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)
+	$(MKDIR) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples
 
 $(INSTALL_DIR)$(ARCHIVE_EXT): archive_cc archive_java archive_dotnet \
  tools/README.cc.java.dotnet tools/Makefile.cc.java.dotnet
 	$(COPY) tools$SREADME.cc.java.dotnet $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$SREADME.md
 	$(COPY) tools$SMakefile.cc.java.dotnet $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$SMakefile
+	$(SED) -i -e 's/@PROJECT_VERSION@/$(OR_TOOLS_VERSION)/' $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$SMakefile
 ifeq ($(SYSTEM),win)
 	-$(MKDIR_P) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Stools$Swin
 	$(COPY) tools$Smake.exe $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Stools
 	$(COPY) $(WHICH) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Stools$Swin
+	$(COPY) $(TOUCH) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Stools$Swin
 	cd $(TEMP_ARCHIVE_DIR) && ..$S$(ZIP) -r ..$S$(INSTALL_DIR)$(ARCHIVE_EXT) $(INSTALL_DIR)
 else
 	$(TAR) -C $(TEMP_ARCHIVE_DIR) --no-same-owner -czvf $(INSTALL_DIR)$(ARCHIVE_EXT) $(INSTALL_DIR)
 endif
 #	-$(DELREC) $(TEMP_ARCHIVE_DIR)
 
+###########
+##  CPP  ##
+###########
+$(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/cpp: | $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples
+	$(MKDIR) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Scpp
+
 .PHONY: archive_cc # Add C++ OR-Tools to archive.
-archive_cc: cc | $(TEMP_ARCHIVE_DIR)
+archive_cc: cc | $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/cpp
 	$(MAKE) install_cc prefix=$(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)
-	-$(MKDIR_P) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Scpp
 	-$(COPY) $(CC_EX_PATH)$S*.h  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Scpp
 	-$(COPY) $(CC_EX_PATH)$S*.cc $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Scpp
 	-$(COPY) $(CC_EX_PATH)$SREADME.md $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Scpp
@@ -68,45 +81,136 @@ archive_cc: cc | $(TEMP_ARCHIVE_DIR)
 	-$(COPY) ortools$Srouting$Ssamples$S*.cc  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Scpp
 	-$(COPY) ortools$Ssat$Ssamples$S*.cc  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Scpp
 
+############
+##  JAVA  ##
+############
+$(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/java: | $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples
+	$(MKDIR) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sjava
+
+define java-sample-archive =
+$$(TEMP_ARCHIVE_DIR)/$$(INSTALL_DIR)/examples/java/%/pom.xml: \
+ $$(TEMP_JAVA_DIR)/$1/%/pom.xml \
+ ortools/$1/samples/%.java \
+ | $$(TEMP_ARCHIVE_DIR)/$$(INSTALL_DIR)/examples/java
+	-$$(MKDIR_P) $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sjava$$S$$*$$S$$(JAVA_SRC_PATH)
+	$$(COPY) $$(SRC_DIR)$$Sortools$$S$1$$Ssamples$$S$$*.java \
+ $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sjava$$S$$*$$S$$(JAVA_SRC_PATH)
+	$$(COPY) $$(TEMP_JAVA_DIR)$$S$1$$S$$*$$Spom.xml \
+ $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sjava$$S$$*
+endef
+
+$(foreach sample,$(JAVA_SAMPLES),$(eval $(call java-sample-archive,$(sample))))
+
+define java-example-archive =
+$$(TEMP_ARCHIVE_DIR)/$$(INSTALL_DIR)/examples/java/%/pom.xml: \
+ $$(TEMP_JAVA_DIR)/$1/%/pom.xml \
+ examples/$1/%.java \
+ | $$(TEMP_ARCHIVE_DIR)/$$(INSTALL_DIR)/examples/java
+	-$$(MKDIR_P) $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sjava$$S$$*$$S$$(JAVA_SRC_PATH)
+	$$(COPY) $$(SRC_DIR)$$Sexamples$$S$1$$S$$*.java \
+ $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sjava$$S$$*$$S$$(JAVA_SRC_PATH)
+	$$(COPY) $$(TEMP_JAVA_DIR)$$S$1$$S$$*$$Spom.xml \
+ $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sjava$$S$$*
+endef
+
+$(foreach example,$(JAVA_EXAMPLES),$(eval $(call java-example-archive,$(example))))
+
+SAMPLE_JAVA_FILES = \
+  $(addsuffix /pom.xml,$(addprefix $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/java/,$(basename $(notdir $(wildcard ortools/*/samples/*.java)))))
+
+EXAMPLE_JAVA_FILES = \
+  $(addsuffix /pom.xml,$(addprefix $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/java/,$(basename $(notdir $(wildcard examples/contrib/*.java))))) \
+  $(addsuffix /pom.xml,$(addprefix $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/java/,$(basename $(notdir $(wildcard examples/java/*.java)))))
+
 .PHONY: archive_java # Add Java OR-Tools to archive.
-archive_java: java | $(TEMP_ARCHIVE_DIR)
-	$(COPY) $(LIB_DIR)$Scom.google.ortools.jar $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Slib
-	$(COPY) $(LIB_DIR)$Sprotobuf.jar $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Slib
-	$(COPY) $(LIB_DIR)$S$(LIB_PREFIX)jniortools.$(JNI_LIB_EXT) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Slib
-	-$(MKDIR_P) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sjava
-	-$(COPY) $(JAVA_EX_PATH)$S*.java $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sjava
-	-$(COPY) $(JAVA_EX_PATH)$SREADME.md $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sjava
-	-$(COPY) $(CONTRIB_EX_PATH)$S*.java $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sjava
-	-$(COPY) ortools$Salgorithms$Ssamples$S*.java  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sjava
-	-$(COPY) ortools$Sgraph$Ssamples$S*.java  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sjava
-	-$(COPY) ortools$Slinear_solver$Ssamples$S*.java  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sjava
-	-$(COPY) ortools$Sconstraint_solver$Ssamples$S*.java  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sjava
-	-$(COPY) ortools$Srouting$Ssamples$S*.java  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sjava
-	-$(COPY) ortools$Ssat$Ssamples$S*.java  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sjava
+archive_java: java \
+ $(SAMPLE_JAVA_FILES) \
+ $(EXAMPLE_JAVA_FILES) \
+ | $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/java
+	$(COPY) $(TEMP_JAVA_DIR)$S$(JAVA_ORTOOLS_NATIVE_PROJECT)$Starget$Sortools-*.jar $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)
+	$(COPY) $(TEMP_JAVA_DIR)$S$(JAVA_ORTOOLS_NATIVE_PROJECT)$Spom.xml $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Spom-runtime.xml
+	$(COPY) $(TEMP_JAVA_DIR)$S$(JAVA_ORTOOLS_PROJECT)$Starget$Sortools-*.jar $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)
+	$(COPY) $(TEMP_JAVA_DIR)$S$(JAVA_ORTOOLS_PROJECT)$Spom.xml $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Spom-local.xml
+	$(COPY) $(JAVA_EX_PATH)$SREADME.md $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sjava
+
+##############
+##  DOTNET  ##
+##############
+$(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/dotnet: | $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples
+	$(MKDIR) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
+
+define dotnet-sample-archive =
+$$(TEMP_ARCHIVE_DIR)/$$(INSTALL_DIR)/examples/dotnet/%/plop: \
+ $$(TEMP_DOTNET_DIR)/$1/%/%.csproj \
+ ortools/$1/samples/%.cs \
+ | $$(TEMP_ARCHIVE_DIR)/$$(INSTALL_DIR)/examples/dotnet
+	-$$(MKDIR_P) $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sdotnet$$S$$*
+	$$(COPY) $$(SRC_DIR)$$Sortools$$S$1$$Ssamples$$S$$*.cs \
+ $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sdotnet$$S$$*
+	$$(COPY) $$(TEMP_DOTNET_DIR)$$S$1$$S$$*$$S$$*.csproj \
+ $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sdotnet$$S$$*
+	-$$(SED) -i -e 's/..\/..\/packages/..\/..\/..\/packages/' \
+ $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sdotnet$$S$$*$$S$$*.csproj
+endef
+
+$(foreach sample,$(DOTNET_SAMPLES),$(eval $(call dotnet-sample-archive,$(sample))))
+
+SAMPLE_DOTNET_FILES = \
+  $(addsuffix /plop,$(addprefix $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/dotnet/,$(basename $(notdir $(wildcard ortools/*/samples/*.cs)))))
+
+define dotnet-example-archive =
+$$(TEMP_ARCHIVE_DIR)/$$(INSTALL_DIR)/examples/dotnet/%/plop: \
+ $$(TEMP_DOTNET_DIR)/$1/%/%.csproj \
+ examples/$1/%.cs \
+ | $$(TEMP_ARCHIVE_DIR)/$$(INSTALL_DIR)/examples/dotnet
+	-$$(MKDIR_P) $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sdotnet$$S$$*
+	$$(COPY) $$(SRC_DIR)$$Sexamples$$S$1$$S$$*.cs \
+ $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sdotnet$$S$$*
+	$$(COPY) $$(TEMP_DOTNET_DIR)$$S$1$$S$$*$$S$$*.csproj \
+ $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sdotnet$$S$$*
+	-$$(SED) -i -e 's/..\/..\/packages/..\/..\/..\/packages/' \
+ $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sdotnet$$S$$*$$S$$*.csproj
+endef
+
+$(foreach example,$(DOTNET_EXAMPLES),$(eval $(call dotnet-example-archive,$(example))))
+
+EXAMPLE_DOTNET_FILES = \
+  $(addsuffix /plop,$(addprefix $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/dotnet/,$(basename $(notdir $(wildcard examples/contrib/*.cs))))) \
+  $(addsuffix /plop,$(addprefix $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/dotnet/,$(basename $(notdir $(wildcard examples/dotnet/*.cs)))))
+
+define dotnet-fs-example-archive =
+$$(TEMP_ARCHIVE_DIR)/$$(INSTALL_DIR)/examples/dotnet/%/plop: \
+ $$(TEMP_DOTNET_DIR)/$1/%/%.fsproj \
+ examples/$1/%.fs \
+ | $$(TEMP_ARCHIVE_DIR)/$$(INSTALL_DIR)/examples/dotnet
+	-$$(MKDIR_P) $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sdotnet$$S$$*
+	$$(COPY) $$(SRC_DIR)$$Sexamples$$S$1$$S$$*.fs \
+ $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sdotnet$$S$$*
+	$$(COPY) $$(TEMP_DOTNET_DIR)$$S$1$$S$$*$$S$$*.fsproj \
+ $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sdotnet$$S$$*
+	-$$(SED) -i -e 's/..\/..\/packages/..\/..\/..\/packages/' \
+ $$(TEMP_ARCHIVE_DIR)$$S$$(INSTALL_DIR)$$Sexamples$$Sdotnet$$S$$*$$S$$*.fsproj
+endef
+
+$(foreach example,$(DOTNET_FS_EXAMPLES),$(eval $(call dotnet-fs-example-archive,$(example))))
+
+EXAMPLE_FS_DOTNET_FILES = \
+  $(addsuffix /plop,$(addprefix $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/dotnet/,$(basename $(notdir $(wildcard examples/contrib/*.fs))))) \
+  $(addsuffix /plop,$(addprefix $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/dotnet/,$(basename $(notdir $(wildcard examples/dotnet/*.fs)))))
 
 .PHONY: archive_dotnet # Add .Net OR-Tools to archive.
-archive_dotnet: dotnet | $(TEMP_ARCHIVE_DIR)
+archive_dotnet: dotnet \
+ $(SAMPLE_DOTNET_FILES) \
+ $(EXAMPLE_DOTNET_FILES) \
+ $(EXAMPLE_FS_DOTNET_FILES) \
+ | $(TEMP_ARCHIVE_DIR)/$(INSTALL_DIR)/examples/dotnet
 	-$(MKDIR_P) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Spackages
-	$(COPY) packages$S*.nupkg $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Spackages
-	-$(MKDIR_P) $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) $(DOTNET_EX_PATH)$S*.cs* $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) $(DOTNET_EX_PATH)$S*.fs* $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
+	$(COPY) $(TEMP_DOTNET_DIR)$Spackages$S*.nupkg $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Spackages
 	-$(COPY) $(DOTNET_EX_PATH)$SREADME.md $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) $(CONTRIB_EX_PATH)$S*.cs* $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) $(CONTRIB_EX_PATH)$S*.fs* $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) ortools$Salgorithms$Ssamples$S*.cs*  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) ortools$Salgorithms$Ssamples$S*.fs*  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) ortools$Sgraph$Ssamples$S*.cs*  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) ortools$Sgraph$Ssamples$S*.fs*  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) ortools$Slinear_solver$Ssamples$S*.cs*  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) ortools$Slinear_solver$Ssamples$S*.fs*  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) ortools$Sconstraint_solver$Ssamples$S*.cs*  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) ortools$Sconstraint_solver$Ssamples$S*.fs*  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) ortools$Srouting$Ssamples$S*.cs*  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) ortools$Srouting$Ssamples$S*.fs*  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) ortools$Ssat$Ssamples$S*.cs*  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(COPY) ortools$Ssat$Ssamples$S*.fs*  $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet
-	-$(SED) -i -e 's/..\/..\/..\/packages/..\/..\/packages/' $(TEMP_ARCHIVE_DIR)$S$(INSTALL_DIR)$Sexamples$Sdotnet$S*.*proj
+
+################
+##  FLATZINC  ##
+################
 
 $(FZ_INSTALL_DIR)$(ARCHIVE_EXT): fz | $(TEMP_FZ_DIR)
 	-$(DELREC) $(TEMP_FZ_DIR)$S*
@@ -114,7 +218,6 @@ $(FZ_INSTALL_DIR)$(ARCHIVE_EXT): fz | $(TEMP_FZ_DIR)
 	-$(DELREC) $(TEMP_FZ_DIR)$S$(FZ_INSTALL_DIR)$Sinclude
 	-$(DELREC) $(TEMP_FZ_DIR)$S$(FZ_INSTALL_DIR)$Sbin/cbc*
 	-$(DELREC) $(TEMP_FZ_DIR)$S$(FZ_INSTALL_DIR)$Sbin/clp*
-	-$(DELREC) $(TEMP_FZ_DIR)$S$(FZ_INSTALL_DIR)$Sbin/gflags*
 	-$(DELREC) $(TEMP_FZ_DIR)$S$(FZ_INSTALL_DIR)$Sbin/protoc*
 	-$(DELREC) $(TEMP_FZ_DIR)$S$(FZ_INSTALL_DIR)$Sshare/doc
 	$(COPY) $(FLATZINC_PATH) $(TEMP_FZ_DIR)$S$(FZ_INSTALL_DIR)$Slib
@@ -172,7 +275,7 @@ endif
 ##  TESTING  ##
 ###############
 TEMP_TEST_DIR = temp_test
-.PHONY: test_archive
+.PHONY: test_archive # Test OR-Tools archive is OK.
 test_archive: $(INSTALL_DIR)$(ARCHIVE_EXT)
 	-$(DELREC) $(TEMP_TEST_DIR)
 	-$(MKDIR) $(TEMP_TEST_DIR)
@@ -195,7 +298,7 @@ else
 endif
 
 TEMP_FZ_TEST_DIR = temp_fz_test
-.PHONY: test_fz_archive
+.PHONY: test_fz_archive # Test OR-Tools flatzinc archive is OK.
 test_fz_archive: $(FZ_INSTALL_DIR)$(ARCHIVE_EXT)
 	-$(DELREC) $(TEMP_FZ_TEST_DIR)
 	-$(MKDIR) $(TEMP_FZ_TEST_DIR)

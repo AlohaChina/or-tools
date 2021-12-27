@@ -10,7 +10,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package com.google.ortools.contrib;
 
+import com.google.ortools.Loader;
 import com.google.ortools.constraintsolver.*;
 import com.google.ortools.constraintsolver.DecisionBuilder;
 import com.google.ortools.constraintsolver.IntVar;
@@ -20,29 +22,16 @@ import java.text.*;
 import java.util.*;
 
 public class Minesweeper {
-
-  static {
-    System.loadLibrary("jniortools");
-  }
-
   static int X = -1;
-
   //
   // Default problem.
   // It has 4 solutions.
   //
   static int default_r = 8;
   static int default_c = 8;
-  static int[][] default_game = {
-    {2, 3, X, 2, 2, X, 2, 1},
-    {X, X, 4, X, X, 4, X, 2},
-    {X, X, X, X, X, X, 4, X},
-    {X, 5, X, 6, X, X, X, 2},
-    {2, X, X, X, 5, 5, X, 2},
-    {1, 3, 4, X, X, X, 4, X},
-    {0, 1, X, 4, X, X, X, 3},
-    {0, 1, 2, X, 2, 3, X, 2}
-  };
+  static int[][] default_game = {{2, 3, X, 2, 2, X, 2, 1}, {X, X, 4, X, X, 4, X, 2},
+      {X, X, X, X, X, X, 4, X}, {X, 5, X, 6, X, X, X, 2}, {2, X, X, X, 5, 5, X, 2},
+      {1, 3, 4, X, X, X, 4, X}, {0, 1, X, 4, X, X, X, 3}, {0, 1, 2, X, 2, 3, X, 2}};
 
   // for the actual problem
   static int r;
@@ -51,7 +40,6 @@ public class Minesweeper {
 
   /** Solves the Minesweeper problems. See http://www.hakank.org/google_or_tools/minesweeper.py */
   private static void solve() {
-
     Solver solver = new Solver("Minesweeper");
 
     int[] S = {-1, 0, 1};
@@ -152,16 +140,13 @@ public class Minesweeper {
    * ..2.3. 2..... ..24.3 1.34.. .....3 .3.3..
    */
   private static void readFile(String file) {
-
     System.out.println("readFile(" + file + ")");
     int lineCount = 0;
 
     try {
-
       BufferedReader inr = new BufferedReader(new FileReader(file));
       String str;
       while ((str = inr.readLine()) != null && str.length() > 0) {
-
         str = str.trim();
 
         // ignore comments
@@ -199,6 +184,7 @@ public class Minesweeper {
   } // end readFile
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
 
     String file = "";
     if (args.length > 0) {

@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -19,6 +19,7 @@
 #ifndef OR_TOOLS_SAT_SAT_SOLVER_H_
 #define OR_TOOLS_SAT_SAT_SOLVER_H_
 
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -30,7 +31,6 @@
 #include "absl/types/span.h"
 #include "ortools/base/hash.h"
 #include "ortools/base/int_type.h"
-#include "ortools/base/int_type_indexed_vector.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/macros.h"
@@ -61,6 +61,10 @@ class SatSolver {
   explicit SatSolver(Model* model);
   ~SatSolver();
 
+  // TODO(user): Remove. This is temporary for accessing the model deep within
+  // some old code that didn't use the Model object.
+  Model* model() { return model_; }
+
   // Parameters management. Note that calling SetParameters() will reset the
   // value of many heuristics. For instance:
   // - The restart strategy will be reinitialized.
@@ -81,7 +85,7 @@ class SatSolver {
     const int num_vars = NumVariables();
 
     // We need to be able to encode the variable as a literal.
-    CHECK_LT(2 * num_vars, std::numeric_limits<int32>::max());
+    CHECK_LT(2 * num_vars, std::numeric_limits<int32_t>::max());
     SetNumVariables(num_vars + 1);
     return BooleanVariable(num_vars);
   }
@@ -130,7 +134,7 @@ class SatSolver {
   // return true.
   //
   // TODO(user): Rename to ModelIsUnsat().
-  bool IsModelUnsat() const { return is_model_unsat_; }
+  bool IsModelUnsat() const { return model_is_unsat_; }
 
   // Adds and registers the given propagator with the sat solver. Note that
   // during propagation, they will be called in the order they were added.
@@ -317,17 +321,18 @@ class SatSolver {
   void ExtractClauses(Output* out) {
     CHECK(!IsModelUnsat());
     Backtrack(0);
-    out->SetNumVariables(NumVariables());
+    if (!FinishPropagation()) return;
 
     // It is important to process the newly fixed variables, so they are not
     // present in the clauses we export.
     if (num_processed_fixed_variables_ < trail_->Index()) {
       ProcessNewlyFixedVariables();
     }
-    clauses_propagator_->DeleteDetachedClauses();
+    clauses_propagator_->DeleteRemovedClauses();
 
     // Note(user): Putting the binary clauses first help because the presolver
     // currently process the clauses in order.
+    out->SetNumVariables(NumVariables());
     binary_implication_graph_->ExtractAllBinaryClauses(out);
     for (SatClause* clause : clauses_propagator_->AllClausesInCreationOrder()) {
       if (!clauses_propagator_->IsRemovable(clause)) {
@@ -344,9 +349,9 @@ class SatSolver {
   void ClearNewlyAddedBinaryClauses();
 
   struct Decision {
-    Decision() : trail_index(-1) {}
+    Decision() {}
     Decision(int i, Literal l) : trail_index(i), literal(l) {}
-    int trail_index;
+    int trail_index = 0;
     Literal literal;
   };
 
@@ -358,9 +363,14 @@ class SatSolver {
   const VariablesAssignment& Assignment() const { return trail_->Assignment(); }
 
   // Some statistics since the creation of the solver.
-  int64 num_branches() const;
-  int64 num_failures() const;
-  int64 num_propagations() const;
+  int64_t num_branches() const;
+  int64_t num_failures() const;
+  int64_t num_propagations() const;
+
+  // Note that we count the number of backtrack to level zero from a positive
+  // level. Those can corresponds to actual restarts, or conflicts that learn
+  // unit clauses or any other reason that trigger such backtrack.
+  int64_t num_restarts() const;
 
   // A deterministic number that should be correlated with the time spent in
   // the Solve() function. The order of magnitude should be close to the time
@@ -380,6 +390,7 @@ class SatSolver {
   void SetDratProofHandler(DratProofHandler* drat_proof_handler) {
     drat_proof_handler_ = drat_proof_handler;
     clauses_propagator_->SetDratProofHandler(drat_proof_handler_);
+    binary_implication_graph_->SetDratProofHandler(drat_proof_handler_);
   }
 
   // This function is here to deal with the case where a SAT/CP model is found
@@ -388,20 +399,16 @@ class SatSolver {
   // just check if the solver is not UNSAT once the model is constructed. Note
   // that we usually log a warning on the first constraint that caused a
   // "trival" unsatisfiability.
-  void NotifyThatModelIsUnsat() { is_model_unsat_ = true; }
+  void NotifyThatModelIsUnsat() { model_is_unsat_ = true; }
 
-  // TODO(user): This internal function should probably not be exposed here.
-  void AddBinaryClauseDuringSearch(Literal a, Literal b) {
-    // The new clause should not propagate.
-    CHECK(!trail_->Assignment().LiteralIsFalse(a));
-    CHECK(!trail_->Assignment().LiteralIsFalse(b));
-    const bool init = binary_implication_graph_->NumberOfImplications() == 0;
-    binary_implication_graph_->AddBinaryClauseDuringSearch(a, b, trail_);
-    if (init) {
-      // This is needed because we just added the first binary clause.
-      InitializePropagators();
-    }
-  }
+  // Adds a clause at any level of the tree and propagate any new deductions.
+  // Returns false if the model becomes UNSAT. Important: We currently do not
+  // support adding a clause that is already falsified at a positive decision
+  // level. Doing that will cause a check fail.
+  //
+  // TODO(user): Backjump and propagate on a falsified clause? this is currently
+  // not needed.
+  bool AddClauseDuringSearch(absl::Span<const Literal> literals);
 
   // Performs propagation of the recently enqueued elements.
   // Mainly visible for testing.
@@ -418,6 +425,15 @@ class SatSolver {
     limit->AdvanceDeterministicTime(
         current - deterministic_time_at_last_advanced_time_limit_);
     deterministic_time_at_last_advanced_time_limit_ = current;
+  }
+
+  // Simplifies the problem when new variables are assigned at level 0.
+  void ProcessNewlyFixedVariables();
+
+  int64_t NumFixedVariables() const {
+    if (!decisions_.empty()) return decisions_[0].trail_index;
+    CHECK_EQ(CurrentDecisionLevel(), 0);
+    return trail_->Index();
   }
 
  private:
@@ -469,7 +485,7 @@ class SatSolver {
   // Returns false if the thread memory is over the limit.
   bool IsMemoryLimitReached() const;
 
-  // Sets is_model_unsat_ to true and return false.
+  // Sets model_is_unsat_ to true and return false.
   bool SetModelUnsat();
 
   // Returns the decision level of a given variable.
@@ -545,9 +561,6 @@ class SatSolver {
   // Unrolls the trail until a given point. This unassign the assigned variables
   // and add them to the priority queue with the correct weight.
   void Untrail(int target_trail_index);
-
-  // Simplifies the problem when new variables are assigned at level 0.
-  void ProcessNewlyFixedVariables();
 
   // Output to the DRAT proof handler any newly fixed variables.
   void ProcessNewlyFixedVariablesForDratProof();
@@ -726,27 +739,28 @@ class SatSolver {
 
   // Tracks various information about the solver progress.
   struct Counters {
-    int64 num_branches = 0;
-    int64 num_failures = 0;
+    int64_t num_branches = 0;
+    int64_t num_failures = 0;
+    int64_t num_restarts = 0;
 
     // Minimization stats.
-    int64 num_minimizations = 0;
-    int64 num_literals_removed = 0;
+    int64_t num_minimizations = 0;
+    int64_t num_literals_removed = 0;
 
     // PB constraints.
-    int64 num_learned_pb_literals = 0;
+    int64_t num_learned_pb_literals = 0;
 
     // Clause learning /deletion stats.
-    int64 num_literals_learned = 0;
-    int64 num_literals_forgotten = 0;
-    int64 num_subsumed_clauses = 0;
+    int64_t num_literals_learned = 0;
+    int64_t num_literals_forgotten = 0;
+    int64_t num_subsumed_clauses = 0;
 
     // TryToMinimizeClause() stats.
-    int64 minimization_num_clauses = 0;
-    int64 minimization_num_decisions = 0;
-    int64 minimization_num_true = 0;
-    int64 minimization_num_subsumed = 0;
-    int64 minimization_num_removed_literals = 0;
+    int64_t minimization_num_clauses = 0;
+    int64_t minimization_num_decisions = 0;
+    int64_t minimization_num_true = 0;
+    int64_t minimization_num_subsumed = 0;
+    int64_t minimization_num_removed_literals = 0;
   };
   Counters counters_;
 
@@ -755,7 +769,7 @@ class SatSolver {
 
   // This is set to true if the model is found to be UNSAT when adding new
   // constraints.
-  bool is_model_unsat_ = false;
+  bool model_is_unsat_ = false;
 
   // Increment used to bump the variable activities.
   double clause_activity_increment_;
@@ -821,6 +835,15 @@ class SatSolver {
   DISALLOW_COPY_AND_ASSIGN(SatSolver);
 };
 
+// Tries to minimize the given UNSAT core with a really simple heuristic.
+// The idea is to remove literals that are consequences of others in the core.
+// We already know that in the initial order, no literal is propagated by the
+// one before it, so we just look for propagation in the reverse order.
+//
+// Important: The given SatSolver must be the one that just produced the given
+// core.
+void MinimizeCore(SatSolver* solver, std::vector<Literal>* core);
+
 // ============================================================================
 // Model based functions.
 //
@@ -828,7 +851,8 @@ class SatSolver {
 // ============================================================================
 
 inline std::function<void(Model*)> BooleanLinearConstraint(
-    int64 lower_bound, int64 upper_bound, std::vector<LiteralWithCoeff>* cst) {
+    int64_t lower_bound, int64_t upper_bound,
+    std::vector<LiteralWithCoeff>* cst) {
   return [=](Model* model) {
     model->GetOrCreate<SatSolver>()->AddLinearConstraint(
         /*use_lower_bound=*/true, Coefficient(lower_bound),
@@ -837,7 +861,7 @@ inline std::function<void(Model*)> BooleanLinearConstraint(
 }
 
 inline std::function<void(Model*)> CardinalityConstraint(
-    int64 lower_bound, int64 upper_bound,
+    int64_t lower_bound, int64_t upper_bound,
     const std::vector<Literal>& literals) {
   return [=](Model* model) {
     std::vector<LiteralWithCoeff> cst;
@@ -880,7 +904,7 @@ inline std::function<void(Model*)> AtMostOneConstraint(
 }
 
 inline std::function<void(Model*)> ClauseConstraint(
-    const std::vector<Literal>& literals) {
+    absl::Span<const Literal> literals) {
   return [=](Model* model) {
     std::vector<LiteralWithCoeff> cst;
     cst.reserve(literals.size());
@@ -969,7 +993,7 @@ inline std::function<void(Model*)> ReifiedBoolLe(Literal a, Literal b,
 }
 
 // This checks that the variable is fixed.
-inline std::function<int64(const Model&)> Value(Literal l) {
+inline std::function<int64_t(const Model&)> Value(Literal l) {
   return [=](const Model& model) {
     const Trail* trail = model.Get<Trail>();
     CHECK(trail->Assignment().VariableIsAssigned(l.Variable()));
@@ -978,7 +1002,7 @@ inline std::function<int64(const Model&)> Value(Literal l) {
 }
 
 // This checks that the variable is fixed.
-inline std::function<int64(const Model&)> Value(BooleanVariable b) {
+inline std::function<int64_t(const Model&)> Value(BooleanVariable b) {
   return [=](const Model& model) {
     const Trail* trail = model.Get<Trail>();
     CHECK(trail->Assignment().VariableIsAssigned(b));

@@ -23,10 +23,8 @@
    Distances are in meters.
 """
 
-from __future__ import print_function
 
 from functools import partial
-from six.moves import xrange
 
 from ortools.constraint_solver import pywrapcp
 from ortools.constraint_solver import routing_enums_pb2
@@ -84,9 +82,9 @@ def create_distance_evaluator(data):
     """Creates callback to return distance between points."""
     _distances = {}
     # precompute distance between location to have distance callback in O(1)
-    for from_node in xrange(data['num_locations']):
+    for from_node in range(data['num_locations']):
         _distances[from_node] = {}
-        for to_node in xrange(data['num_locations']):
+        for to_node in range(data['num_locations']):
             if from_node == to_node:
                 _distances[from_node][to_node] = 0
             else:
@@ -132,7 +130,7 @@ def print_solution(data, routing, manager, assignment):  # pylint:disable=too-ma
     total_distance = 0
     total_load = 0
     capacity_dimension = routing.GetDimensionOrDie('Capacity')
-    for vehicle_id in xrange(data['num_vehicles']):
+    for vehicle_id in range(data['num_vehicles']):
         index = routing.Start(vehicle_id)
         plan_output = 'Route for vehicle {}:\n'.format(vehicle_id)
         distance = 0
@@ -186,6 +184,10 @@ def main():
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     search_parameters.first_solution_strategy = (
         routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)  # pylint: disable=no-member
+    search_parameters.local_search_metaheuristic = (
+        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
+    search_parameters.time_limit.FromSeconds(1)
+
     # Solve the problem.
     assignment = routing.SolveWithParameters(search_parameters)
     print_solution(data, routing, manager, assignment)

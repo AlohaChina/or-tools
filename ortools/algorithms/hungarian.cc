@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,22 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// See: //depot/google3/java/com/google/wireless/genie/frontend
-//       /mixer/matching/HungarianOptimizer.java
-
 #include "ortools/algorithms/hungarian.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <limits>
 
+#include "absl/strings/str_format.h"
 #include "ortools/base/logging.h"
 
 namespace operations_research {
 
 class HungarianOptimizer {
-  static const int kHungarianOptimizerRowNotFound = -1;
-  static const int kHungarianOptimizerColNotFound = -2;
+  static constexpr int kHungarianOptimizerRowNotFound = -1;
+  static constexpr int kHungarianOptimizerColNotFound = -2;
 
  public:
   // Setup the initial conditions for the algorithm.
@@ -421,17 +419,17 @@ bool HungarianOptimizer::FindZero(int* zero_row, int* zero_col) const {
 void HungarianOptimizer::PrintMatrix() {
   for (int row = 0; row < matrix_size_; ++row) {
     for (int col = 0; col < matrix_size_; ++col) {
-      printf("%g ", costs_[row][col]);
+      absl::PrintF("%g ", costs_[row][col]);
 
       if (IsStarred(row, col)) {
-        printf("*");
+        absl::PrintF("*");
       }
 
       if (IsPrimed(row, col)) {
-        printf("'");
+        absl::PrintF("'");
       }
     }
-    printf("\n");
+    absl::PrintF("\n");
   }
 }
 
@@ -462,8 +460,6 @@ void HungarianOptimizer::ReduceRows() {
 // Step 2.
 // Find a zero (Z) in the matrix.  If there is no starred zero in its row
 // or column, star Z.  Repeat for every element in the matrix.  Go to step 3.
-// of the CPU - the next slowest step takes 0.6%.  I can't think of a way
-// of speeding it up though.
 void HungarianOptimizer::StarZeroes() {
   // Since no rows or columns are covered on entry to this step, we use the
   // covers as a quick way of marking which rows & columns have stars in them.

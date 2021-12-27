@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,16 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 #ifndef SOLUTION_CHECKER_H_
 #define SOLUTION_CHECKER_H_
 
 #include <iostream>
 #include <vector>
+
 #include "assert.h"
 
 using namespace std;
-typedef long long int int64;
+typedef long long int int64_t;
 
 namespace roadef_challenge {
 
@@ -35,7 +35,7 @@ typedef int NumberOfLocations;
 typedef int BalanceCostIndex;
 typedef int DependencyIndex;
 
-typedef std::vector<int64> Capacities;
+typedef std::vector<int64_t> Capacities;
 typedef std::vector<int> Requirements;
 typedef std::vector<int> ProcessAssignments;
 typedef std::vector<int> MoveToMachineCosts;
@@ -58,7 +58,7 @@ void STLDeleteElements(std::vector<T*>* elements) {
   elements->clear();
 }
 
-template<class T>
+template <class T>
 size_t VectorSize(const std::vector<T>& v) {
   return v.size();
 }
@@ -109,13 +109,13 @@ class RemainingCapacities {
   void UndoConsumption(const Requirements& requirements);
 
   // Returns the smallest capacity of the transient remaining capacities.
-  int64 GetMinTransientValue() const;
+  int64_t GetMinTransientValue() const;
 
   // Returns the weighted sum of load costs of all resources.
-  int64 GetLoadCost(const Capacities& safety_remaining_capacities) const;
+  int64_t GetLoadCost(const Capacities& safety_remaining_capacities) const;
 
   // Returns the weighted sum of balance costs of all resources.
-  int64 GetBalanceCost(const BalanceCost& balance_cost) const;
+  int64_t GetBalanceCost(const BalanceCost& balance_cost) const;
 
   ResourceIndex GetNumberOfResources() const { return VectorSize(resources_); }
 
@@ -127,7 +127,6 @@ class RemainingCapacities {
   Capacities remaining_capacities_;
   Capacities transient_remaining_capacities_;
   const Resources& resources_;
-
 };
 
 class Service;
@@ -150,7 +149,6 @@ class Process {
   const Requirements requirements_;
   const int move_cost_;
   const Service& service_;
-
 };
 typedef std::vector<const Process*> Processes;
 typedef std::vector<const Process*> LocalProcesses;
@@ -192,7 +190,6 @@ class Service {
   const NumberOfLocations spread_min_;
   const Dependencies dependencies_;
   LocalProcesses processes_;
-
 };
 typedef std::vector<Service*> Services;
 
@@ -220,10 +217,10 @@ class Machine {
   bool HasNegativeRemainingCapacity() const;
 
   // Returns the weighted load cost of the machine.
-  int64 GetLoadCost() const;
+  int64_t GetLoadCost() const;
 
   // Returns the weighted balance cost of the machine.
-  int64 GetBalanceCost(const BalanceCost& balance_cost) const;
+  int64_t GetBalanceCost(const BalanceCost& balance_cost) const;
 
   MachineIndex id() const { return id_; }
   LocationIndex location_id() const { return location_id_; }
@@ -249,7 +246,6 @@ class Machine {
 
   Capacities safety_remaining_capacities_;
   RemainingCapacities remaining_capacities_;
-
 };
 typedef std::vector<Machine*> Machines;
 
@@ -270,8 +266,7 @@ class SolutionChecker {
 
   // Returns the total objective cost as defined in the problem description
   // document. Note this method assumes all hard constraints are satisfied.
-  int64 GetObjectiveCost() const;
-
+  int64_t GetObjectiveCost() const;
 
  private:
   // Returns true if process doesn't run on the same machine in the
@@ -325,19 +320,19 @@ class SolutionChecker {
                                  const Service& service) const;
 
   // Returns the weigthed sum of all load costs.
-  int64 GetLoadCost() const;
+  int64_t GetLoadCost() const;
 
   // Returns the weighted sum of all balance costs.
-  int64 GetBalanceCost() const;
+  int64_t GetBalanceCost() const;
 
   // Returns the weighted sum of all process move costs.
-  int64 GetProcessMoveCost() const;
+  int64_t GetProcessMoveCost() const;
 
   // Returns the weighted sum of all service move costs.
-  int64 GetServiceMoveCost() const;
+  int64_t GetServiceMoveCost() const;
 
   // Returns the weighted sum of all machine move costs.
-  int64 GetMachineMoveCost() const;
+  int64_t GetMachineMoveCost() const;
 
   const Machines& machines_;
   const Services& services_;
@@ -349,7 +344,6 @@ class SolutionChecker {
 
   const ProcessAssignments& initial_assignments_;
   const ProcessAssignments& new_assignments_;
-
 };
 
 // This class parses raw data according to data formats defined in the problem
@@ -377,10 +371,8 @@ class DataParser {
  private:
   int GetNextModelValue(int max_value);
 
-  template<class T>
-    void GetModelVector(size_t size,
-                        int max_value,
-                        std::vector<T>* model_vector);
+  template <class T>
+  void GetModelVector(size_t size, int max_value, std::vector<T>* model_vector);
 
   void Parse();
   void ParseModel();
@@ -408,7 +400,6 @@ class DataParser {
   int process_move_cost_weight_;
   int service_move_cost_weight_;
   int machine_move_cost_weight_;
-
 };
 
 }  // namespace roadef_challenge

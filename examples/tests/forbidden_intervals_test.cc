@@ -17,8 +17,7 @@ namespace operations_research {
 
 class ForbiddenIntervalTestSimpleReductionOnBothSide : public DecisionBuilder {
  public:
-  ForbiddenIntervalTestSimpleReductionOnBothSide(
-      IntVar* const var)
+  ForbiddenIntervalTestSimpleReductionOnBothSide(IntVar* const var)
       : var_(var) {}
   ~ForbiddenIntervalTestSimpleReductionOnBothSide() override {}
 
@@ -34,9 +33,7 @@ class ForbiddenIntervalTestSimpleReductionOnBothSide : public DecisionBuilder {
 
 class ForbiddenIntervalTestMultipleReductionsOnMin : public DecisionBuilder {
  public:
-  ForbiddenIntervalTestMultipleReductionsOnMin(
-      IntVar* const var)
-      : var_(var) {}
+  ForbiddenIntervalTestMultipleReductionsOnMin(IntVar* const var) : var_(var) {}
   ~ForbiddenIntervalTestMultipleReductionsOnMin() override {}
 
   Decision* Next(Solver* const s) override {
@@ -72,9 +69,7 @@ class ForbiddenIntervalTestMultipleReductionsOnMin : public DecisionBuilder {
 
 class ForbiddenIntervalTestMultipleReductionsOnMax : public DecisionBuilder {
  public:
-  ForbiddenIntervalTestMultipleReductionsOnMax(
-      IntVar* const var)
-      : var_(var) {}
+  ForbiddenIntervalTestMultipleReductionsOnMax(IntVar* const var) : var_(var) {}
   ~ForbiddenIntervalTestMultipleReductionsOnMax() override {}
 
   Decision* Next(Solver* const s) override {
@@ -110,11 +105,11 @@ class ForbiddenIntervalTestMultipleReductionsOnMax : public DecisionBuilder {
 
 class ForbiddenIntervalTest {
  public:
-  void SetUp(std::vector<int64>& starts, std::vector<int64>& ends) {
+  void SetUp(std::vector<int64_t>& starts, std::vector<int64_t>& ends) {
     solver_.reset(new Solver("ForbiddenIntervalTest"));
     var_ = solver_->MakeIntVar(0, 1000, "var");
     CHECK_EQ(starts.size(), ends.size());
-    for(std::size_t i=0; i < starts.size(); ++i) {
+    for (std::size_t i = 0; i < starts.size(); ++i) {
       var_->RemoveInterval(starts[i], ends[i]);
     }
   }
@@ -124,8 +119,8 @@ class ForbiddenIntervalTest {
 
   void TestSimpleReductionOnBothSide() {
     std::cout << "TestSimpleReductionOnBothSide" << std::endl;
-    std::vector<int64> starts = {0, 900};
-    std::vector<int64> ends = {100, 1000};
+    std::vector<int64_t> starts = {0, 900};
+    std::vector<int64_t> ends = {100, 1000};
     SetUp(starts, ends);
     CHECK(solver_->Solve(solver_->RevAlloc(
         new ForbiddenIntervalTestSimpleReductionOnBothSide(var_))));
@@ -134,8 +129,8 @@ class ForbiddenIntervalTest {
 
   void TestMultipleReductionsOnMin() {
     std::cout << "TestMultipleReductionsOnMin" << std::endl;
-    std::vector<int64> starts = {10, 500, 800};
-    std::vector<int64> ends = {20, 510, 900};
+    std::vector<int64_t> starts = {10, 500, 800};
+    std::vector<int64_t> ends = {20, 510, 900};
     SetUp(starts, ends);
     CHECK(solver_->Solve(solver_->RevAlloc(
         new ForbiddenIntervalTestMultipleReductionsOnMin(var_))));
@@ -144,8 +139,8 @@ class ForbiddenIntervalTest {
 
   void TestMultipleReductionsOnMax() {
     std::cout << "TestMultipleReductionsOnMax" << std::endl;
-    std::vector<int64> starts = {10, 500, 800};
-    std::vector<int64> ends = {20, 510, 900};
+    std::vector<int64_t> starts = {10, 500, 800};
+    std::vector<int64_t> ends = {20, 510, 900};
     SetUp(starts, ends);
     CHECK(solver_->Solve(solver_->RevAlloc(
         new ForbiddenIntervalTestMultipleReductionsOnMax(var_))));
@@ -155,7 +150,7 @@ class ForbiddenIntervalTest {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  absl::ParseCommandLine(argc, argv);
   operations_research::ForbiddenIntervalTest forbidden_intervals_test;
   forbidden_intervals_test.TestSimpleReductionOnBothSide();
   forbidden_intervals_test.TestMultipleReductionsOnMin();

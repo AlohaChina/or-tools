@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,22 +12,22 @@
 // limitations under the License.
 
 // [START program]
+package com.google.ortools.constraintsolver.samples;
 // [START import]
+import com.google.ortools.Loader;
 import com.google.ortools.constraintsolver.Assignment;
 import com.google.ortools.constraintsolver.FirstSolutionStrategy;
+import com.google.ortools.constraintsolver.LocalSearchMetaheuristic;
 import com.google.ortools.constraintsolver.RoutingIndexManager;
 import com.google.ortools.constraintsolver.RoutingModel;
 import com.google.ortools.constraintsolver.RoutingSearchParameters;
 import com.google.ortools.constraintsolver.main;
+import com.google.protobuf.Duration;
 import java.util.logging.Logger;
 // [END import]
 
 /** Minimal VRP.*/
 public class VrpDropNodes {
-  static {
-    System.loadLibrary("jniortools");
-  }
-
   private static final Logger logger = Logger.getLogger(VrpDropNodes.class.getName());
 
   // [START data_model]
@@ -64,6 +64,9 @@ public class VrpDropNodes {
   /// @brief Print the solution.
   static void printSolution(
       DataModel data, RoutingModel routing, RoutingIndexManager manager, Assignment solution) {
+    // Solution cost.
+    logger.info("Objective: " + solution.objectiveValue());
+    // Inspect solution.
     // Display dropped nodes.
     String droppedNodes = "Dropped nodes:";
     for (int node = 0; node < routing.size(); ++node) {
@@ -104,6 +107,7 @@ public class VrpDropNodes {
   // [END solution_printer]
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     // Instantiate the data problem.
     // [START data]
     final DataModel data = new DataModel();
@@ -160,6 +164,8 @@ public class VrpDropNodes {
         main.defaultRoutingSearchParameters()
             .toBuilder()
             .setFirstSolutionStrategy(FirstSolutionStrategy.Value.PATH_CHEAPEST_ARC)
+            .setLocalSearchMetaheuristic(LocalSearchMetaheuristic.Value.GUIDED_LOCAL_SEARCH)
+            .setTimeLimit(Duration.newBuilder().setSeconds(1).build())
             .build();
     // [END parameters]
 

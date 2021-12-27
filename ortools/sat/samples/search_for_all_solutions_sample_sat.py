@@ -1,4 +1,5 @@
-# Copyright 2010-2018 Google LLC
+#!/usr/bin/env python3
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -13,10 +14,6 @@
 """Code sample that solves a model and displays all solutions."""
 
 # [START program]
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 from ortools.sat.python import cp_model
 
 
@@ -64,7 +61,10 @@ def SearchForAllSolutionsSampleSat():
     # [START solve]
     solver = cp_model.CpSolver()
     solution_printer = VarArraySolutionPrinter([x, y, z])
-    status = solver.SearchForAllSolutions(model, solution_printer)
+    # Enumerate all solutions.
+    solver.parameters.enumerate_all_solutions = True
+    # Solve.
+    status = solver.Solve(model, solution_printer)
     # [END solve]
 
     print('Status = %s' % solver.StatusName(status))

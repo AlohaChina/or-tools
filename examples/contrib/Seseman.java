@@ -10,6 +10,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package com.google.ortools.contrib;
+
+import com.google.ortools.Loader;
 import com.google.ortools.constraintsolver.DecisionBuilder;
 import com.google.ortools.constraintsolver.IntVar;
 import com.google.ortools.constraintsolver.Solver;
@@ -18,14 +21,8 @@ import java.text.*;
 import java.util.*;
 
 public class Seseman {
-
-  static {
-    System.loadLibrary("jniortools");
-  }
-
   /** Solves the Seseman convent problem. See http://www.hakank.org/google_or_tools/seseman.py */
   private static void solve(int n) {
-
     Solver solver = new Solver("Seseman");
 
     //
@@ -114,6 +111,7 @@ public class Seseman {
   }
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     int n = 3;
     if (args.length > 0) {
       n = Integer.parseInt(args[0]);

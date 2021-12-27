@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,6 +14,9 @@
 #ifndef OR_TOOLS_BOP_BOP_SOLUTION_H_
 #define OR_TOOLS_BOP_BOP_SOLUTION_H_
 
+#include <cstdint>
+
+#include "ortools/base/strong_vector.h"
 #include "ortools/bop/bop_types.h"
 #include "ortools/sat/boolean_problem.h"
 #include "ortools/sat/boolean_problem.pb.h"
@@ -30,7 +33,8 @@ namespace bop {
 // the feasibility.
 class BopSolution {
  public:
-  BopSolution(const LinearBooleanProblem& problem, const std::string& name);
+  BopSolution(const sat::LinearBooleanProblem& problem,
+              const std::string& name);
 
   void SetValue(VariableIndex var, bool value) {
     recompute_cost_ = true;
@@ -46,7 +50,7 @@ class BopSolution {
   // Returns the objective cost of the solution.
   // Note that this code is lazy but not incremental and might run in the
   // problem size. Use with care during search.
-  int64 GetCost() const {
+  int64_t GetCost() const {
     if (recompute_cost_) {
       cost_ = ComputeCost();
     }
@@ -73,10 +77,10 @@ class BopSolution {
   }
 
   // For range based iteration, i.e. for (const bool value : solution) {...}.
-  gtl::ITIVector<VariableIndex, bool>::const_iterator begin() const {
+  absl::StrongVector<VariableIndex, bool>::const_iterator begin() const {
     return values_.begin();
   }
-  gtl::ITIVector<VariableIndex, bool>::const_iterator end() const {
+  absl::StrongVector<VariableIndex, bool>::const_iterator end() const {
     return values_.end();
   }
 
@@ -91,18 +95,18 @@ class BopSolution {
 
  private:
   bool ComputeIsFeasible() const;
-  int64 ComputeCost() const;
+  int64_t ComputeCost() const;
 
-  const LinearBooleanProblem* problem_;
+  const sat::LinearBooleanProblem* problem_;
   std::string name_;
-  gtl::ITIVector<VariableIndex, bool> values_;
+  absl::StrongVector<VariableIndex, bool> values_;
 
   // Those are mutable because they behave as const values for a given solution
   // but for performance reasons we want to be lazy on their computation,
   // e.g. not compute the cost each time set_value() is called.
   mutable bool recompute_cost_;
   mutable bool recompute_is_feasible_;
-  mutable int64 cost_;
+  mutable int64_t cost_;
   mutable bool is_feasible_;
 
   // Note that assign/copy are defined to allow usage of

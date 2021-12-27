@@ -1,3 +1,4 @@
+VERSION := @PROJECT_VERSION@
 # Let's discover something about where we run
 ifeq ($(OS),Windows_NT)
 OS = Windows
@@ -27,6 +28,7 @@ BIN_DIR = bin
 # Unix specific part.
 ifeq ($(SYSTEM),unix)
   OS = $(shell uname -s)
+  TOUCH = touch
 # C++
   ifeq ($(OS),Linux)
     CXX = g++
@@ -62,43 +64,14 @@ ifeq ($(SYSTEM),unix)
   endif # ifeq($(OS),Darwin)
   CXX_BIN := $(shell command -v $(CXX) 2> /dev/null)
   DEBUG = -O4 -DNDEBUG
-  CXXFLAGS = -fPIC -std=c++11 $(DEBUG) \
+  CXXFLAGS = -fPIC -std=c++17 $(DEBUG) \
  -I$(INC_DIR) -I. $(ARCH) -Wno-deprecated \
- -DUSE_CBC -DUSE_CLP -DUSE_BOP -DUSE_GLOP
+ -DUSE_BOP -DUSE_GLOP \
+ -DUSE_CBC -DUSE_CLP \
+ -DUSE_SCIP
   LIB_PREFIX = lib
   PRE_LIB = -Llib -Llib64
-  CBC_LNK = -lCbcSolver -lCbc -lOsiCbc -lCgl -lClpSolver -lClp -lOsiClp -lOsi -lCoinUtils
-  ABSL_LNK = \
--labsl_bad_any_cast_impl \
--labsl_bad_optional_access \
--labsl_bad_variant_access \
--labsl_base \
--labsl_city \
--labsl_civil_time \
--labsl_debugging_internal \
--labsl_demangle_internal \
--labsl_dynamic_annotations \
--labsl_examine_stack \
--labsl_failure_signal_handler \
--labsl_graphcycles_internal \
--labsl_hash \
--labsl_hashtablez_sampler \
--labsl_int128 \
--labsl_leak_check \
--labsl_malloc_internal \
--labsl_optional \
--labsl_raw_hash_set \
--labsl_spinlock_wait \
--labsl_stacktrace \
--labsl_str_format_internal \
--labsl_strings \
--labsl_strings_internal \
--labsl_symbolize \
--labsl_synchronization \
--labsl_throw_delegate \
--labsl_time \
--labsl_time_zone
-  OR_TOOLS_LNK = $(PRE_LIB) $(ABSL_LNK) -lprotobuf -lglog -lgflags $(CBC_LNK) -lortools
+  OR_TOOLS_LNK = $(PRE_LIB) -lortools
   OBJ_OUT = -o #
   EXE_OUT = -o #
   O = .o
@@ -115,6 +88,7 @@ else
   JAR_BIN := $(shell command -v jar 2> /dev/null)
   JAVA_BIN := $(shell command -v java 2> /dev/null)
 endif
+  MVN_BIN := $(shell command -v mvn 2> /dev/null)
   JAVAFLAGS = -Djava.library.path=$(LIB_DIR)
   CPSEP = :
 # .Net
@@ -130,6 +104,7 @@ endif # SYSTEM == unix
 # Windows specific part.
 ifeq ($(SYSTEM),win)
   WHICH = tools\\win\\which.exe
+  TOUCH = tools\\win\\touch.exe
   ifeq ("$(Platform)","X64")
     PLATFORM = Win64
   endif
@@ -148,11 +123,13 @@ ifeq ($(SYSTEM),win)
   # so we ship which.exe and use it
   CXX_BIN := $(shell $(WHICH) $(CXX) 2> NUL)
   DEBUG = /O2 -DNDEBUG
-  CXXFLAGS = /EHsc /MD /nologo /D_SILENCE_STDEXT_HASH_DEPRECATION_WARNINGS -nologo $(DEBUG) \
-    /D__WIN32__ /DNOMINMAX /DWIN32_LEAN_AND_MEAN=1 /D_CRT_SECURE_NO_WARNINGS \
-    /DGFLAGS_DLL_DECL= /DGFLAGS_DLL_DECLARE_FLAG= /DGFLAGS_DLL_DEFINE_FLAG= \
+  CXXFLAGS = /std:c++17 /EHsc /MD /nologo /D_SILENCE_STDEXT_HASH_DEPRECATION_WARNINGS -nologo $(DEBUG) \
+    /DPSAPI_VERSION=1 /D__WIN32__ /DNOMINMAX /DWIN32_LEAN_AND_MEAN=1 /D_CRT_SECURE_NO_WARNINGS \
+    /DGOOGLE_GLOG_DLL_DECL= \
     /I$(INC_DIR)\\src\\windows /I$(INC_DIR) /I. \
-    -DUSE_CBC -DUSE_CLP -DUSE_BOP -DUSE_GLOP
+    /DUSE_BOP /DUSE_GLOP \
+    /DUSE_CBC /DUSE_CLP \
+    /DUSE_SCIP
   LDFLAGS = psapi.lib ws2_32.lib
   LIB_PREFIX =
   OR_TOOLS_LNK = lib\\ortools.lib
@@ -167,6 +144,7 @@ ifeq ($(SYSTEM),win)
   JAVAC_BIN := $(shell $(WHICH) javac 2> NUL)
   JAR_BIN := $(shell $(WHICH) jar 2> NUL)
   JAVA_BIN := $(shell $(WHICH) java 2> NUL)
+  MVN_BIN := $(shell $(WHICH) mvn.cmd 2> NUL)
   JAVAFLAGS = -Djava.library.path=$(LIB_DIR)
   CPSEP = ;
 # .Net
@@ -207,6 +185,7 @@ clean:
 
 .PHONY: detect_port
 detect_port:
+	@echo VERSION = $(VERSION)
 	@echo SHELL = $(SHELL)
 	@echo SYSTEM = $(SYSTEM)
 	@echo PORT = $(PORT)
@@ -299,11 +278,20 @@ test_cc: detect_cc
 	$(MAKE) run SOURCE=examples/cpp/vrp.cc
 	$(MAKE) run SOURCE=examples/cpp/nurses_cp.cc
 	$(MAKE) run SOURCE=examples/cpp/minimal_jobshop_cp.cc
+	$(MAKE) run SOURCE=examples/cpp/linear_programming.cc
+	$(MAKE) run SOURCE=examples/cpp/integer_programming.cc
 
 ##################
 ##  C++ SOURCE  ##
 ##################
-ifeq ($(SOURCE_SUFFIX),.cc) # Those rules will be used if SOURCE contain a .cc file
+IS_CPP =
+ifeq ($(SOURCE_SUFFIX),.cc)
+    IS_CPP = true
+endif
+ifeq ($(SOURCE_SUFFIX),.cpp)
+    IS_CPP = true
+endif
+ifdef IS_CPP # Those rules will be used if SOURCE contain a .cc or .cpp file
 $(OBJ_DIR)/$(SOURCE_NAME).$O: $(SOURCE) | $(OBJ_DIR)
 	$(CXX) $(CXXFLAGS) \
  -c $(SOURCE_PATH) \
@@ -321,8 +309,7 @@ build: $(BIN_DIR)/$(SOURCE_NAME)$E
 .PHONY: run # Run a C++ program.
 run: build
 	$(BIN_DIR)$S$(SOURCE_NAME)$E $(ARGS)
-endif # ifeq ($(SOURCE_SUFFIX),.cc)
-
+endif # ifeq IS_CPP
 endif # ifndef CXX_BIN
 
 $(OBJ_DIR):
@@ -350,62 +337,6 @@ endif
 ############
 ##  JAVA  ##
 ############
-JAR = \
-$(LIB_DIR)/LinearProgramming$J \
-$(LIB_DIR)/IntegerProgramming$J \
-$(LIB_DIR)/RabbitsPheasants$J \
-$(LIB_DIR)/Tsp$J \
-$(LIB_DIR)/Vrp$J \
-$(LIB_DIR)/Knapsack$J \
-\
-$(LIB_DIR)/AllDifferentExcept0$J \
-$(LIB_DIR)/AllInterval$J \
-$(LIB_DIR)/CapacitatedVehicleRoutingProblemWithTimeWindows$J \
-$(LIB_DIR)/Circuit$J \
-$(LIB_DIR)/CoinsGrid$J \
-$(LIB_DIR)/CoinsGridMIP$J \
-$(LIB_DIR)/ColoringMIP$J \
-$(LIB_DIR)/CoveringOpl$J \
-$(LIB_DIR)/Crossword$J \
-$(LIB_DIR)/DeBruijn$J \
-$(LIB_DIR)/Diet$J \
-$(LIB_DIR)/DietMIP$J \
-$(LIB_DIR)/DivisibleBy9Through1$J \
-$(LIB_DIR)/FlowExample$J \
-$(LIB_DIR)/GolombRuler$J \
-$(LIB_DIR)/Issue173$J \
-$(LIB_DIR)/KnapsackMIP$J \
-$(LIB_DIR)/LeastDiff$J \
-$(LIB_DIR)/LinearAssignmentAPI$J \
-$(LIB_DIR)/MagicSquare$J \
-$(LIB_DIR)/Map2$J \
-$(LIB_DIR)/Map$J \
-$(LIB_DIR)/Minesweeper$J \
-$(LIB_DIR)/MultiThreadTest$J \
-$(LIB_DIR)/NQueens2$J \
-$(LIB_DIR)/NQueens$J \
-$(LIB_DIR)/Partition$J \
-$(LIB_DIR)/QuasigroupCompletion$J \
-$(LIB_DIR)/SendMoreMoney2$J \
-$(LIB_DIR)/SendMoreMoney$J \
-$(LIB_DIR)/SendMostMoney$J \
-$(LIB_DIR)/Seseman$J \
-$(LIB_DIR)/SetCovering2$J \
-$(LIB_DIR)/SetCovering3$J \
-$(LIB_DIR)/SetCovering4$J \
-$(LIB_DIR)/SetCoveringDeployment$J \
-$(LIB_DIR)/SetCovering$J \
-$(LIB_DIR)/SimpleRoutingTest$J \
-$(LIB_DIR)/StableMarriage$J \
-$(LIB_DIR)/StiglerMIP$J \
-$(LIB_DIR)/Strimko2$J \
-$(LIB_DIR)/Sudoku$J \
-$(LIB_DIR)/SurvoPuzzle$J \
-$(LIB_DIR)/ToNum$J \
-$(LIB_DIR)/WhoKilledAgatha$J \
-$(LIB_DIR)/Xkcd$J \
-$(LIB_DIR)/YoungTableaux$J
-
 HAS_JAVA = true
 ifndef JAVAC_BIN
 HAS_JAVA =
@@ -416,59 +347,119 @@ endif
 ifndef JAVA_BIN
 HAS_JAVA =
 endif
+ifndef MVN_BIN
+HAS_JAVA =
+endif
 
 .PHONY: java test_java
 ifndef HAS_JAVA
 java test_java:
-	@echo the command 'java', 'javac' or 'jar' was not found in your PATH
+	@echo the command 'java', 'javac', 'jar' or 'mvn' was not found in your PATH
 	exit 127
 else
-java: $(JAR)
+java:
+	$(MAKE) run SOURCE=examples/java/LinearProgramming/src/main/java/com/google/ortools/LinearProgramming.java
+	$(MAKE) run SOURCE=examples/java/IntegerProgramming/src/main/java/com/google/ortools/IntegerProgramming.java
+	$(MAKE) run SOURCE=examples/java/RabbitsPheasants/src/main/java/com/google/ortools/RabbitsPheasants.java
+	$(MAKE) run SOURCE=examples/java/Tsp/src/main/java/com/google/ortools/Tsp.java
+	$(MAKE) run SOURCE=examples/java/Vrp/src/main/java/com/google/ortools/Vrp.java
+	$(MAKE) run SOURCE=examples/java/Knapsack/src/main/java/com/google/ortools/Knapsack.java
+	$(MAKE) run SOURCE=examples/java/AllDifferentExcept0/src/main/java/com/google/ortools/AllDifferentExcept0.java
+	$(MAKE) run SOURCE=examples/java/AllInterval/src/main/java/com/google/ortools/AllInterval.java
+	$(MAKE) run SOURCE=examples/java/CapacitatedVehicleRoutingProblemWithTimeWindows/src/main/java/com/google/ortools/CapacitatedVehicleRoutingProblemWithTimeWindows.java
+	$(MAKE) run SOURCE=examples/java/Circuit/src/main/java/com/google/ortools/Circuit.java
+	$(MAKE) run SOURCE=examples/java/CoinsGrid/src/main/java/com/google/ortools/CoinsGrid.java
+	$(MAKE) run SOURCE=examples/java/CoinsGridMIP/src/main/java/com/google/ortools/CoinsGridMIP.java
+	$(MAKE) run SOURCE=examples/java/ColoringMIP/src/main/java/com/google/ortools/ColoringMIP.java
+	$(MAKE) run SOURCE=examples/java/CoveringOpl/src/main/java/com/google/ortools/CoveringOpl.java
+	$(MAKE) run SOURCE=examples/java/Crossword/src/main/java/com/google/ortools/Crossword.java
+	$(MAKE) run SOURCE=examples/java/DeBruijn/src/main/java/com/google/ortools/DeBruijn.java
+	$(MAKE) run SOURCE=examples/java/Diet/src/main/java/com/google/ortools/Diet.java
+	$(MAKE) run SOURCE=examples/java/DietMIP/src/main/java/com/google/ortools/DietMIP.java
+	$(MAKE) run SOURCE=examples/java/DivisibleBy9Through1/src/main/java/com/google/ortools/DivisibleBy9Through1.java
+	$(MAKE) run SOURCE=examples/java/FlowExample/src/main/java/com/google/ortools/FlowExample.java
+	$(MAKE) run SOURCE=examples/java/GolombRuler/src/main/java/com/google/ortools/GolombRuler.java
+	$(MAKE) run SOURCE=examples/java/Issue173/src/main/java/com/google/ortools/Issue173.java
+	$(MAKE) run SOURCE=examples/java/KnapsackMIP/src/main/java/com/google/ortools/KnapsackMIP.java
+	$(MAKE) run SOURCE=examples/java/LeastDiff/src/main/java/com/google/ortools/LeastDiff.java
+	$(MAKE) run SOURCE=examples/java/LinearAssignmentAPI/src/main/java/com/google/ortools/LinearAssignmentAPI.java
+	$(MAKE) run SOURCE=examples/java/MagicSquare/src/main/java/com/google/ortools/MagicSquare.java
+	$(MAKE) run SOURCE=examples/java/Map2/src/main/java/com/google/ortools/Map2.java
+	$(MAKE) run SOURCE=examples/java/Map/src/main/java/com/google/ortools/Map.java
+	$(MAKE) run SOURCE=examples/java/Minesweeper/src/main/java/com/google/ortools/Minesweeper.java
+	$(MAKE) run SOURCE=examples/java/MultiThreadTest/src/main/java/com/google/ortools/MultiThreadTest.java
+	$(MAKE) run SOURCE=examples/java/NQueens2/src/main/java/com/google/ortools/NQueens2.java
+	$(MAKE) run SOURCE=examples/java/NQueens/src/main/java/com/google/ortools/NQueens.java
+	$(MAKE) run SOURCE=examples/java/Partition/src/main/java/com/google/ortools/Partition.java
+	$(MAKE) run SOURCE=examples/java/QuasigroupCompletion/src/main/java/com/google/ortools/QuasigroupCompletion.java
+	$(MAKE) run SOURCE=examples/java/SendMoreMoney2/src/main/java/com/google/ortools/SendMoreMoney2.java
+	$(MAKE) run SOURCE=examples/java/SendMoreMoney/src/main/java/com/google/ortools/SendMoreMoney.java
+	$(MAKE) run SOURCE=examples/java/SendMostMoney/src/main/java/com/google/ortools/SendMostMoney.java
+	$(MAKE) run SOURCE=examples/java/Seseman/src/main/java/com/google/ortools/Seseman.java
+	$(MAKE) run SOURCE=examples/java/SetCovering2/src/main/java/com/google/ortools/SetCovering2.java
+	$(MAKE) run SOURCE=examples/java/SetCovering3/src/main/java/com/google/ortools/SetCovering3.java
+	$(MAKE) run SOURCE=examples/java/SetCovering4/src/main/java/com/google/ortools/SetCovering4.java
+	$(MAKE) run SOURCE=examples/java/SetCoveringDeployment/src/main/java/com/google/ortools/SetCoveringDeployment.java
+	$(MAKE) run SOURCE=examples/java/SetCovering/src/main/java/com/google/ortools/SetCovering.java
+	$(MAKE) run SOURCE=examples/java/SimpleRoutingTest/src/main/java/com/google/ortools/SimpleRoutingTest.java
+	$(MAKE) run SOURCE=examples/java/StableMarriage/src/main/java/com/google/ortools/StableMarriage.java
+	$(MAKE) run SOURCE=examples/java/StiglerMIP/src/main/java/com/google/ortools/StiglerMIP.java
+	$(MAKE) run SOURCE=examples/java/Strimko2/src/main/java/com/google/ortools/Strimko2.java
+	$(MAKE) run SOURCE=examples/java/Sudoku/src/main/java/com/google/ortools/Sudoku.java
+	$(MAKE) run SOURCE=examples/java/SurvoPuzzle/src/main/java/com/google/ortools/SurvoPuzzle.java
+	$(MAKE) run SOURCE=examples/java/ToNum/src/main/java/com/google/ortools/ToNum.java
+	$(MAKE) run SOURCE=examples/java/WhoKilledAgatha/src/main/java/com/google/ortools/WhoKilledAgatha.java
+	$(MAKE) run SOURCE=examples/java/Xkcd/src/main/java/com/google/ortools/Xkcd.java
+	$(MAKE) run SOURCE=examples/java/YoungTableaux/src/main/java/com/google/ortools/YoungTableaux.java
+
 test_java: detect_java
-	$(MAKE) run SOURCE=examples/java/SimpleLpProgram.java
-	$(MAKE) run SOURCE=examples/java/SimpleMipProgram.java
-	$(MAKE) run SOURCE=examples/java/SimpleSatProgram.java
-	$(MAKE) run SOURCE=examples/java/Tsp.java
-	$(MAKE) run SOURCE=examples/java/Vrp.java
-	$(MAKE) run SOURCE=examples/java/Knapsack.java
+	$(MAKE) run SOURCE=examples/java/SimpleLpProgram/src/main/java/com/google/ortools/SimpleLpProgram.java
+	$(MAKE) run SOURCE=examples/java/SimpleMipProgram/src/main/java/com/google/ortools/SimpleMipProgram.java
+	$(MAKE) run SOURCE=examples/java/SimpleSatProgram/src/main/java/com/google/ortools/SimpleSatProgram.java
+	$(MAKE) run SOURCE=examples/java/Tsp/src/main/java/com/google/ortools/Tsp.java
+	$(MAKE) run SOURCE=examples/java/Vrp/src/main/java/com/google/ortools/Vrp.java
+	$(MAKE) run SOURCE=examples/java/Knapsack/src/main/java/com/google/ortools/Knapsack.java
 
 ###################
 ##  Java SOURCE  ##
 ###################
 ifeq ($(SOURCE_SUFFIX),.java) # Those rules will be used if SOURCE contain a .java file
-$(CLASS_DIR)/$(SOURCE_NAME): $(SOURCE) | $(CLASS_DIR)
-	-$(MKDIR) $(CLASS_DIR)$S$(SOURCE_NAME)
-	"$(JAVAC_BIN)" -d $(CLASS_DIR)$S$(SOURCE_NAME) \
- -cp $(LIB_DIR)$Scom.google.ortools.jar$(CPSEP)$(LIB_DIR)$Sprotobuf.jar \
- $(SOURCE_PATH)
-
-$(LIB_DIR)/$(SOURCE_NAME)$J: $(CLASS_DIR)/$(SOURCE_NAME) | $(LIB_DIR)
-	-$(DEL) $(LIB_DIR)$S$(SOURCE_NAME)$J
-	"$(JAR_BIN)" cvf $(LIB_DIR)$S$(SOURCE_NAME)$J -C $(CLASS_DIR)$S$(SOURCE_NAME) .
-
 .PHONY: build # Build a Java program.
-build: $(LIB_DIR)/$(SOURCE_NAME)$J
+build: $(SOURCE) examples/java/$(SOURCE_NAME)/pom.xml | java.log
+	cd examples$Sjava$S$(SOURCE_NAME) && "$(MVN_BIN)" compile
 
 .PHONY: run # Run a Java program.
 run: build
-	"$(JAVA_BIN)" -Xss2048k $(JAVAFLAGS) \
- -cp $(LIB_DIR)$S$(SOURCE_NAME)$J$(CPSEP)$(LIB_DIR)$Scom.google.ortools.jar$(CPSEP)$(LIB_DIR)$Sprotobuf.jar \
- $(SOURCE_NAME) $(ARGS)
+	cd examples$Sjava$S$(SOURCE_NAME) && "$(MVN_BIN)" exec:java $(ARGS)
 endif # ifeq ($(SOURCE_SUFFIX),.java)
 
 endif # ifndef HAS_JAVA
 
-$(CLASS_DIR):
-	-$(MKDIR) $(CLASS_DIR)
+ifeq ($(OS),Windows)
+JAVA_NATIVE_IDENTIFIER=win32-x86-64
+else
+  ifeq ($(OS),Linux)
+  JAVA_NATIVE_IDENTIFIER=linux-x86-64
+  else
+    ifeq ($(OS),Darwin)
+    JAVA_NATIVE_IDENTIFIER=darwin-x86-64
+    else
+    $(error OS unknown !)
+    endif
+  endif
+endif
 
-$(CLASS_DIR)/%: $(JAVA_EX_DIR)/%.java | $(CLASS_DIR)
-	-$(MKDIR) $(CLASS_DIR)$S$*
-	"$(JAVAC_BIN)" -d $(CLASS_DIR)$S$* \
- -cp $(LIB_DIR)$Scom.google.ortools$J$(CPSEP)$(LIB_DIR)$Sprotobuf$J \
- $(JAVA_EX_PATH)$S$*.java
+JAVA_NATIVE_PROJECT := ortools-$(JAVA_NATIVE_IDENTIFIER)-@PROJECT_VERSION@.jar
+JAVA_PROJECT := ortools-java-@PROJECT_VERSION@.jar
 
-$(LIB_DIR)/%$J: $(CLASS_DIR)/% | $(LIB_DIR)
-	"$(JAR_BIN)" cvf $(LIB_DIR)$S$*$J -C $(CLASS_DIR)$S$* .
+java.log: \
+ $(JAVA_NATIVE_PROJECT) pom-runtime.xml \
+ $(JAVA_PROJECT) pom-local.xml
+	"$(MVN_BIN)" org.apache.maven.plugins:maven-install-plugin:3.0.0-M1:install-file \
+-Dfile=$(JAVA_NATIVE_PROJECT)
+	"$(MVN_BIN)" org.apache.maven.plugins:maven-install-plugin:3.0.0-M1:install-file \
+-Dfile=$(JAVA_PROJECT)
+	@$(TOUCH) $@
 
 .PHONY: detect_java
 detect_java:
@@ -478,6 +469,7 @@ detect_java:
 	@echo JAR_BIN = $(JAR_BIN)
 	@echo JAVA_BIN = $(JAVA_BIN)
 	@echo JAVAFLAGS = $(JAVAFLAGS)
+	@echo MVN_BIN = $(MVN_BIN)
 ifeq ($(SYSTEM),win)
 	@echo off & echo(
 else
@@ -494,154 +486,155 @@ dotnet test_dotnet:
 	exit 127
 else
 dotnet:
-	$(MAKE) run SOURCE=examples/dotnet/3_jugs_regular.cs
+	$(MAKE) run SOURCE=examples/dotnet/3_jugs_regular/3_jugs_regular.cs
 # Linear Solver
-	$(MAKE) run SOURCE=examples/dotnet/SimpleLpProgram.cs
-	$(MAKE) run SOURCE=examples/dotnet/SimpleMipProgram.cs
+	$(MAKE) run SOURCE=examples/dotnet/SimpleLpProgram/SimpleLpProgram.cs
+	$(MAKE) run SOURCE=examples/dotnet/SimpleMipProgram/SimpleMipProgram.cs
 # Constraint Solver
-	$(MAKE) run SOURCE=examples/dotnet/Tsp.cs
-	$(MAKE) run SOURCE=examples/dotnet/Vrp.cs
+	$(MAKE) run SOURCE=examples/dotnet/Tsp/Tsp.cs
+	$(MAKE) run SOURCE=examples/dotnet/Vrp/Vrp.cs
 # Sat
-	$(MAKE) run SOURCE=examples/dotnet/NursesSat.cs
-	$(MAKE) run SOURCE=examples/dotnet/JobshopSat.cs
-	$(MAKE) run SOURCE=examples/dotnet/JobshopFt06Sat.cs
-	$(MAKE) run SOURCE=examples/dotnet/GateSchedulingSat.cs
-	$(MAKE) run SOURCE=examples/dotnet/TaskSchedulingSat.cs
+	$(MAKE) run SOURCE=examples/dotnet/NursesSat/NursesSat.cs
+	$(MAKE) run SOURCE=examples/dotnet/JobshopSat/JobshopSat.cs
+	$(MAKE) run SOURCE=examples/dotnet/JobshopFt06Sat/JobshopFt06Sat.cs
+	$(MAKE) run SOURCE=examples/dotnet/GateSchedulingSat/GateSchedulingSat.cs
+	$(MAKE) run SOURCE=examples/dotnet/TaskSchedulingSat/TaskSchedulingSat.cs
 # Misc
-	$(MAKE) run SOURCE=examples/dotnet/cslinearprogramming.cs
-	$(MAKE) run SOURCE=examples/dotnet/csintegerprogramming.cs
-	$(MAKE) run SOURCE=examples/dotnet/assignment.cs
-	$(MAKE) run SOURCE=examples/dotnet/alldifferent_except_0.cs
-	$(MAKE) run SOURCE=examples/dotnet/all_interval.cs
-	$(MAKE) run SOURCE=examples/dotnet/a_puzzle.cs
-	$(MAKE) run SOURCE=examples/dotnet/a_round_of_golf.cs
-	$(MAKE) run SOURCE=examples/dotnet/broken_weights.cs
-	$(MAKE) run SOURCE=examples/dotnet/bus_schedule.cs
-	$(MAKE) run SOURCE=examples/dotnet/circuit2.cs
-	$(MAKE) run SOURCE=examples/dotnet/circuit.cs
-	$(MAKE) run SOURCE=examples/dotnet/coins3.cs
-	$(MAKE) run SOURCE=examples/dotnet/coins_grid.cs ARGS="5 2"
-	$(MAKE) run SOURCE=examples/dotnet/combinatorial_auction2.cs
-	$(MAKE) run SOURCE=examples/dotnet/contiguity_regular.cs
-	$(MAKE) run SOURCE=examples/dotnet/contiguity_transition.cs
-	$(MAKE) run SOURCE=examples/dotnet/costas_array.cs
-	$(MAKE) run SOURCE=examples/dotnet/covering_opl.cs
-	$(MAKE) run SOURCE=examples/dotnet/crew.cs
-	$(MAKE) run SOURCE=examples/dotnet/crossword.cs
-	$(MAKE) run SOURCE=examples/dotnet/crypta.cs
-	$(MAKE) run SOURCE=examples/dotnet/crypto.cs
-	$(MAKE) run SOURCE=examples/dotnet/cscvrptw.cs
-	$(MAKE) run SOURCE=examples/dotnet/csflow.cs
-	$(MAKE) run SOURCE=examples/dotnet/csknapsack.cs
-	$(MAKE) run SOURCE=examples/dotnet/csls_api.cs
-	$(MAKE) run SOURCE=examples/dotnet/csrabbitspheasants.cs
-	$(MAKE) run SOURCE=examples/dotnet/cstsp.cs
-	$(MAKE) run SOURCE=examples/dotnet/curious_set_of_integers.cs
-	$(MAKE) run SOURCE=examples/dotnet/debruijn.cs
-	$(MAKE) run SOURCE=examples/dotnet/csdiet.cs
-	$(MAKE) run SOURCE=examples/dotnet/discrete_tomography.cs
-	$(MAKE) run SOURCE=examples/dotnet/divisible_by_9_through_1.cs
-	$(MAKE) run SOURCE=examples/dotnet/dudeney.cs
-	$(MAKE) run SOURCE=examples/dotnet/einav_puzzle2.cs
-	$(MAKE) run SOURCE=examples/dotnet/eq10.cs
-	$(MAKE) run SOURCE=examples/dotnet/eq20.cs
-	$(MAKE) run SOURCE=examples/dotnet/fill_a_pix.cs
-	$(MAKE) run SOURCE=examples/dotnet/furniture_moving.cs
-	$(MAKE) run SOURCE=examples/dotnet/furniture_moving_intervals.cs
-	$(MAKE) run SOURCE=examples/dotnet/futoshiki.cs
-	$(MAKE) run SOURCE=examples/dotnet/golomb_ruler.cs
-	$(MAKE) run SOURCE=examples/dotnet/grocery.cs
-	$(MAKE) run SOURCE=examples/dotnet/hidato_table.cs
-	$(MAKE) run SOURCE=examples/dotnet/just_forgotten.cs
-	$(MAKE) run SOURCE=examples/dotnet/kakuro.cs
-	$(MAKE) run SOURCE=examples/dotnet/kenken2.cs
-	$(MAKE) run SOURCE=examples/dotnet/killer_sudoku.cs
-	$(MAKE) run SOURCE=examples/dotnet/labeled_dice.cs
-	$(MAKE) run SOURCE=examples/dotnet/langford.cs
-	$(MAKE) run SOURCE=examples/dotnet/least_diff.cs
-	$(MAKE) run SOURCE=examples/dotnet/lectures.cs
-	$(MAKE) run SOURCE=examples/dotnet/magic_sequence.cs
-	$(MAKE) run SOURCE=examples/dotnet/magic_square_and_cards.cs
-	$(MAKE) run SOURCE=examples/dotnet/magic_square.cs
-	$(MAKE) run SOURCE=examples/dotnet/map2.cs
-	$(MAKE) run SOURCE=examples/dotnet/map.cs
-	$(MAKE) run SOURCE=examples/dotnet/marathon2.cs
-	$(MAKE) run SOURCE=examples/dotnet/max_flow_taha.cs
-	$(MAKE) run SOURCE=examples/dotnet/max_flow_winston1.cs
-	$(MAKE) run SOURCE=examples/dotnet/minesweeper.cs
-	$(MAKE) run SOURCE=examples/dotnet/mr_smith.cs
-#	$(MAKE) run SOURCE=examples/dotnet/nontransitive_dice.cs # too long
-	$(MAKE) run SOURCE=examples/dotnet/nqueens.cs
-	$(MAKE) run SOURCE=examples/dotnet/nurse_rostering_regular.cs
-	$(MAKE) run SOURCE=examples/dotnet/nurse_rostering_transition.cs
-	$(MAKE) run SOURCE=examples/dotnet/olympic.cs
-	$(MAKE) run SOURCE=examples/dotnet/organize_day.cs
-	$(MAKE) run SOURCE=examples/dotnet/organize_day_intervals.cs
-	$(MAKE) run SOURCE=examples/dotnet/pandigital_numbers.cs
-#	$(MAKE) run SOURCE=examples/dotnet/partition.cs # too long
-	$(MAKE) run SOURCE=examples/dotnet/perfect_square_sequence.cs
-	$(MAKE) run SOURCE=examples/dotnet/photo_problem.cs
-	$(MAKE) run SOURCE=examples/dotnet/place_number_puzzle.cs
-	$(MAKE) run SOURCE=examples/dotnet/p_median.cs
-	$(MAKE) run SOURCE=examples/dotnet/post_office_problem2.cs
-	$(MAKE) run SOURCE=examples/dotnet/quasigroup_completion.cs
-	$(MAKE) run SOURCE=examples/dotnet/regex.cs
-	$(MAKE) run SOURCE=examples/dotnet/rogo2.cs
-	$(MAKE) run SOURCE=examples/dotnet/scheduling_speakers.cs
-	$(MAKE) run SOURCE=examples/dotnet/secret_santa2.cs
-#	$(MAKE) run SOURCE=examples/dotnet/secret_santa.cs # too long
-	$(MAKE) run SOURCE=examples/dotnet/send_more_money2.cs
-	$(MAKE) run SOURCE=examples/dotnet/send_more_money.cs
-	$(MAKE) run SOURCE=examples/dotnet/send_most_money.cs
-	$(MAKE) run SOURCE=examples/dotnet/seseman.cs
-	$(MAKE) run SOURCE=examples/dotnet/set_covering2.cs
-	$(MAKE) run SOURCE=examples/dotnet/set_covering3.cs
-	$(MAKE) run SOURCE=examples/dotnet/set_covering4.cs
-	$(MAKE) run SOURCE=examples/dotnet/set_covering.cs
-	$(MAKE) run SOURCE=examples/dotnet/set_covering_deployment.cs
-	$(MAKE) run SOURCE=examples/dotnet/set_covering_skiena.cs
-	$(MAKE) run SOURCE=examples/dotnet/set_partition.cs
-	$(MAKE) run SOURCE=examples/dotnet/sicherman_dice.cs
-	$(MAKE) run SOURCE=examples/dotnet/ski_assignment.cs
-	$(MAKE) run SOURCE=examples/dotnet/stable_marriage.cs
-	$(MAKE) run SOURCE=examples/dotnet/strimko2.cs
-	$(MAKE) run SOURCE=examples/dotnet/subset_sum.cs
-	$(MAKE) run SOURCE=examples/dotnet/sudoku.cs
-	$(MAKE) run SOURCE=examples/dotnet/survo_puzzle.cs
-	$(MAKE) run SOURCE=examples/dotnet/to_num.cs
-	$(MAKE) run SOURCE=examples/dotnet/traffic_lights.cs
-	$(MAKE) run SOURCE=examples/dotnet/volsay.cs
-	$(MAKE) run SOURCE=examples/dotnet/volsay2.cs
-	$(MAKE) run SOURCE=examples/dotnet/volsay3.cs
-	$(MAKE) run SOURCE=examples/dotnet/wedding_optimal_chart.cs
-	$(MAKE) run SOURCE=examples/dotnet/who_killed_agatha.cs
-	$(MAKE) run SOURCE=examples/dotnet/xkcd.cs
-	$(MAKE) run SOURCE=examples/dotnet/young_tableaux.cs
-	$(MAKE) run SOURCE=examples/dotnet/zebra.cs
-	$(MAKE) run SOURCE=examples/dotnet/fsintegerprogramming.fs
-	$(MAKE) run SOURCE=examples/dotnet/fslinearprogramming.fs
-	$(MAKE) run SOURCE=examples/dotnet/fsdiet.fs
-	$(MAKE) run SOURCE=examples/dotnet/fsequality.fs
-	$(MAKE) run SOURCE=examples/dotnet/fsequality-inequality.fs
-	$(MAKE) run SOURCE=examples/dotnet/fsinteger-linear-program.fs
-	$(MAKE) run SOURCE=examples/dotnet/fsknapsack.fs
-	$(MAKE) run SOURCE=examples/dotnet/fsnetwork-max-flow.fs
-	$(MAKE) run SOURCE=examples/dotnet/fsnetwork-max-flow-lpSolve.fs
-	$(MAKE) run SOURCE=examples/dotnet/fsnetwork-min-cost-flow.fs
-	$(MAKE) run SOURCE=examples/dotnet/fsProgram.fs
-	$(MAKE) run SOURCE=examples/dotnet/fsrabbit-pheasant.fs
-	$(MAKE) run SOURCE=examples/dotnet/fsvolsay3.fs
-	$(MAKE) run SOURCE=examples/dotnet/fsvolsay3-lpSolve.fs
-	$(MAKE) run SOURCE=examples/dotnet/fsvolsay.fs
-#	$(MAKE) run SOURCE=examples/dotnet/word_square.cs # depends on /usr/share/dict/words
+	$(MAKE) run SOURCE=examples/dotnet/cslinearprogramming/cslinearprogramming.cs
+	$(MAKE) run SOURCE=examples/dotnet/csintegerprogramming/csintegerprogramming.cs
+	$(MAKE) run SOURCE=examples/dotnet/assignment/assignment.cs
+	$(MAKE) run SOURCE=examples/dotnet/alldifferent_except_0/alldifferent_except_0.cs
+	$(MAKE) run SOURCE=examples/dotnet/all_interval/all_interval.cs
+	$(MAKE) run SOURCE=examples/dotnet/a_puzzle/a_puzzle.cs
+	$(MAKE) run SOURCE=examples/dotnet/a_round_of_golf/a_round_of_golf.cs
+	$(MAKE) run SOURCE=examples/dotnet/broken_weights/broken_weights.cs
+	$(MAKE) run SOURCE=examples/dotnet/bus_schedule/bus_schedule.cs
+	$(MAKE) run SOURCE=examples/dotnet/circuit2/circuit2.cs
+	$(MAKE) run SOURCE=examples/dotnet/circuit/circuit.cs
+	$(MAKE) run SOURCE=examples/dotnet/coins3/coins3.cs
+	$(MAKE) run SOURCE=examples/dotnet/coins_grid/coins_grid.cs ARGS="5 2"
+	$(MAKE) run SOURCE=examples/dotnet/combinatorial_auction2/combinatorial_auction2.cs
+	$(MAKE) run SOURCE=examples/dotnet/contiguity_regular/contiguity_regular.cs
+	$(MAKE) run SOURCE=examples/dotnet/contiguity_transition/contiguity_transition.cs
+	$(MAKE) run SOURCE=examples/dotnet/costas_array/costas_array.cs
+	$(MAKE) run SOURCE=examples/dotnet/covering_opl/covering_opl.cs
+	$(MAKE) run SOURCE=examples/dotnet/crew/crew.cs
+	$(MAKE) run SOURCE=examples/dotnet/crossword/crossword.cs
+	$(MAKE) run SOURCE=examples/dotnet/crypta/crypta.cs
+	$(MAKE) run SOURCE=examples/dotnet/crypto/crypto.cs
+	$(MAKE) run SOURCE=examples/dotnet/cscvrptw/cscvrptw.cs
+	$(MAKE) run SOURCE=examples/dotnet/csflow/csflow.cs
+	$(MAKE) run SOURCE=examples/dotnet/csknapsack/csknapsack.cs
+	$(MAKE) run SOURCE=examples/dotnet/csls_api/csls_api.cs
+	$(MAKE) run SOURCE=examples/dotnet/csrabbitspheasants/csrabbitspheasants.cs
+	$(MAKE) run SOURCE=examples/dotnet/cstsp/cstsp.cs
+	$(MAKE) run SOURCE=examples/dotnet/curious_set_of_integers/curious_set_of_integers.cs
+	$(MAKE) run SOURCE=examples/dotnet/debruijn/debruijn.cs
+	$(MAKE) run SOURCE=examples/dotnet/csdiet/csdiet.cs
+	$(MAKE) run SOURCE=examples/dotnet/discrete_tomography/discrete_tomography.cs
+	$(MAKE) run SOURCE=examples/dotnet/divisible_by_9_through_1/divisible_by_9_through_1.cs
+	$(MAKE) run SOURCE=examples/dotnet/dudeney/dudeney.cs
+	$(MAKE) run SOURCE=examples/dotnet/einav_puzzle2/einav_puzzle2.cs
+	$(MAKE) run SOURCE=examples/dotnet/eq10/eq10.cs
+	$(MAKE) run SOURCE=examples/dotnet/eq20/eq20.cs
+	$(MAKE) run SOURCE=examples/dotnet/fill_a_pix/fill_a_pix.cs
+	$(MAKE) run SOURCE=examples/dotnet/furniture_moving/furniture_moving.cs
+	$(MAKE) run SOURCE=examples/dotnet/furniture_moving_intervals/furniture_moving_intervals.cs
+	$(MAKE) run SOURCE=examples/dotnet/futoshiki/futoshiki.cs
+	$(MAKE) run SOURCE=examples/dotnet/golomb_ruler/golomb_ruler.cs
+	$(MAKE) run SOURCE=examples/dotnet/grocery/grocery.cs
+	$(MAKE) run SOURCE=examples/dotnet/hidato_table/hidato_table.cs
+	$(MAKE) run SOURCE=examples/dotnet/just_forgotten/just_forgotten.cs
+	$(MAKE) run SOURCE=examples/dotnet/kakuro/kakuro.cs
+	$(MAKE) run SOURCE=examples/dotnet/kenken2/kenken2.cs
+	$(MAKE) run SOURCE=examples/dotnet/killer_sudoku/killer_sudoku.cs
+	$(MAKE) run SOURCE=examples/dotnet/labeled_dice/labeled_dice.cs
+	$(MAKE) run SOURCE=examples/dotnet/langford/langford.cs
+	$(MAKE) run SOURCE=examples/dotnet/least_diff/least_diff.cs
+	$(MAKE) run SOURCE=examples/dotnet/lectures/lectures.cs
+	$(MAKE) run SOURCE=examples/dotnet/magic_sequence/magic_sequence.cs
+	$(MAKE) run SOURCE=examples/dotnet/magic_square_and_cards/magic_square_and_cards.cs
+	$(MAKE) run SOURCE=examples/dotnet/magic_square/magic_square.cs
+	$(MAKE) run SOURCE=examples/dotnet/map2/map2.cs
+	$(MAKE) run SOURCE=examples/dotnet/map/map.cs
+	$(MAKE) run SOURCE=examples/dotnet/marathon2/marathon2.cs
+	$(MAKE) run SOURCE=examples/dotnet/max_flow_taha/max_flow_taha.cs
+	$(MAKE) run SOURCE=examples/dotnet/max_flow_winston1/max_flow_winston1.cs
+	$(MAKE) run SOURCE=examples/dotnet/minesweeper/minesweeper.cs
+	$(MAKE) run SOURCE=examples/dotnet/mr_smith/mr_smith.cs
+#	$(MAKE) run SOURCE=examples/dotnet/nontransitive_dice/nontransitive_dice.cs # too long
+	$(MAKE) run SOURCE=examples/dotnet/nqueens/nqueens.cs
+	$(MAKE) run SOURCE=examples/dotnet/nurse_rostering_regular/nurse_rostering_regular.cs
+	$(MAKE) run SOURCE=examples/dotnet/nurse_rostering_transition/nurse_rostering_transition.cs
+	$(MAKE) run SOURCE=examples/dotnet/olympic/olympic.cs
+	$(MAKE) run SOURCE=examples/dotnet/organize_day/organize_day.cs
+	$(MAKE) run SOURCE=examples/dotnet/organize_day_intervals/organize_day_intervals.cs
+	$(MAKE) run SOURCE=examples/dotnet/pandigital_numbers/pandigital_numbers.cs
+#	$(MAKE) run SOURCE=examples/dotnet/partition/partition.cs # too long
+	$(MAKE) run SOURCE=examples/dotnet/perfect_square_sequence/perfect_square_sequence.cs
+	$(MAKE) run SOURCE=examples/dotnet/photo_problem/photo_problem.cs
+	$(MAKE) run SOURCE=examples/dotnet/place_number_puzzle/place_number_puzzle.cs
+	$(MAKE) run SOURCE=examples/dotnet/p_median/p_median.cs
+	$(MAKE) run SOURCE=examples/dotnet/post_office_problem2/post_office_problem2.cs
+	$(MAKE) run SOURCE=examples/dotnet/quasigroup_completion/quasigroup_completion.cs
+	$(MAKE) run SOURCE=examples/dotnet/regex/regex.cs
+	$(MAKE) run SOURCE=examples/dotnet/rogo2/rogo2.cs
+	$(MAKE) run SOURCE=examples/dotnet/scheduling_speakers/scheduling_speakers.cs
+	$(MAKE) run SOURCE=examples/dotnet/secret_santa2/secret_santa2.cs
+#	$(MAKE) run SOURCE=examples/dotnet/secret_santa/secret_santa.cs # too long
+	$(MAKE) run SOURCE=examples/dotnet/send_more_money2/send_more_money2.cs
+	$(MAKE) run SOURCE=examples/dotnet/send_more_money/send_more_money.cs
+	$(MAKE) run SOURCE=examples/dotnet/send_most_money/send_most_money.cs
+	$(MAKE) run SOURCE=examples/dotnet/seseman/seseman.cs
+	$(MAKE) run SOURCE=examples/dotnet/set_covering2/set_covering2.cs
+	$(MAKE) run SOURCE=examples/dotnet/set_covering3/set_covering3.cs
+	$(MAKE) run SOURCE=examples/dotnet/set_covering4/set_covering4.cs
+	$(MAKE) run SOURCE=examples/dotnet/set_covering/set_covering.cs
+	$(MAKE) run SOURCE=examples/dotnet/set_covering_deployment/set_covering_deployment.cs
+	$(MAKE) run SOURCE=examples/dotnet/set_covering_skiena/set_covering_skiena.cs
+	$(MAKE) run SOURCE=examples/dotnet/set_partition/set_partition.cs
+	$(MAKE) run SOURCE=examples/dotnet/sicherman_dice/sicherman_dice.cs
+	$(MAKE) run SOURCE=examples/dotnet/ski_assignment/ski_assignment.cs
+	$(MAKE) run SOURCE=examples/dotnet/stable_marriage/stable_marriage.cs
+	$(MAKE) run SOURCE=examples/dotnet/strimko2/strimko2.cs
+	$(MAKE) run SOURCE=examples/dotnet/subset_sum/subset_sum.cs
+	$(MAKE) run SOURCE=examples/dotnet/sudoku/sudoku.cs
+	$(MAKE) run SOURCE=examples/dotnet/survo_puzzle/survo_puzzle.cs
+	$(MAKE) run SOURCE=examples/dotnet/to_num/to_num.cs
+	$(MAKE) run SOURCE=examples/dotnet/traffic_lights/traffic_lights.cs
+	$(MAKE) run SOURCE=examples/dotnet/volsay/volsay.cs
+	$(MAKE) run SOURCE=examples/dotnet/volsay2/volsay2.cs
+	$(MAKE) run SOURCE=examples/dotnet/volsay3/volsay3.cs
+	$(MAKE) run SOURCE=examples/dotnet/wedding_optimal_chart/wedding_optimal_chart.cs
+	$(MAKE) run SOURCE=examples/dotnet/who_killed_agatha/who_killed_agatha.cs
+	$(MAKE) run SOURCE=examples/dotnet/xkcd/xkcd.cs
+	$(MAKE) run SOURCE=examples/dotnet/young_tableaux/young_tableaux.cs
+	$(MAKE) run SOURCE=examples/dotnet/zebra/zebra.cs
+	$(MAKE) run SOURCE=examples/dotnet/fsintegerprogramming/fsintegerprogramming.fs
+	$(MAKE) run SOURCE=examples/dotnet/fslinearprogramming/fslinearprogramming.fs
+	$(MAKE) run SOURCE=examples/dotnet/fsdiet/fsdiet.fs
+	$(MAKE) run SOURCE=examples/dotnet/fsequality/fsequality.fs
+	$(MAKE) run SOURCE=examples/dotnet/fsequality-inequality/fsequality-inequality.fs
+	$(MAKE) run SOURCE=examples/dotnet/fsinteger-linear-program/fsinteger-linear-program.fs
+	$(MAKE) run SOURCE=examples/dotnet/fsknapsack/fsknapsack.fs
+	$(MAKE) run SOURCE=examples/dotnet/fsnetwork-max-flow/fsnetwork-max-flow.fs
+	$(MAKE) run SOURCE=examples/dotnet/fsnetwork-max-flow-lpSolve/fsnetwork-max-flow-lpSolve.fs
+	$(MAKE) run SOURCE=examples/dotnet/fsnetwork-min-cost-flow/fsnetwork-min-cost-flow.fs
+	$(MAKE) run SOURCE=examples/dotnet/fsProgram/fsProgram.fs
+	$(MAKE) run SOURCE=examples/dotnet/fsrabbit-pheasant/fsrabbit-pheasant.fs
+	$(MAKE) run SOURCE=examples/dotnet/fsvolsay3/fsvolsay3.fs
+	$(MAKE) run SOURCE=examples/dotnet/fsvolsay3-lpSolve/fsvolsay3-lpSolve.fs
+	$(MAKE) run SOURCE=examples/dotnet/fsvolsay/fsvolsay.fs
+#	$(MAKE) run SOURCE=examples/dotnet/word_square/word_square.cs # depends on /usr/share/dict/words
 
 test_dotnet: detect_dotnet
-	$(MAKE) run SOURCE=examples/dotnet/SimpleLpProgram.cs
-	$(MAKE) run SOURCE=examples/dotnet/SimpleMipProgram.cs
-	$(MAKE) run SOURCE=examples/dotnet/Tsp.cs
-	$(MAKE) run SOURCE=examples/dotnet/Vrp.cs
-	$(MAKE) run SOURCE=examples/dotnet/JobshopSat.cs
-	$(MAKE) run SOURCE=examples/dotnet/NursesSat.cs
+	$(MAKE) run SOURCE=examples/dotnet/SimpleLpProgram/SimpleLpProgram.cs
+	$(MAKE) run SOURCE=examples/dotnet/SimpleMipProgram/SimpleMipProgram.cs
+	$(MAKE) run SOURCE=examples/dotnet/Tsp/Tsp.cs
+	$(MAKE) run SOURCE=examples/dotnet/Vrp/Vrp.cs
+	$(MAKE) run SOURCE=examples/dotnet/JobshopSat/JobshopSat.cs
+	$(MAKE) run SOURCE=examples/dotnet/NursesSat/NursesSat.cs
+	$(MAKE) run SOURCE=examples/dotnet/fsProgram/fsProgram.fs
 
 ###################
 ##  .NET SOURCE  ##
@@ -658,7 +651,7 @@ build: $(SOURCE) $(SOURCE)proj
 
 .PHONY: run # Run a .Net C# program.
 run: build
-	"$(DOTNET_BIN)" run --no-build --project $(SOURCE_PATH)proj -- $(ARGS)
+	"$(DOTNET_BIN)" run --no-build --framework net6.0 --project $(SOURCE_PATH)proj -- $(ARGS)
 endif # ifeq ($(SOURCE_SUFFIX),.cs)
 
 # .Net F#
@@ -673,7 +666,7 @@ build: $(SOURCE) $(SOURCE)proj
 
 .PHONY: run # Run a .Net F# program.
 run: build
-	"$(DOTNET_BIN)" run --no-build --project $(SOURCE_PATH)proj -- $(ARGS)
+	"$(DOTNET_BIN)" run --no-build --framework net6.0 --project $(SOURCE_PATH)proj -- $(ARGS)
 endif # ifeq ($(SOURCE_SUFFIX),.fs)
 
 endif # ifndef DOTNET_BIN

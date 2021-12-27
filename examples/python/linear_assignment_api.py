@@ -1,4 +1,5 @@
-# Copyright 2010-2018 Google LLC
+#!/usr/bin/env python3
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -16,14 +17,13 @@
    http://www.ee.oulu.fi/~mpa/matreng/eem1_2-1.htm with kCost[0][1]
    modified so the optimum solution is unique.
 """
-from __future__ import print_function
 
+from absl import app
 from ortools.graph import pywrapgraph
 
 
 def RunAssignmentOn4x4Matrix():
-    """Test linear sum assignment on a 4x4 matrix.
-  """
+    """Test linear sum assignment on a 4x4 matrix."""
     num_sources = 4
     num_targets = 4
     cost = [[90, 76, 75, 80], [35, 85, 55, 65], [125, 95, 90, 105],
@@ -49,9 +49,9 @@ def RunAssignmentOn4x4Matrix():
             'Some input costs are too large and may cause an integer overflow.')
 
 
-def main():
+def main(_):
     RunAssignmentOn4x4Matrix()
 
 
 if __name__ == '__main__':
-    main()
+    app.run(main)

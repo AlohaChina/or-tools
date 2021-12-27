@@ -1,4 +1,5 @@
-# Copyright 2010-2018 Google LLC
+#!/usr/bin/env python3
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -12,7 +13,7 @@
 # limitations under the License.
 """MaxFlow and MinCostFlow examples."""
 
-from __future__ import print_function
+from absl import app
 from ortools.graph import pywrapgraph
 
 
@@ -29,9 +30,9 @@ def MaxFlow():
     if max_flow.Solve(0, 5) == max_flow.OPTIMAL:
         print('Total flow', max_flow.OptimalFlow(), '/', expected_total_flow)
         for i in range(max_flow.NumArcs()):
-            print(('From source %d to target %d: %d / %d' %
-                   (max_flow.Tail(i), max_flow.Head(i), max_flow.Flow(i),
-                    max_flow.Capacity(i))))
+            print('From source %d to target %d: %d / %d' %
+                  (max_flow.Tail(i), max_flow.Head(i), max_flow.Flow(i),
+                   max_flow.Capacity(i)))
         print('Source side min-cut:', max_flow.GetSourceSideMinCut())
         print('Sink side min-cut:', max_flow.GetSinkSideMinCut())
     else:
@@ -53,8 +54,9 @@ def MinCostFlow():
     min_cost_flow = pywrapgraph.SimpleMinCostFlow()
     for source in range(0, num_sources):
         for target in range(0, num_targets):
-            min_cost_flow.AddArcWithCapacityAndUnitCost(
-                source, num_sources + target, 1, costs[source][target])
+            min_cost_flow.AddArcWithCapacityAndUnitCost(source,
+                                                        num_sources + target, 1,
+                                                        costs[source][target])
     for node in range(0, num_sources):
         min_cost_flow.SetNodeSupply(node, 1)
         min_cost_flow.SetNodeSupply(num_sources + node, -1)
@@ -64,17 +66,16 @@ def MinCostFlow():
         for i in range(0, min_cost_flow.NumArcs()):
             if min_cost_flow.Flow(i) > 0:
                 print('From source %d to target %d: cost %d' %
-                      (min_cost_flow.Tail(i),
-                       min_cost_flow.Head(i) - num_sources,
-                       min_cost_flow.UnitCost(i)))
+                      (min_cost_flow.Tail(i), min_cost_flow.Head(i) -
+                       num_sources, min_cost_flow.UnitCost(i)))
     else:
         print('There was an issue with the min cost flow input.')
 
 
-def main():
+def main(_):
     MaxFlow()
     MinCostFlow()
 
 
 if __name__ == '__main__':
-    main()
+    app.run(main)

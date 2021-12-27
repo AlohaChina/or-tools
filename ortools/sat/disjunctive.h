@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -50,7 +50,7 @@ std::function<void(Model*)> DisjunctiveWithBooleanPrecedences(
     const std::vector<IntervalVariable>& vars);
 
 // Helper class to compute the end-min of a set of tasks given their start-min
-// and duration-min. In Petr Vilim's PhD "Global Constraints in Scheduling",
+// and size-min. In Petr Vilim's PhD "Global Constraints in Scheduling",
 // this corresponds to his Theta-tree except that we use a O(n) implementation
 // for most of the function here, not a O(log(n)) one.
 class TaskSet {
@@ -60,7 +60,7 @@ class TaskSet {
   struct Entry {
     int task;
     IntegerValue start_min;
-    IntegerValue duration_min;
+    IntegerValue size_min;
 
     // Note that the tie-breaking is not important here.
     bool operator<(Entry other) const { return start_min < other.start_min; }
@@ -73,6 +73,10 @@ class TaskSet {
   }
   void AddEntry(const Entry& e);
   void RemoveEntryWithIndex(int index);
+
+  // Same as AddEntry({t, helper->ShiftedStartMin(t), helper->SizeMin(t)}).
+  // This is a minor optimization to not call SizeMin(t) twice.
+  void AddShiftedStartMinEntry(const SchedulingConstraintHelper& helper, int t);
 
   // Advanced usage, if the entry is present, this assumes that its start_min is
   // >= the end min without it, and update the datastructure accordingly.
@@ -97,7 +101,7 @@ class TaskSet {
   // SortedTasks().
   //
   // A reason for the min end is:
-  // - The duration-min of all the critical tasks.
+  // - The size-min of all the critical tasks.
   // - The fact that all critical tasks have a start-min greater or equal to the
   //   first of them, that is SortedTasks()[critical_index].start_min.
   //
@@ -162,9 +166,9 @@ class DisjunctiveDetectablePrecedences : public PropagatorInterface {
   int RegisterWith(GenericLiteralWatcher* watcher);
 
  private:
-  bool PropagateSubwindow(IntegerValue max_end_min);
+  bool PropagateSubwindow();
 
-  std::vector<TaskTime> window_;
+  std::vector<TaskTime> task_by_increasing_end_min_;
   std::vector<TaskTime> task_by_increasing_start_max_;
 
   std::vector<bool> processed_;
@@ -175,7 +179,7 @@ class DisjunctiveDetectablePrecedences : public PropagatorInterface {
   TaskSet task_set_;
 };
 
-// Singleton model class wich is just a SchedulingConstraintHelper will all
+// Singleton model class which is just a SchedulingConstraintHelper will all
 // the intervals.
 class AllIntervalsHelper : public SchedulingConstraintHelper {
  public:

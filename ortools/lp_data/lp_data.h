@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -25,6 +25,7 @@
 #define OR_TOOLS_LP_DATA_LP_DATA_H_
 
 #include <algorithm>  // for max
+#include <cstdint>
 #include <map>
 #include <string>  // for string
 #include <vector>  // for vector
@@ -33,7 +34,6 @@
 #include "absl/container/flat_hash_set.h"
 #include "ortools/base/hash.h"
 #include "ortools/base/int_type.h"
-#include "ortools/base/int_type_indexed_vector.h"
 #include "ortools/base/logging.h"  // for CHECK*
 #include "ortools/base/macros.h"   // for DISALLOW_COPY_AND_ASSIGN, NULL
 #include "ortools/glop/parameters.pb.h"
@@ -108,8 +108,8 @@ class LinearProgram {
   // FindOrCreate{Variable|Constraint}().
   // TODO(user): Add PopulateIdsFromNames() so names added via
   // Set{Variable|Constraint}Name() can be found.
-  void SetVariableName(ColIndex col, const std::string& name);
-  void SetConstraintName(RowIndex row, const std::string& name);
+  void SetVariableName(ColIndex col, absl::string_view name);
+  void SetConstraintName(RowIndex row, absl::string_view name);
 
   // Set the type of the variable.
   void SetVariableType(ColIndex col, VariableType type);
@@ -295,8 +295,9 @@ class LinearProgram {
   // A short string with the problem dimension.
   std::string GetDimensionString() const;
 
-  // A short line with some stats on the objective coefficients.
+  // A short line with some stats on the problem coefficients.
   std::string GetObjectiveStatsString() const;
+  std::string GetBoundsStatsString() const;
 
   // Returns a stringified LinearProgram. We use the LP file format used by
   // lp_solve (see http://lpsolve.sourceforge.net/5.1/index.htm).
@@ -496,7 +497,7 @@ class LinearProgram {
   //   multiplying the new ones by the returned factor.
   // - For ScaleBounds(), the old variable and constraint bounds can be
   //   retrieved by multiplying the new ones by the returned factor.
-  Fractional ScaleObjective();
+  Fractional ScaleObjective(GlopParameters::CostScalingAlgorithm method);
   Fractional ScaleBounds();
 
   // Removes the given row indices from the LinearProgram.
@@ -543,6 +544,15 @@ class LinearProgram {
 
   // If true, checks bound validity in debug mode.
   void SetDcheckBounds(bool dcheck_bounds) { dcheck_bounds_ = dcheck_bounds; }
+
+  // In our presolve, the calls and the extra test inside SetConstraintBounds()
+  // can be visible when a lot of substitutions are performed.
+  DenseColumn* mutable_constraint_lower_bounds() {
+    return &constraint_lower_bounds_;
+  }
+  DenseColumn* mutable_constraint_upper_bounds() {
+    return &constraint_upper_bounds_;
+  }
 
  private:
   // A helper function that updates the vectors integer_variables_list_,

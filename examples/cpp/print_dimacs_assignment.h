@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -21,10 +21,10 @@
 #include <cstdio>
 #include <string>
 
+#include "absl/status/status.h"
 #include "absl/strings/str_format.h"
 #include "ortools/base/file.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/status.h"
 #include "ortools/graph/ebert_graph.h"
 #include "ortools/graph/linear_assignment.h"
 
@@ -37,6 +37,12 @@ class LinearSumAssignment;
 // description, outputs the problem in DIMACS format in the output file.
 // For a description of the format, see
 // http://lpsolve.sourceforge.net/5.5/DIMACS_asn.htm
+template <typename GraphType>
+void PrintDimacsAssignmentProblem(
+    const LinearSumAssignment<GraphType>& assignment,
+    const TailArrayManager<GraphType>& tail_array_manager,
+    const std::string& output_filename);
+
 template <typename GraphType>
 void PrintDimacsAssignmentProblem(
     const LinearSumAssignment<GraphType>& assignment,

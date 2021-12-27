@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -32,12 +32,12 @@
 namespace operations_research {
 namespace bop {
 
-using ::operations_research::LinearBooleanConstraint;
-using ::operations_research::LinearBooleanProblem;
 using ::operations_research::glop::ColIndex;
 using ::operations_research::glop::DenseRow;
 using ::operations_research::glop::LinearProgram;
 using ::operations_research::glop::LPSolver;
+using ::operations_research::sat::LinearBooleanConstraint;
+using ::operations_research::sat::LinearBooleanProblem;
 
 //------------------------------------------------------------------------------
 // BopCompleteLNSOptimizer
@@ -127,7 +127,7 @@ BopOptimizerBase::Status BopCompleteLNSOptimizer::Optimize(
 
   CHECK(sat_solver_ != nullptr);
   const double initial_dt = sat_solver_->deterministic_time();
-  auto advance_dt = ::gtl::MakeCleanup([initial_dt, this, &time_limit]() {
+  auto advance_dt = ::absl::MakeCleanup([initial_dt, this, &time_limit]() {
     time_limit->AdvanceDeterministicTime(sat_solver_->deterministic_time() -
                                          initial_dt);
   });
@@ -208,7 +208,7 @@ bool UseLinearRelaxationForSatAssignmentPreference(
 
 // Note(user): We prefer to start with a really low difficulty as this works
 // better for large problem, and for small ones, it will be really quickly
-// increased anyway. Maybe a better appproach is to start by relaxing something
+// increased anyway. Maybe a better approach is to start by relaxing something
 // like 10 variables instead of having a fixed percentage.
 BopAdaptiveLNSOptimizer::BopAdaptiveLNSOptimizer(
     const std::string& name, bool use_lp_to_guide_sat,
@@ -240,7 +240,7 @@ BopOptimizerBase::Status BopAdaptiveLNSOptimizer::Optimize(
   // Set-up a sat_propagator_ cleanup task to catch all the exit cases.
   const double initial_dt = sat_propagator_->deterministic_time();
   auto sat_propagator_cleanup =
-      ::gtl::MakeCleanup([initial_dt, this, &learned_info, &time_limit]() {
+      ::absl::MakeCleanup([initial_dt, this, &learned_info, &time_limit]() {
         if (!sat_propagator_->IsModelUnsat()) {
           sat_propagator_->SetAssumptionLevel(0);
           sat_propagator_->RestoreSolverToAssumptionLevel();
@@ -258,7 +258,7 @@ BopOptimizerBase::Status BopAdaptiveLNSOptimizer::Optimize(
   // difficulty of the problem. There is one "target" difficulty for each
   // different numbers in the Luby sequence. Note that the initial value is
   // reused from the last run.
-  BopParameters local_parameters = parameters;
+  const BopParameters& local_parameters = parameters;
   int num_tries = 0;  // TODO(user): remove? our limit is 1 by default.
   while (!time_limit->LimitReached() &&
          num_tries < local_parameters.num_random_lns_tries()) {
@@ -434,7 +434,7 @@ void ObjectiveBasedNeighborhood::GenerateNeighborhood(
   std::vector<sat::Literal> candidates =
       ObjectiveVariablesAssignedToTheirLowCostValue(problem_state,
                                                     objective_terms_);
-  std::shuffle(candidates.begin(), candidates.end(), *random_);
+  std::shuffle(candidates.begin(), candidates.end(), random_);
 
   // We will use the sat_propagator to fix some variables as long as the number
   // of propagated variables in the solver is under our target.
@@ -464,7 +464,7 @@ void ConstraintBasedNeighborhood::GenerateNeighborhood(
   const int num_constraints = problem.constraints_size();
   std::vector<int> ct_ids(num_constraints, 0);
   for (int ct_id = 0; ct_id < num_constraints; ++ct_id) ct_ids[ct_id] = ct_id;
-  std::shuffle(ct_ids.begin(), ct_ids.end(), *random_);
+  std::shuffle(ct_ids.begin(), ct_ids.end(), random_);
 
   // Mark that we want to relax all the variables of these constraints as long
   // as the number of relaxed variable is lower than our difficulty target.
@@ -506,7 +506,7 @@ void ConstraintBasedNeighborhood::GenerateNeighborhood(
 }
 
 RelationGraphBasedNeighborhood::RelationGraphBasedNeighborhood(
-    const LinearBooleanProblem& problem, MTRandom* random)
+    const LinearBooleanProblem& problem, absl::BitGenRef random)
     : random_(random) {
   const int num_variables = problem.num_variables();
   columns_.resize(num_variables);
@@ -543,7 +543,7 @@ void RelationGraphBasedNeighborhood::GenerateNeighborhood(
   // TODO(user): If one plan to try of lot of different LNS, maybe it will be
   // better to try to bias the distribution of "center" to be as spread as
   // possible.
-  queue.push_back(random_->Uniform(num_variables));
+  queue.push_back(absl::Uniform(random_, 0, num_variables));
   variable_is_relaxed[queue.back()] = true;
   while (!queue.empty() && num_relaxed < target) {
     const int var = queue.front();

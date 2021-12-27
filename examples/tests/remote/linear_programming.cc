@@ -1,4 +1,4 @@
-// Copyright 2010-2014 Google
+// Copyright 2010-2021 Google
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,7 +13,6 @@
 //
 // Linear programming example that shows how to use the API.
 
-#include "base/commandlineflags.h"
 #include "base/commandlineflags.h"
 #include "base/logging.h"
 #include "linear_solver/linear_solver.h"
@@ -90,27 +89,27 @@ void RunLinearProgrammingExample(
 }
 
 void RunAllExamples() {
-  #if defined(USE_GLPK)
+#if defined(USE_GLPK)
   LOG(INFO) << "---- Linear programming example with GLPK ----";
   RunLinearProgrammingExample(MPSolver::GLPK_LINEAR_PROGRAMMING);
-  #endif  // USE_GLPK
-  #if defined(USE_CLP)
+#endif  // USE_GLPK
+#if defined(USE_CLP)
   LOG(INFO) << "---- Linear programming example with CLP ----";
   RunLinearProgrammingExample(MPSolver::CLP_LINEAR_PROGRAMMING);
-  #endif  // USE_CLP
-  #if defined(USE_SLM)
+#endif  // USE_CLP
+#if defined(USE_SLM)
   LOG(INFO) << "---- Linear programming example with Sulum ----";
   RunLinearProgrammingExample(MPSolver::SULUM_LINEAR_PROGRAMMING);
-  #endif  // USE_SLM
-  #if defined(USE_GUROBI)
+#endif  // USE_SLM
+#if defined(USE_GUROBI)
   LOG(INFO) << "---- Linear programming example with Gurobi ----";
   RunLinearProgrammingExample(MPSolver::GUROBI_LINEAR_PROGRAMMING);
-  #endif  // USE_GUROBI
+#endif  // USE_GUROBI
 }
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  google::ParseCommandLineFlags( &argc, &argv, true);
+  google::ParseCommandLineFlags(&argc, &argv, true);
   operations_research::RunAllExamples();
   return 0;
 }

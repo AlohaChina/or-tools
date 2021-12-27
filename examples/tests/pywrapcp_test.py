@@ -1,4 +1,5 @@
-# Copyright 2010-2018 Google LLC
+#!/usr/bin/env python3
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -12,7 +13,6 @@
 # limitations under the License.
 """Unit tests for python/constraint_solver.swig. Not exhaustive."""
 
-from __future__ import print_function
 
 import sys
 import unittest
@@ -20,6 +20,7 @@ from ortools.constraint_solver import pywrapcp
 
 
 class SearchMonitorTest(pywrapcp.SearchMonitor):
+
     def __init__(self, solver, nexts):
         pywrapcp.SearchMonitor.__init__(self, solver)
         self._nexts = nexts
@@ -32,6 +33,7 @@ class SearchMonitorTest(pywrapcp.SearchMonitor):
 
 
 class DemonTest(pywrapcp.PyDemon):
+
     def __init__(self, x):
         pywrapcp.PyDemon.__init__(self)
         self._x = x
@@ -42,6 +44,7 @@ class DemonTest(pywrapcp.PyDemon):
 
 
 class ConstraintTest(pywrapcp.PyConstraint):
+
     def __init__(self, solver, x):
         pywrapcp.Constraint.__init__(self, solver)
         self._x = x
@@ -61,6 +64,7 @@ class ConstraintTest(pywrapcp.PyConstraint):
 
 
 class InitialPropagateDemon(pywrapcp.PyDemon):
+
     def __init__(self, ct):
         pywrapcp.Demon.__init__(self)
         self._ct = ct
@@ -70,6 +74,7 @@ class InitialPropagateDemon(pywrapcp.PyDemon):
 
 
 class DumbGreaterOrEqualToFive(pywrapcp.PyConstraint):
+
     def __init__(self, solver, x):
         pywrapcp.Constraint.__init__(self, solver)
         self._x = x
@@ -88,6 +93,7 @@ class DumbGreaterOrEqualToFive(pywrapcp.PyConstraint):
 
 
 class WatchDomain(pywrapcp.PyDemon):
+
     def __init__(self, x):
         pywrapcp.Demon.__init__(self)
         self._x = x
@@ -98,6 +104,7 @@ class WatchDomain(pywrapcp.PyDemon):
 
 
 class HoleConstraintTest(pywrapcp.PyConstraint):
+
     def __init__(self, solver, x):
         pywrapcp.Constraint.__init__(self, solver)
         self._x = x
@@ -111,6 +118,7 @@ class HoleConstraintTest(pywrapcp.PyConstraint):
 
 
 class BinarySum(pywrapcp.PyConstraint):
+
     def __init__(self, solver, x, y, z):
         pywrapcp.Constraint.__init__(self, solver)
         self._x = x
@@ -133,6 +141,7 @@ class BinarySum(pywrapcp.PyConstraint):
 
 
 class PyWrapCp(unittest.TestCase):
+
     def test_member(self):
         print('test_member')
         solver = pywrapcp.Solver('test member')
@@ -223,7 +232,6 @@ class PyWrapCp(unittest.TestCase):
                           solver.ASSIGN_MIN_VALUE)
         solver.Solve(db)
 
-
     def test_sum_constraint(self):
         print('test_sum_constraint')
         solver = pywrapcp.Solver('test_sum_constraint')
@@ -238,7 +246,6 @@ class PyWrapCp(unittest.TestCase):
         while solver.NextSolution():
             print('%d + %d == %d' % (x.Value(), y.Value(), z.Value()))
         solver.EndSearch()
-
 
 
 if __name__ == '__main__':

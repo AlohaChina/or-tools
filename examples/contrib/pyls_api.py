@@ -1,4 +1,3 @@
-from __future__ import print_function
 from ortools.constraint_solver import pywrapcp
 
 
@@ -101,8 +100,9 @@ def Solve(type):
     print('Local Search with Filter')
     move_one_var = MoveOneVar(vars)
     sum_filter = SumFilter(vars)
+    filter_manager = pywrapcp.LocalSearchFilterManager([sum_filter])
     ls_params = solver.LocalSearchPhaseParameters(sum_var, move_one_var, db, None,
-                                                  [sum_filter])
+                                                  filter_manager)
     ls = solver.LocalSearchPhase(vars, db, ls_params)
 
   collector = solver.LastSolutionCollector()

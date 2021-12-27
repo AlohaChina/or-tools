@@ -1,4 +1,5 @@
-# Copyright 2010-2018 Google LLC
+#!/usr/bin/env python3
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -20,7 +21,6 @@ machine is task_type dependent.
 The objective is to minimize the maximum completion time of all
 jobs. This is called the makespan.
 """
-from __future__ import print_function
 
 import collections
 
@@ -58,8 +58,9 @@ def jobshop_ft06():
             end_var = model.NewIntVar(0, horizon, 'end_%i_%i' % (i, j))
             interval_var = model.NewIntervalVar(start_var, duration, end_var,
                                                 'interval_%i_%i' % (i, j))
-            all_tasks[(i, j)] = task_type(
-                start=start_var, end=end_var, interval=interval_var)
+            all_tasks[(i, j)] = task_type(start=start_var,
+                                          end=end_var,
+                                          interval=interval_var)
 
     # Create disjuctive constraints.
     machine_to_jobs = {}

@@ -127,15 +127,15 @@ class Customers():
 
         # The customers demand min_tw to max_tw hour time window for each
         # delivery
-        time_windows = np.random.random_integers(min_tw * 3600, max_tw * 3600,
+        time_windows = np.random.randint(min_tw * 3600, max_tw * 3600,
                                                  num_stops)
         # The last time a delivery window can start
         latest_time = self.time_horizon - time_windows
         start_times = [None for o in time_windows]
         stop_times = [None for o in time_windows]
-        # Make random timedeltas, nominaly from the start of the day.
+        # Make random timedeltas, nominally from the start of the day.
         for idx in range(self.number):
-            stime = int(np.random.random_integers(0, latest_time[idx]))
+            stime = int(np.random.randint(0, latest_time[idx]))
             start_times[idx] = timedelta(seconds=stime)
             stop_times[idx] = (
                 start_times[idx] + timedelta(seconds=int(time_windows[idx])))
@@ -287,14 +287,13 @@ class Customers():
         Return a callback function that gives the demands.
 
         Returns:
-            function: dem_return(a,b) A function that takes the 'from' node
-                index and the 'to' node index and returns the distance in km.
+            function: dem_return(a) A function that takes the 'from' node
+                index and returns the distance in km.
         """
 
-        def dem_return(from_index, to_index):
+        def dem_return(from_index):
             # Convert from routing variable Index to distance matrix NodeIndex.
             from_node = self.manager.IndexToNode(from_index)
-            to_node = self.manager.IndexToNode(to_index)
             return (self.customers[from_node].demand)
 
         return dem_return
@@ -337,15 +336,15 @@ class Customers():
             speed_kmph: the average speed in km/h
 
         Returns:
-            function [tranit_time_return(a, b)]: A function that takes the
+            function [transit_time_return(a, b)]: A function that takes the
                 from/a node index and the to/b node index and returns the
-                tranit time from a to b.
+                transit time from a to b.
         """
 
-        def tranit_time_return(a, b):
+        def transit_time_return(a, b):
             return (self.distmat[a][b] / (speed_kmph * 1.0 / 60**2))
 
-        return tranit_time_return
+        return transit_time_return
 
 
 class Vehicles():
@@ -361,13 +360,13 @@ class Vehicles():
 
     Note:
         If numpy arrays are given for capacity and cost, then they must be of
-        the same length, and the number of vehicles are infered from them.
-        If scalars are given, the fleet is homogenious, and the number of
-        vehicles is determied by number.
+        the same length, and the number of vehicles are inferred from them.
+        If scalars are given, the fleet is homogeneous, and the number of
+        vehicles is determined by number.
 
     Args: capacity (scalar or numpy array): The integer capacity of demand
     units.  cost (scalar or numpy array): The fixed cost of the vehicle.  number
-    (Optional [int]): The number of vehicles in a homogenious fleet.
+    (Optional [int]): The number of vehicles in a homogeneous fleet.
   """
 
     def __init__(self, capacity=100, cost=100, number=None):
@@ -382,7 +381,7 @@ class Vehicles():
 
         if np.isscalar(capacity):
             capacities = capacity * np.ones_like(idxs)
-        elif np.size(capacity) != np.size(capacity):
+        elif np.size(capacity) != self.number:
             print('capacity is neither scalar, nor the same size as num!')
         else:
             capacities = capacity
@@ -588,7 +587,7 @@ def main():
     # Create a list of inhomgenious vehicle capacities as integer units.
     capacity = [50, 75, 100, 125, 150, 175, 200, 250]
 
-    # Create a list of inhomogenious fixed vehicle costs.
+    # Create a list of inhomogeneous fixed vehicle costs.
     cost = [int(100 + 2 * np.sqrt(c)) for c in capacity]
 
     # Create a set of vehicles, the number set by the length of capacity.
@@ -641,7 +640,7 @@ def main():
     dist_fn_index = routing.RegisterTransitCallback(dist_fn)
 
     dem_fn = customers.return_dem_callback()
-    dem_fn_index = routing.RegisterTransitCallback(dem_fn)
+    dem_fn_index = routing.RegisterUnaryTransitCallback(dem_fn)
 
     # Create and register a transit callback.
     serv_time_fn = customers.make_service_time_call_callback()
@@ -657,11 +656,11 @@ def main():
 
     tot_time_fn_index = routing.RegisterTransitCallback(tot_time_fn)
 
-    # Set the cost function (distance callback) for each arc, homogenious for
+    # Set the cost function (distance callback) for each arc, homogeneous for
     # all vehicles.
     routing.SetArcCostEvaluatorOfAllVehicles(dist_fn_index)
 
-    # Set vehicle costs for each vehicle, not homogenious.
+    # Set vehicle costs for each vehicle, not homogeneous.
     for veh in vehicles.vehicles:
         routing.SetFixedCostOfVehicle(veh.cost, int(veh.index))
 

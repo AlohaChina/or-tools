@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,62 +12,66 @@
 // limitations under the License.
 
 // [START program]
+// [START import]
 using System;
 using Google.OrTools.LinearSolver;
+// [END import]
 
 public class LinearProgrammingExample
 {
-  static void Main()
-  {
-      // [START solver]
-      MPSolver solver = new MPSolver("LinearProgrammingExample", "GLOP_LINEAR_PROGRAMMING");
-      // [END solver]
-      // x and y are continuous non-negative variables.
-      // [START variables]
-      Variable x = solver.MakeNumVar(0.0, double.PositiveInfinity, "x");
-      Variable y = solver.MakeNumVar(0.0, double.PositiveInfinity, "y");
-      // [END variables]
+    static void Main()
+    {
+        // [START solver]
+        Solver solver = Solver.CreateSolver("GLOP");
+        // [END solver]
+        // x and y are continuous non-negative variables.
+        // [START variables]
+        Variable x = solver.MakeNumVar(0.0, double.PositiveInfinity, "x");
+        Variable y = solver.MakeNumVar(0.0, double.PositiveInfinity, "y");
 
-      // [START constraints]
-      // x + 2y <= 14.
-      Constraint c0 = solver.MakeConstraint(double.NegativeInfinity, 14.0);
-      c0.SetCoefficient(x, 1);
-      c0.SetCoefficient(y, 2);
+        Console.WriteLine("Number of variables = " + solver.NumVariables());
+        // [END variables]
 
-      // 3x - y >= 0.
-      Constraint c1 = solver.MakeConstraint(0.0, double.PositiveInfinity);
-      c1.SetCoefficient(x, 3);
-      c1.SetCoefficient(y, -1);
+        // [START constraints]
+        // x + 2y <= 14.
+        solver.Add(x + 2 * y <= 14.0);
 
-      // x - y <= 2.
-      Constraint c2 = solver.MakeConstraint(double.NegativeInfinity, 2.0);
-      c2.SetCoefficient(x, 1);
-      c2.SetCoefficient(y, -1);
-      // [END constraints]
+        // 3x - y >= 0.
+        solver.Add(3 * x - y >= 0.0);
 
-      // [START objective]
-      // Objective function: 3x + 4y.
-      Objective objective = solver.Objective();
-      objective.SetCoefficient(x, 3);
-      objective.SetCoefficient(y, 4);
-      objective.SetMaximization();
-      // [END objective]
+        // x - y <= 2.
+        solver.Add(x - y <= 2.0);
 
-      // [START solve]
-      solver.Solve();
-      // [END solve]
+        Console.WriteLine("Number of constraints = " + solver.NumConstraints());
+        // [END constraints]
 
-      // [START print_solution]
-      Console.WriteLine("Number of variables = " + solver.NumVariables());
-      Console.WriteLine("Number of constraints = " + solver.NumConstraints());
-      // The value of each variable in the solution.
-      Console.WriteLine("Solution:");
-      Console.WriteLine("x = " + x.SolutionValue());
-      Console.WriteLine("y = " + y.SolutionValue());
-      // The objective value of the solution.
-      Console.WriteLine("Optimal objective value = " +
-                      solver.Objective().Value());
-      // [END print_solution]
+        // [START objective]
+        // Objective function: 3x + 4y.
+        solver.Maximize(3 * x + 4 * y);
+        // [END objective]
+
+        // [START solve]
+        Solver.ResultStatus resultStatus = solver.Solve();
+        // [END solve]
+
+        // [START print_solution]
+        // Check that the problem has an optimal solution.
+        if (resultStatus != Solver.ResultStatus.OPTIMAL)
+        {
+            Console.WriteLine("The problem does not have an optimal solution!");
+            return;
+        }
+        Console.WriteLine("Solution:");
+        Console.WriteLine("Objective value = " + solver.Objective().Value());
+        Console.WriteLine("x = " + x.SolutionValue());
+        Console.WriteLine("y = " + y.SolutionValue());
+        // [END print_solution]
+
+        // [START advanced]
+        Console.WriteLine("\nAdvanced usage:");
+        Console.WriteLine("Problem solved in " + solver.WallTime() + " milliseconds");
+        Console.WriteLine("Problem solved in " + solver.Iterations() + " iterations");
+        // [END advanced]
     }
 }
 // [END program]

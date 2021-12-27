@@ -39,7 +39,6 @@
   Also see my other Google CP Solver models:
   http://www.hakank.org/google_or_tools/
 """
-from __future__ import print_function
 import sys
 from ortools.constraint_solver import pywrapcp
 
@@ -205,7 +204,7 @@ def print_game(game, rows, cols):
 
 if __name__ == "__main__":
   # data
-  r = 5
+  r = 3
   c = r
   if len(sys.argv) > 1:
     r = int(sys.argv[1])

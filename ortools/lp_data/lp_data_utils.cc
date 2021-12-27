@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -73,12 +73,13 @@ void Scale(LinearProgram* lp, SparseMatrixScaler* scaler,
   lp->transpose_matrix_is_consistent_ = false;
 }
 
-void LpScalingHelper::Scale(LinearProgram* lp) {
+void LpScalingHelper::Scale(LinearProgram* lp) { Scale(GlopParameters(), lp); }
+
+void LpScalingHelper::Scale(const GlopParameters& params, LinearProgram* lp) {
   scaler_.Clear();
-  ::operations_research::glop::Scale(
-      lp, &scaler_, operations_research::glop::GlopParameters::DEFAULT);
+  ::operations_research::glop::Scale(lp, &scaler_, params.scaling_method());
   bound_scaling_factor_ = 1.0 / lp->ScaleBounds();
-  objective_scaling_factor_ = 1.0 / lp->ScaleObjective();
+  objective_scaling_factor_ = 1.0 / lp->ScaleObjective(params.cost_scaling());
 }
 
 void LpScalingHelper::Clear() {
@@ -91,6 +92,29 @@ Fractional LpScalingHelper::VariableScalingFactor(ColIndex col) const {
   // During scaling a col was multiplied by ColScalingFactor() and the variable
   // bounds divided by it.
   return scaler_.ColUnscalingFactor(col) * bound_scaling_factor_;
+}
+
+Fractional LpScalingHelper::ScaleVariableValue(ColIndex col,
+                                               Fractional value) const {
+  return value * scaler_.ColUnscalingFactor(col) * bound_scaling_factor_;
+}
+
+Fractional LpScalingHelper::ScaleReducedCost(ColIndex col,
+                                             Fractional value) const {
+  // The reduced cost move like the objective and the col scale.
+  return value / scaler_.ColUnscalingFactor(col) * objective_scaling_factor_;
+}
+
+Fractional LpScalingHelper::ScaleDualValue(RowIndex row,
+                                           Fractional value) const {
+  // The dual value move like the objective and the inverse of the row scale.
+  return value * (scaler_.RowUnscalingFactor(row) * objective_scaling_factor_);
+}
+
+Fractional LpScalingHelper::ScaleConstraintActivity(RowIndex row,
+                                                    Fractional value) const {
+  // The activity move with the row_scale and the bound_scaling_factor.
+  return value / scaler_.RowUnscalingFactor(row) * bound_scaling_factor_;
 }
 
 Fractional LpScalingHelper::UnscaleVariableValue(ColIndex col,

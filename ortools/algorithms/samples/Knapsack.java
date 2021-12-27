@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,19 +12,18 @@
 // limitations under the License.
 
 // [START program]
+package com.google.ortools.algorithms.samples;
 // [START import]
+import com.google.ortools.Loader;
 import com.google.ortools.algorithms.KnapsackSolver;
 import java.util.ArrayList;
 // [END import]
 
 /**
  * Sample showing how to model using the knapsack solver.
- *
  */
 public class Knapsack {
-  static {
-    System.loadLibrary("jniortools");
-  }
+  private Knapsack() {}
 
   private static void solve() {
     // [START solver]
@@ -50,8 +49,8 @@ public class Knapsack {
     // [END solve]
 
     // [START print_solution]
-    ArrayList<Integer> packedItems = new ArrayList<Integer>();
-    ArrayList<Long> packedWeights = new ArrayList<Long>();
+    ArrayList<Integer> packedItems = new ArrayList<>();
+    ArrayList<Long> packedWeights = new ArrayList<>();
     int totalWeight = 0;
     System.out.println("Total value = " + computedValue);
     for (int i = 0; i < values.length; i++) {
@@ -68,6 +67,7 @@ public class Knapsack {
   }
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     Knapsack.solve();
   }
 }

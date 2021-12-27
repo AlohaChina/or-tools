@@ -3,6 +3,7 @@
 
 # Using the CP-SAT solver
 
+https://developers.google.com/optimization/cp/cp_solver
 
 
 <!--ts-->
@@ -14,7 +15,6 @@
          * [Java code samples](#java-code-samples)
          * [C# code samples](#c-code-samples-1)
 
-<!-- Added by: lperron, at: Thu Nov 14 21:15:53 CET 2019 -->
 
 <!--te-->
 
@@ -44,11 +44,6 @@ The Python interface to the CP-SAT solver is implemented using two classes.
 
 ```python
 """Simple solve."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 from ortools.sat.python import cp_model
 
 
@@ -70,10 +65,12 @@ def SimpleSatProgram():
   solver = cp_model.CpSolver()
   status = solver.Solve(model)
 
-  if status == cp_model.FEASIBLE:
+  if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
     print('x = %i' % solver.Value(x))
     print('y = %i' % solver.Value(y))
     print('z = %i' % solver.Value(z))
+  else:
+    print('No solution found.')
 
 
 SimpleSatProgram()
@@ -107,13 +104,15 @@ void SimpleSatProgram() {
 
   // Solving part.
   const CpSolverResponse response = Solve(cp_model.Build());
-  LOG(INFO) << CpSolverResponseStats(response);
 
-  if (response.status() == CpSolverStatus::FEASIBLE) {
+  if (response.status() == CpSolverStatus::OPTIMAL ||
+      response.status() == CpSolverStatus::FEASIBLE) {
     // Get the value of x in the solution.
     LOG(INFO) << "x = " << SolutionIntegerValue(response, x);
     LOG(INFO) << "y = " << SolutionIntegerValue(response, y);
     LOG(INFO) << "z = " << SolutionIntegerValue(response, z);
+  } else {
+    LOG(INFO) << "No solution found.";
   }
 }
 
@@ -122,7 +121,6 @@ void SimpleSatProgram() {
 
 int main() {
   operations_research::sat::SimpleSatProgram();
-
   return EXIT_SUCCESS;
 }
 ```
@@ -133,17 +131,17 @@ The Java code implements the same interface as the Python code, with a
 **CpModel** and a **CpSolver** class.
 
 ```java
+package com.google.ortools.sat.samples;
+import com.google.ortools.Loader;
 import com.google.ortools.sat.CpSolverStatus;
 import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.CpSolver;
 import com.google.ortools.sat.IntVar;
 
 /** Minimal CP-SAT example to showcase calling the solver. */
-public class SimpleSatProgram {
-
-  static { System.loadLibrary("jniortools"); }
-
+public final class SimpleSatProgram {
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     // Create the model.
     CpModel model = new CpModel();
 
@@ -161,12 +159,16 @@ public class SimpleSatProgram {
     CpSolver solver = new CpSolver();
     CpSolverStatus status = solver.solve(model);
 
-    if (status == CpSolverStatus.FEASIBLE) {
+    if (status == CpSolverStatus.OPTIMAL || status == CpSolverStatus.FEASIBLE) {
       System.out.println("x = " + solver.value(x));
       System.out.println("y = " + solver.value(y));
       System.out.println("z = " + solver.value(z));
+    } else {
+      System.out.println("No solution found.");
     }
   }
+
+  private SimpleSatProgram() {}
 }
 ```
 
@@ -182,31 +184,35 @@ using Google.OrTools.Sat;
 
 public class SimpleSatProgram
 {
-  static void Main()
-  {
-    // Creates the model.
-    CpModel model = new CpModel();
-
-    // Creates the variables.
-    int num_vals = 3;
-
-    IntVar x = model.NewIntVar(0, num_vals - 1, "x");
-    IntVar y = model.NewIntVar(0, num_vals - 1, "y");
-    IntVar z = model.NewIntVar(0, num_vals - 1, "z");
-
-    // Creates the constraints.
-    model.Add(x != y);
-
-    // Creates a solver and solves the model.
-    CpSolver solver = new CpSolver();
-    CpSolverStatus status = solver.Solve(model);
-
-    if (status == CpSolverStatus.Feasible)
+    static void Main()
     {
-      Console.WriteLine("x = " + solver.Value(x));
-      Console.WriteLine("y = " + solver.Value(y));
-      Console.WriteLine("z = " + solver.Value(z));
+        // Creates the model.
+        CpModel model = new CpModel();
+
+        // Creates the variables.
+        int num_vals = 3;
+
+        IntVar x = model.NewIntVar(0, num_vals - 1, "x");
+        IntVar y = model.NewIntVar(0, num_vals - 1, "y");
+        IntVar z = model.NewIntVar(0, num_vals - 1, "z");
+
+        // Creates the constraints.
+        model.Add(x != y);
+
+        // Creates a solver and solves the model.
+        CpSolver solver = new CpSolver();
+        CpSolverStatus status = solver.Solve(model);
+
+        if (status == CpSolverStatus.Optimal || status == CpSolverStatus.Feasible)
+        {
+            Console.WriteLine("x = " + solver.Value(x));
+            Console.WriteLine("y = " + solver.Value(y));
+            Console.WriteLine("z = " + solver.Value(z));
+        }
+        else
+        {
+            Console.WriteLine("No solution found.");
+        }
     }
-  }
 }
 ```

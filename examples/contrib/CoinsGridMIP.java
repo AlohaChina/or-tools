@@ -41,20 +41,18 @@
  *
  *  Java version by Darian Sastre (darian.sastre@minimaxlabs.com)
  */
+package com.google.ortools.contrib;
 
+import com.google.ortools.Loader;
 import com.google.ortools.linearsolver.*;
 
 public class CoinsGridMIP {
-  static {
-    System.loadLibrary("jniortools");
-  }
-
-  private static MPSolver createSolver(String solverType) {
-    return new MPSolver("MIPDiet", MPSolver.OptimizationProblemType.valueOf(solverType));
-  }
-
   private static void solve(String solverType) {
-    MPSolver solver = createSolver(solverType);
+    System.out.println("---- CoinsGridMIP with " + solverType);
+
+    MPSolver solver = MPSolver.createSolver(solverType);
+    if (solver == null)
+      return;
 
     /** invariants */
     int n = 31;
@@ -84,6 +82,8 @@ public class CoinsGridMIP {
 
     solver.solve();
 
+    System.out.println("Problem solved in " + solver.wallTime() + "ms");
+
     for (int i = 0; i < n; i++) {
       for (int j = 0; j < n; j++) {
         System.out.print((int) x[i][j].solutionValue() + " ");
@@ -93,23 +93,10 @@ public class CoinsGridMIP {
   }
 
   public static void main(String[] args) {
-    try {
-      System.out.println("---- Integer programming example with SCIP (recommended) ----");
-      solve("SCIP_MIXED_INTEGER_PROGRAMMING");
-    } catch (java.lang.IllegalArgumentException e) {
-      System.err.println("Bad solver type: " + e);
-    }
-    try {
-      System.out.println("---- Integer programming example with CBC ----");
-      solve("CBC_MIXED_INTEGER_PROGRAMMING");
-    } catch (java.lang.IllegalArgumentException e) {
-      System.err.println("Bad solver type: " + e);
-    }
-    try {
-      System.out.println("---- Integer programming example with GLPK ----");
-      solve("GLPK_MIXED_INTEGER_PROGRAMMING");
-    } catch (java.lang.IllegalArgumentException e) {
-      System.err.println("Bad solver type: " + e);
-    }
+    Loader.loadNativeLibraries();
+    solve("SCIP");
+    solve("CBC");
+    solve("GLPK");
+    solve("SAT");
   }
 }

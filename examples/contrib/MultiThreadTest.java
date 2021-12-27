@@ -1,3 +1,6 @@
+package com.google.ortools.contrib;
+
+import com.google.ortools.Loader;
 import com.google.ortools.linearsolver.MPConstraint;
 import com.google.ortools.linearsolver.MPObjective;
 import com.google.ortools.linearsolver.MPSolver;
@@ -13,14 +16,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MultiThreadTest {
-
-  static {
-    System.loadLibrary("jniortools");
-  }
-
   private static final boolean verboseOutput = false; // To enable Cbc logging
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     launchProtocol(10, 8, true);
     System.out.println("Cbc multi thread test successful");
     return;
@@ -28,9 +27,7 @@ public class MultiThreadTest {
 
   public static void launchProtocol(int wholeLoopAttmpts, int threadPoolSize, boolean runInParallel)
       throws Exception {
-
     for (int noAttmpt = 0; noAttmpt < wholeLoopAttmpts; noAttmpt++) {
-
       System.out.println(String.format("Attempt %d", noAttmpt));
 
       int maxThreads = threadPoolSize;
@@ -51,7 +48,6 @@ public class MultiThreadTest {
           System.out.println(thread.getStatusSolver().toString());
         }
       } else {
-
         for (SolverThread thread : threadList) {
           System.out.println("Launching single thread");
           executor.invokeAll(Arrays.asList(thread));
@@ -67,10 +63,11 @@ public class MultiThreadTest {
   }
 
   private static MPSolver makeProblem() {
-
-    MPSolver solver =
-        new MPSolver(
-            UUID.randomUUID().toString(), OptimizationProblemType.CBC_MIXED_INTEGER_PROGRAMMING);
+    MPSolver solver = MPSolver.createSolver("CBC");
+    if (solver == null) {
+      System.out.println("Could not create solver CBC");
+      return solver;
+    }
 
     double infinity = MPSolver.infinity();
 
@@ -96,7 +93,6 @@ public class MultiThreadTest {
   }
 
   private static final class SolverThread implements Callable<MPSolver.ResultStatus> {
-
     private MPSolver.ResultStatus statusSolver;
 
     public SolverThread() {}
@@ -104,11 +100,14 @@ public class MultiThreadTest {
     @Override
     public ResultStatus call() throws Exception {
       MPSolver solver = makeProblem();
-      statusSolver = solver.solve();
-
-      // Check that the problem has an optimal solution.
-      if (MPSolver.ResultStatus.OPTIMAL.equals(statusSolver)) {
-        throw new RuntimeException("Non OPTIMAL status after solve.");
+      if (solver == null) {
+        statusSolver = MPSolver.ResultStatus.NOT_SOLVED;
+      } else {
+        statusSolver = solver.solve();
+        // Check that the problem has an optimal solution.
+        if (MPSolver.ResultStatus.OPTIMAL.equals(statusSolver)) {
+          throw new RuntimeException("Non OPTIMAL status after solve.");
+        }
       }
       return statusSolver;
     }

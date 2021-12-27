@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,7 +12,9 @@
 // limitations under the License.
 
 // [START program]
+package com.google.ortools.constraintsolver.samples;
 // [START import]
+import com.google.ortools.Loader;
 import com.google.ortools.constraintsolver.Assignment;
 import com.google.ortools.constraintsolver.FirstSolutionStrategy;
 import com.google.ortools.constraintsolver.IntVar;
@@ -24,14 +26,10 @@ import com.google.ortools.constraintsolver.main;
 import java.util.logging.Logger;
 // [END import]
 
-/** Minimal VRP.*/
+/** VRPTW. */
 public class VrpTimeWindows {
-  static {
-    System.loadLibrary("jniortools");
-  }
-
   private static final Logger logger = Logger.getLogger(VrpTimeWindows.class.getName());
-
+  // [START program_part1]
   // [START data_model]
   static class DataModel {
     public final long[][] timeMatrix = {
@@ -57,20 +55,20 @@ public class VrpTimeWindows {
         {0, 5}, // depot
         {7, 12}, // 1
         {10, 15}, // 2
-        {5, 14}, // 3
-        {5, 13}, // 4
+        {16, 18}, // 3
+        {10, 13}, // 4
         {0, 5}, // 5
         {5, 10}, // 6
-        {0, 10}, // 7
+        {0, 4}, // 7
         {5, 10}, // 8
-        {0, 5}, // 9
+        {0, 3}, // 9
         {10, 16}, // 10
         {10, 15}, // 11
         {0, 5}, // 12
         {5, 10}, // 13
-        {7, 12}, // 14
+        {7, 8}, // 14
         {10, 15}, // 15
-        {5, 15}, // 16
+        {11, 15}, // 16
     };
     public final int vehicleNumber = 4;
     public final int depot = 0;
@@ -81,6 +79,9 @@ public class VrpTimeWindows {
   /// @brief Print the solution.
   static void printSolution(
       DataModel data, RoutingModel routing, RoutingIndexManager manager, Assignment solution) {
+    // Solution cost.
+    logger.info("Objective : " + solution.objectiveValue());
+    // Inspect solution.
     RoutingDimension timeDimension = routing.getMutableDimension("Time");
     long totalTime = 0;
     for (int i = 0; i < data.vehicleNumber; ++i) {
@@ -105,6 +106,7 @@ public class VrpTimeWindows {
   // [END solution_printer]
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     // Instantiate the data problem.
     // [START data]
     final DataModel data = new DataModel();
@@ -185,4 +187,5 @@ public class VrpTimeWindows {
     // [END print_solution]
   }
 }
+// [END_program_part1]
 // [END program]

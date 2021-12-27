@@ -18,6 +18,9 @@
  *
  * Java version by Darian Sastre (darian.sastre@minimaxlabs.com)
  */
+package com.google.ortools.contrib;
+
+import com.google.ortools.Loader;
 import com.google.ortools.linearsolver.MPConstraint;
 import com.google.ortools.linearsolver.MPObjective;
 import com.google.ortools.linearsolver.MPSolver;
@@ -33,44 +36,23 @@ public class ColoringMIP {
     }
   }
 
-  static {
-    System.loadLibrary("jniortools");
-  }
-
-  private static MPSolver createSolver(String solverType) {
-    return new MPSolver("MIPDiet", MPSolver.OptimizationProblemType.valueOf(solverType));
-  }
-
   private static void solve(String solverType) {
-    MPSolver solver = createSolver(solverType);
+    System.out.println("---- CoinsGridMIP with " + solverType);
+
+    MPSolver solver = MPSolver.createSolver(solverType);
+    if (solver == null)
+      return;
+
     double infinity = MPSolver.infinity();
 
     /** invariants */
     int noCols = 5; // variables number
     int noNodes = 11; // constraints number
 
-    Edge[] edges = {
-      new Edge(1, 2),
-      new Edge(1, 4),
-      new Edge(1, 7),
-      new Edge(1, 9),
-      new Edge(2, 3),
-      new Edge(2, 6),
-      new Edge(2, 8),
-      new Edge(3, 5),
-      new Edge(3, 7),
-      new Edge(3, 10),
-      new Edge(4, 5),
-      new Edge(4, 6),
-      new Edge(4, 10),
-      new Edge(5, 8),
-      new Edge(5, 9),
-      new Edge(6, 11),
-      new Edge(7, 11),
-      new Edge(8, 11),
-      new Edge(9, 11),
-      new Edge(10, 11)
-    };
+    Edge[] edges = {new Edge(1, 2), new Edge(1, 4), new Edge(1, 7), new Edge(1, 9), new Edge(2, 3),
+        new Edge(2, 6), new Edge(2, 8), new Edge(3, 5), new Edge(3, 7), new Edge(3, 10),
+        new Edge(4, 5), new Edge(4, 6), new Edge(4, 10), new Edge(5, 8), new Edge(5, 9),
+        new Edge(6, 11), new Edge(7, 11), new Edge(8, 11), new Edge(9, 11), new Edge(10, 11)};
 
     /** variables */
     MPVariable[][] x = new MPVariable[noNodes][noCols];
@@ -113,6 +95,8 @@ public class ColoringMIP {
       System.err.println("The problem does not have an optimal solution!");
       return;
     } else {
+      System.out.println("Problem solved in " + solver.wallTime() + "ms");
+
       System.out.print("Colors used: ");
       for (MPVariable var : colUsed) {
         System.out.print((int) var.solutionValue() + " ");
@@ -131,23 +115,10 @@ public class ColoringMIP {
   }
 
   public static void main(String[] args) {
-    try {
-      System.out.println("---- Integer programming example with SCIP (recommended) ----");
-      solve("SCIP_MIXED_INTEGER_PROGRAMMING");
-    } catch (java.lang.IllegalArgumentException e) {
-      System.err.println("Bad solver type: " + e);
-    }
-    try {
-      System.out.println("---- Integer programming example with CBC ----");
-      solve("CBC_MIXED_INTEGER_PROGRAMMING");
-    } catch (java.lang.IllegalArgumentException e) {
-      System.err.println("Bad solver type: " + e);
-    }
-    try {
-      System.out.println("---- Integer programming example with GLPK ----");
-      solve("GLPK_MIXED_INTEGER_PROGRAMMING");
-    } catch (java.lang.IllegalArgumentException e) {
-      System.err.println("Bad solver type: " + e);
-    }
+    Loader.loadNativeLibraries();
+    solve("SCIP");
+    solve("CBC");
+    solve("GLPK");
+    solve("SAT");
   }
 }

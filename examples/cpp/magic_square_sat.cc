@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,13 +14,18 @@
 #include <string>
 #include <vector>
 
+#include "absl/flags/flag.h"
+#include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "ortools/base/commandlineflags.h"
+#include "ortools/base/integral_types.h"
+#include "ortools/base/logging.h"
 #include "ortools/sat/cp_model.h"
 #include "ortools/sat/model.h"
 
-DEFINE_int32(size, 7, "Size of the magic square");
-DEFINE_string(params, "", "Sat paramters");
+ABSL_FLAG(int, size, 7, "Size of the magic square");
+ABSL_FLAG(std::string, params, "", "Sat parameters");
 
 namespace operations_research {
 namespace sat {
@@ -28,8 +33,8 @@ namespace sat {
 void MagicSquare(int size) {
   CpModelBuilder builder;
 
-  std::vector<std::vector<IntVar>> square(size);
-  std::vector<std::vector<IntVar>> transposed(size);
+  std::vector<std::vector<IntVar> > square(size);
+  std::vector<std::vector<IntVar> > transposed(size);
   std::vector<IntVar> diag1;
   std::vector<IntVar> diag2;
   std::vector<IntVar> all_variables;
@@ -62,7 +67,7 @@ void MagicSquare(int size) {
 
   // Sum on columns.
   for (int i = 0; i < size; ++i) {
-   builder.AddEquality(LinearExpr::Sum(transposed[i]), sum);
+    builder.AddEquality(LinearExpr::Sum(transposed[i]), sum);
   }
 
   // Sum on diagonals.
@@ -70,11 +75,11 @@ void MagicSquare(int size) {
   builder.AddEquality(LinearExpr::Sum(diag2), sum);
 
   Model model;
-  model.Add(NewSatParameters(FLAGS_params));
+  model.Add(NewSatParameters(absl::GetFlag(FLAGS_params)));
 
   const CpSolverResponse response = SolveCpModel(builder.Build(), &model);
 
-  if (response.status() == CpSolverStatus::FEASIBLE) {
+  if (response.status() == CpSolverStatus::OPTIMAL) {
     for (int n = 0; n < size; ++n) {
       std::string output;
       for (int m = 0; m < size; ++m) {
@@ -89,12 +94,14 @@ void MagicSquare(int size) {
   LOG(INFO) << CpSolverResponseStats(response);
 }
 
-} // namespace sat
-} // namespace sat
+}  // namespace sat
+}  // namespace operations_research
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   absl::SetFlag(&FLAGS_logtostderr, true);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  operations_research::sat::MagicSquare(FLAGS_size);
+  google::InitGoogleLogging(argv[0]);
+  absl::ParseCommandLine(argc, argv);
+
+  operations_research::sat::MagicSquare(absl::GetFlag(FLAGS_size));
   return EXIT_SUCCESS;
 }

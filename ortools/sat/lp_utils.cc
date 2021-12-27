@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,13 +17,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <string>
 #include <vector>
 
 #include "absl/strings/str_cat.h"
 #include "ortools/base/int_type.h"
-#include "ortools/base/int_type_indexed_vector.h"
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/glop/lp_solver.h"
@@ -59,24 +59,20 @@ void ScaleConstraint(const std::vector<double>& var_scaling,
   }
 }
 
-}  // namespace
-
-std::vector<double> ScaleContinuousVariables(double scaling,
-                                             MPModelProto* mp_model) {
+void ApplyVarScaling(const std::vector<double>& var_scaling,
+                     MPModelProto* mp_model) {
   const int num_variables = mp_model->variable_size();
-  std::vector<double> var_scaling(num_variables, 1.0);
   for (int i = 0; i < num_variables; ++i) {
+    const double scaling = var_scaling[i];
     const MPVariableProto& mp_var = mp_model->variable(i);
-    if (mp_var.is_integer()) continue;
-
     const double old_lb = mp_var.lower_bound();
     const double old_ub = mp_var.upper_bound();
     const double old_obj = mp_var.objective_coefficient();
-
-    var_scaling[i] = scaling;
     mp_model->mutable_variable(i)->set_lower_bound(old_lb * scaling);
     mp_model->mutable_variable(i)->set_upper_bound(old_ub * scaling);
     mp_model->mutable_variable(i)->set_objective_coefficient(old_obj / scaling);
+
+    // TODO(user): Make bounds of integer variable integer.
   }
   for (MPConstraintProto& mp_constraint : *mp_model->mutable_constraint()) {
     ScaleConstraint(var_scaling, &mp_constraint);
@@ -99,12 +95,495 @@ std::vector<double> ScaleContinuousVariables(double scaling,
                    << general_constraint.general_constraint_case();
     }
   }
+}
+
+}  // namespace
+
+std::vector<double> ScaleContinuousVariables(double scaling, double max_bound,
+                                             MPModelProto* mp_model) {
+  const int num_variables = mp_model->variable_size();
+  std::vector<double> var_scaling(num_variables, 1.0);
+  for (int i = 0; i < num_variables; ++i) {
+    if (mp_model->variable(i).is_integer()) continue;
+    const double lb = mp_model->variable(i).lower_bound();
+    const double ub = mp_model->variable(i).upper_bound();
+    const double magnitude = std::max(std::abs(lb), std::abs(ub));
+    if (magnitude == 0 || magnitude > max_bound) continue;
+    var_scaling[i] = std::min(scaling, max_bound / magnitude);
+  }
+  ApplyVarScaling(var_scaling, mp_model);
+  return var_scaling;
+}
+
+// This uses the best rational approximation of x via continuous fractions. It
+// is probably not the best implementation, but according to the unit test, it
+// seems to do the job.
+int FindRationalFactor(double x, int limit, double tolerance) {
+  const double initial_x = x;
+  x = std::abs(x);
+  x -= std::floor(x);
+  int q = 1;
+  int prev_q = 0;
+  while (q < limit) {
+    if (std::abs(q * initial_x - std::round(q * initial_x)) < q * tolerance) {
+      return q;
+    }
+    x = 1 / x;
+    const int new_q = prev_q + static_cast<int>(std::floor(x)) * q;
+    prev_q = q;
+    q = new_q;
+    x -= std::floor(x);
+  }
+  return 0;
+}
+
+namespace {
+
+// Returns a factor such that factor * var only need to take integer values to
+// satisfy the given constraint. Return 0.0 if we didn't find such factor.
+//
+// Precondition: var must be the only non-integer in the given constraint.
+double GetIntegralityMultiplier(const MPModelProto& mp_model,
+                                const std::vector<double>& var_scaling, int var,
+                                int ct_index, double tolerance) {
+  DCHECK(!mp_model.variable(var).is_integer());
+  const MPConstraintProto& ct = mp_model.constraint(ct_index);
+  double multiplier = 1.0;
+  double var_coeff = 0.0;
+  const double max_multiplier = 1e4;
+  for (int i = 0; i < ct.var_index().size(); ++i) {
+    if (var == ct.var_index(i)) {
+      var_coeff = ct.coefficient(i);
+      continue;
+    }
+
+    DCHECK(mp_model.variable(ct.var_index(i)).is_integer());
+    // This actually compute the smallest multiplier to make all other
+    // terms in the constraint integer.
+    const double coeff =
+        multiplier * ct.coefficient(i) / var_scaling[ct.var_index(i)];
+    multiplier *=
+        FindRationalFactor(coeff, /*limit=*/100, multiplier * tolerance);
+    if (multiplier == 0 || multiplier > max_multiplier) return 0.0;
+  }
+  DCHECK_NE(var_coeff, 0.0);
+
+  // The constraint bound need to be infinite or integer.
+  for (const double bound : {ct.lower_bound(), ct.upper_bound()}) {
+    if (!std::isfinite(bound)) continue;
+    if (std::abs(std::round(bound * multiplier) - bound * multiplier) >
+        tolerance * multiplier) {
+      return 0.0;
+    }
+  }
+  return std::abs(multiplier * var_coeff);
+}
+
+}  // namespace
+
+bool MakeBoundsOfIntegerVariablesInteger(const SatParameters& params,
+                                         MPModelProto* mp_model,
+                                         SolverLogger* logger) {
+  const int num_variables = mp_model->variable_size();
+  const double tolerance = params.mip_wanted_precision();
+  int64_t num_changes = 0;
+  for (int i = 0; i < num_variables; ++i) {
+    const MPVariableProto& mp_var = mp_model->variable(i);
+    if (!mp_var.is_integer()) continue;
+
+    const double lb = mp_var.lower_bound();
+    const double new_lb = std::isfinite(lb) ? std::ceil(lb - tolerance) : lb;
+    if (lb != new_lb) {
+      ++num_changes;
+      mp_model->mutable_variable(i)->set_lower_bound(new_lb);
+    }
+
+    const double ub = mp_var.upper_bound();
+    const double new_ub = std::isfinite(ub) ? std::floor(ub + tolerance) : ub;
+    if (ub != new_ub) {
+      ++num_changes;
+      mp_model->mutable_variable(i)->set_upper_bound(new_ub);
+    }
+
+    if (new_ub < new_lb) {
+      SOLVER_LOG(logger, "Empty domain for integer variable #", i, ": [", lb,
+                 ",", ub, "]");
+      return false;
+    }
+  }
+
+  if (num_changes > 0) {
+    SOLVER_LOG(logger, "Changed ", num_changes,
+               " bounds of integer variables to integer values");
+  }
+  return true;
+}
+
+void RemoveNearZeroTerms(const SatParameters& params, MPModelProto* mp_model,
+                         SolverLogger* logger) {
+  const int num_variables = mp_model->variable_size();
+
+  // Compute for each variable its current maximum magnitude. Note that we will
+  // only scale variable with a coefficient >= 1, so it is safe to use this
+  // bound.
+  std::vector<double> max_bounds(num_variables);
+  for (int i = 0; i < num_variables; ++i) {
+    double value = std::abs(mp_model->variable(i).lower_bound());
+    value = std::max(value, std::abs(mp_model->variable(i).upper_bound()));
+    value = std::min(value, params.mip_max_bound());
+    max_bounds[i] = value;
+  }
+
+  // We want the maximum absolute error while setting coefficients to zero to
+  // not exceed our mip wanted precision. So for a binary variable we might set
+  // to zero coefficient around 1e-7. But for large domain, we need lower coeff
+  // than that, around 1e-12 with the default params.mip_max_bound(). This also
+  // depends on the size of the constraint.
+  int64_t num_removed = 0;
+  double largest_removed = 0.0;
+  const int num_constraints = mp_model->constraint_size();
+  for (int c = 0; c < num_constraints; ++c) {
+    MPConstraintProto* ct = mp_model->mutable_constraint(c);
+    int new_size = 0;
+    const int size = ct->var_index().size();
+    if (size == 0) continue;
+    const double threshold =
+        params.mip_wanted_precision() / static_cast<double>(size);
+    for (int i = 0; i < size; ++i) {
+      const int var = ct->var_index(i);
+      const double coeff = ct->coefficient(i);
+      if (std::abs(coeff) * max_bounds[var] < threshold) {
+        largest_removed = std::max(largest_removed, std::abs(coeff));
+        continue;
+      }
+      ct->set_var_index(new_size, var);
+      ct->set_coefficient(new_size, coeff);
+      ++new_size;
+    }
+    num_removed += size - new_size;
+    ct->mutable_var_index()->Truncate(new_size);
+    ct->mutable_coefficient()->Truncate(new_size);
+  }
+
+  if (num_removed > 0) {
+    SOLVER_LOG(logger, "Removed ", num_removed,
+               " near zero terms with largest magnitude of ", largest_removed,
+               ".");
+  }
+}
+
+bool MPModelProtoValidationBeforeConversion(const SatParameters& params,
+                                            const MPModelProto& mp_model,
+                                            SolverLogger* logger) {
+  // Abort if there is constraint type we don't currently support.
+  for (const MPGeneralConstraintProto& general_constraint :
+       mp_model.general_constraint()) {
+    switch (general_constraint.general_constraint_case()) {
+      case MPGeneralConstraintProto::kIndicatorConstraint:
+        break;
+      case MPGeneralConstraintProto::kAndConstraint:
+        break;
+      case MPGeneralConstraintProto::kOrConstraint:
+        break;
+      default:
+        SOLVER_LOG(logger, "General constraints of type ",
+                   general_constraint.general_constraint_case(),
+                   " are not supported.");
+        return false;
+    }
+  }
+
+  // Abort if finite variable bounds or objective is too large.
+  const double threshold = params.mip_max_valid_magnitude();
+  const int num_variables = mp_model.variable_size();
+  for (int i = 0; i < num_variables; ++i) {
+    const MPVariableProto& var = mp_model.variable(i);
+    if ((std::isfinite(var.lower_bound()) &&
+         std::abs(var.lower_bound()) > threshold) ||
+        (std::isfinite(var.upper_bound()) &&
+         std::abs(var.upper_bound()) > threshold)) {
+      SOLVER_LOG(logger, "Variable bounds are too large [", var.lower_bound(),
+                 ",", var.upper_bound(), "]");
+      return false;
+    }
+    if (std::abs(var.objective_coefficient()) > threshold) {
+      SOLVER_LOG(logger, "Objective coefficient is too large: ",
+                 var.objective_coefficient());
+      return false;
+    }
+  }
+
+  // Abort if finite constraint bounds or coefficients are too large.
+  const int num_constraints = mp_model.constraint_size();
+  for (int c = 0; c < num_constraints; ++c) {
+    const MPConstraintProto& ct = mp_model.constraint(c);
+    if ((std::isfinite(ct.lower_bound()) &&
+         std::abs(ct.lower_bound()) > threshold) ||
+        (std::isfinite(ct.upper_bound()) &&
+         std::abs(ct.upper_bound()) > threshold)) {
+      SOLVER_LOG(logger, "Constraint bounds are too large [", ct.lower_bound(),
+                 ",", ct.upper_bound(), "]");
+      return false;
+    }
+    for (const double coeff : ct.coefficient()) {
+      if (std::abs(coeff) > threshold) {
+        SOLVER_LOG(logger, "Constraint coefficient is too large: ", coeff);
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+std::vector<double> DetectImpliedIntegers(MPModelProto* mp_model,
+                                          SolverLogger* logger) {
+  const int num_variables = mp_model->variable_size();
+  std::vector<double> var_scaling(num_variables, 1.0);
+
+  int initial_num_integers = 0;
+  for (int i = 0; i < num_variables; ++i) {
+    if (mp_model->variable(i).is_integer()) ++initial_num_integers;
+  }
+  VLOG(1) << "Initial num integers: " << initial_num_integers;
+
+  // We will process all equality constraints with exactly one non-integer.
+  const double tolerance = 1e-6;
+  std::vector<int> constraint_queue;
+
+  const int num_constraints = mp_model->constraint_size();
+  std::vector<int> constraint_to_num_non_integer(num_constraints, 0);
+  std::vector<std::vector<int>> var_to_constraints(num_variables);
+  for (int i = 0; i < num_constraints; ++i) {
+    const MPConstraintProto& mp_constraint = mp_model->constraint(i);
+
+    for (const int var : mp_constraint.var_index()) {
+      if (!mp_model->variable(var).is_integer()) {
+        var_to_constraints[var].push_back(i);
+        constraint_to_num_non_integer[i]++;
+      }
+    }
+    if (constraint_to_num_non_integer[i] == 1) {
+      constraint_queue.push_back(i);
+    }
+  }
+  VLOG(1) << "Initial constraint queue: " << constraint_queue.size() << " / "
+          << num_constraints;
+
+  int num_detected = 0;
+  double max_scaling = 0.0;
+  auto scale_and_mark_as_integer = [&](int var, double scaling) mutable {
+    CHECK_NE(var, -1);
+    CHECK(!mp_model->variable(var).is_integer());
+    CHECK_EQ(var_scaling[var], 1.0);
+    if (scaling != 1.0) {
+      VLOG(2) << "Scaled " << var << " by " << scaling;
+    }
+
+    ++num_detected;
+    max_scaling = std::max(max_scaling, scaling);
+
+    // Scale the variable right away and mark it as implied integer.
+    // Note that the constraints will be scaled later.
+    var_scaling[var] = scaling;
+    mp_model->mutable_variable(var)->set_is_integer(true);
+
+    // Update the queue of constraints with a single non-integer.
+    for (const int ct_index : var_to_constraints[var]) {
+      constraint_to_num_non_integer[ct_index]--;
+      if (constraint_to_num_non_integer[ct_index] == 1) {
+        constraint_queue.push_back(ct_index);
+      }
+    }
+  };
+
+  int num_fail_due_to_rhs = 0;
+  int num_fail_due_to_large_multiplier = 0;
+  int num_processed_constraints = 0;
+  while (!constraint_queue.empty()) {
+    const int top_ct_index = constraint_queue.back();
+    constraint_queue.pop_back();
+
+    // The non integer variable was already made integer by one other
+    // constraint.
+    if (constraint_to_num_non_integer[top_ct_index] == 0) continue;
+
+    // Ignore non-equality here.
+    const MPConstraintProto& ct = mp_model->constraint(top_ct_index);
+    if (ct.lower_bound() + tolerance < ct.upper_bound()) continue;
+
+    ++num_processed_constraints;
+
+    // This will be set to the unique non-integer term of this constraint.
+    int var = -1;
+    double var_coeff;
+
+    // We are looking for a "multiplier" so that the unique non-integer term
+    // in this constraint (i.e. var * var_coeff) times this multiplier is an
+    // integer.
+    //
+    // If this is set to zero or becomes too large, we fail to detect a new
+    // implied integer and ignore this constraint.
+    double multiplier = 1.0;
+    const double max_multiplier = 1e4;
+
+    for (int i = 0; i < ct.var_index().size(); ++i) {
+      if (!mp_model->variable(ct.var_index(i)).is_integer()) {
+        CHECK_EQ(var, -1);
+        var = ct.var_index(i);
+        var_coeff = ct.coefficient(i);
+      } else {
+        // This actually compute the smallest multiplier to make all other
+        // terms in the constraint integer.
+        const double coeff =
+            multiplier * ct.coefficient(i) / var_scaling[ct.var_index(i)];
+        multiplier *=
+            FindRationalFactor(coeff, /*limit=*/100, multiplier * tolerance);
+        if (multiplier == 0 || multiplier > max_multiplier) {
+          break;
+        }
+      }
+    }
+
+    if (multiplier == 0 || multiplier > max_multiplier) {
+      ++num_fail_due_to_large_multiplier;
+      continue;
+    }
+
+    // These "rhs" fail could be handled by shifting the variable.
+    const double rhs = ct.lower_bound();
+    if (std::abs(std::round(rhs * multiplier) - rhs * multiplier) >
+        tolerance * multiplier) {
+      ++num_fail_due_to_rhs;
+      continue;
+    }
+
+    // We want to multiply the variable so that it is integer. We know that
+    // coeff * multiplier is an integer, so we just multiply by that.
+    //
+    // But if a variable appear in more than one equality, we want to find the
+    // smallest integrality factor! See diameterc-msts-v40a100d5i.mps
+    // for an instance of this.
+    double best_scaling = std::abs(var_coeff * multiplier);
+    for (const int ct_index : var_to_constraints[var]) {
+      if (ct_index == top_ct_index) continue;
+      if (constraint_to_num_non_integer[ct_index] != 1) continue;
+
+      // Ignore non-equality here.
+      const MPConstraintProto& ct = mp_model->constraint(top_ct_index);
+      if (ct.lower_bound() + tolerance < ct.upper_bound()) continue;
+
+      const double multiplier = GetIntegralityMultiplier(
+          *mp_model, var_scaling, var, ct_index, tolerance);
+      if (multiplier != 0.0 && multiplier < best_scaling) {
+        best_scaling = multiplier;
+      }
+    }
+
+    scale_and_mark_as_integer(var, best_scaling);
+  }
+
+  // Process continuous variables that only appear as the unique non integer
+  // in a set of non-equality constraints.
+  //
+  // Note that turning to integer such variable cannot in turn trigger new
+  // integer detection, so there is no point doing that in a loop.
+  int num_in_inequalities = 0;
+  int num_to_be_handled = 0;
+  for (int var = 0; var < num_variables; ++var) {
+    if (mp_model->variable(var).is_integer()) continue;
+
+    // This should be presolved and not happen.
+    if (var_to_constraints[var].empty()) continue;
+
+    bool ok = true;
+    for (const int ct_index : var_to_constraints[var]) {
+      if (constraint_to_num_non_integer[ct_index] != 1) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+
+    std::vector<double> scaled_coeffs;
+    for (const int ct_index : var_to_constraints[var]) {
+      const double multiplier = GetIntegralityMultiplier(
+          *mp_model, var_scaling, var, ct_index, tolerance);
+      if (multiplier == 0.0) {
+        ok = false;
+        break;
+      }
+      scaled_coeffs.push_back(multiplier);
+    }
+    if (!ok) continue;
+
+    // The situation is a bit tricky here, we have a bunch of coeffs c_i, and we
+    // know that X * c_i can take integer value without changing the constraint
+    // i meaning.
+    //
+    // For now we take the min, and scale only if all c_i / min are integer.
+    double scaling = scaled_coeffs[0];
+    for (const double c : scaled_coeffs) {
+      scaling = std::min(scaling, c);
+    }
+    CHECK_GT(scaling, 0.0);
+    for (const double c : scaled_coeffs) {
+      const double fraction = c / scaling;
+      if (std::abs(std::round(fraction) - fraction) > tolerance) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) {
+      // TODO(user): be smarter! we should be able to handle these cases.
+      ++num_to_be_handled;
+      continue;
+    }
+
+    // Tricky, we also need the bound of the scaled variable to be integer.
+    for (const double bound : {mp_model->variable(var).lower_bound(),
+                               mp_model->variable(var).upper_bound()}) {
+      if (!std::isfinite(bound)) continue;
+      if (std::abs(std::round(bound * scaling) - bound * scaling) >
+          tolerance * scaling) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) {
+      // TODO(user): If we scale more we migth be able to turn it into an
+      // integer.
+      ++num_to_be_handled;
+      continue;
+    }
+
+    ++num_in_inequalities;
+    scale_and_mark_as_integer(var, scaling);
+  }
+  VLOG(1) << "num_new_integer: " << num_detected
+          << " num_processed_constraints: " << num_processed_constraints
+          << " num_rhs_fail: " << num_fail_due_to_rhs
+          << " num_multiplier_fail: " << num_fail_due_to_large_multiplier;
+
+  if (num_to_be_handled > 0) {
+    SOLVER_LOG(logger, "Missed ", num_to_be_handled,
+               " potential implied integer.");
+  }
+
+  const int num_integers = initial_num_integers + num_detected;
+  SOLVER_LOG(logger, "Num integers: ", num_integers, "/", num_variables,
+             " (implied: ", num_detected,
+             " in_inequalities: ", num_in_inequalities,
+             " max_scaling: ", max_scaling, ")",
+             (num_integers == num_variables ? " [IP] " : " [MIP] "));
+
+  ApplyVarScaling(var_scaling, mp_model);
   return var_scaling;
 }
 
 namespace {
 
-// We use a class to reuse the temporay memory.
+// We use a class to reuse the temporary memory.
 struct ConstraintScaler {
   // Scales an individual constraint.
   ConstraintProto* AddConstraint(const MPModelProto& mp_model,
@@ -112,15 +591,31 @@ struct ConstraintScaler {
                                  CpModelProto* cp_model);
 
   double max_relative_coeff_error = 0.0;
-  double max_sum_error = 0.0;
+  double max_relative_rhs_error = 0.0;
   double max_scaling_factor = 0.0;
 
   double wanted_precision = 1e-6;
-  int64 scaling_target = int64{1} << 50;
+  int64_t scaling_target = int64_t{1} << 50;
+  std::vector<int> var_indices;
   std::vector<double> coefficients;
   std::vector<double> lower_bounds;
   std::vector<double> upper_bounds;
 };
+
+namespace {
+
+double FindFractionalScaling(const std::vector<double>& coefficients,
+                             double tolerance) {
+  double multiplier = 1.0;
+  for (const double coeff : coefficients) {
+    multiplier *=
+        FindRationalFactor(coeff, /*limit=*/1e8, multiplier * tolerance);
+    if (multiplier == 0.0) break;
+  }
+  return multiplier;
+}
+
+}  // namespace
 
 ConstraintProto* ConstraintScaler::AddConstraint(
     const MPModelProto& mp_model, const MPConstraintProto& mp_constraint,
@@ -136,27 +631,41 @@ ConstraintProto* ConstraintScaler::AddConstraint(
 
   // First scale the coefficients of the constraints so that the constraint
   // sum can always be computed without integer overflow.
+  var_indices.clear();
   coefficients.clear();
   lower_bounds.clear();
   upper_bounds.clear();
   const int num_coeffs = mp_constraint.coefficient_size();
   for (int i = 0; i < num_coeffs; ++i) {
-    coefficients.push_back(mp_constraint.coefficient(i));
     const auto& var_proto = cp_model->variables(mp_constraint.var_index(i));
-    lower_bounds.push_back(var_proto.domain(0));
-    upper_bounds.push_back(var_proto.domain(var_proto.domain_size() - 1));
-  }
-  double scaling_factor = GetBestScalingOfDoublesToInt64(
-      coefficients, lower_bounds, upper_bounds, scaling_target);
+    const int64_t lb = var_proto.domain(0);
+    const int64_t ub = var_proto.domain(var_proto.domain_size() - 1);
+    if (lb == 0 && ub == 0) continue;
 
-  // We use an absolute precision if the constraint domain contains a point in
-  // [-1, 1], otherwise we use a relative error to the minimum absolute value
-  // in the domain.
+    const double coeff = mp_constraint.coefficient(i);
+    if (coeff == 0.0) continue;
+
+    var_indices.push_back(mp_constraint.var_index(i));
+    coefficients.push_back(coeff);
+    lower_bounds.push_back(lb);
+    upper_bounds.push_back(ub);
+  }
+
+  // We compute the worst case error relative to the magnitude of the bounds.
   Fractional lb = mp_constraint.lower_bound();
   Fractional ub = mp_constraint.upper_bound();
-  double relative_ref = 1.0;
-  if (lb > 1.0) relative_ref = lb;
-  if (ub < -1.0) relative_ref = -ub;
+  const double ct_norm = std::max(1.0, std::min(std::abs(lb), std::abs(ub)));
+
+  double scaling_factor = GetBestScalingOfDoublesToInt64(
+      coefficients, lower_bounds, upper_bounds, scaling_target);
+  if (scaling_factor == 0.0) {
+    // TODO(user): Report error properly instead of ignoring constraint. Note
+    // however that this likely indicate a coefficient of inf in the constraint,
+    // so we should probably abort before reaching here.
+    LOG(DFATAL) << "Scaling factor of zero while scaling constraint: "
+                << mp_constraint.ShortDebugString();
+    return nullptr;
+  }
 
   // Returns the smallest factor of the form 2^i that gives us a relative sum
   // error of wanted_precision and still make sure we will have no integer
@@ -169,11 +678,25 @@ ConstraintProto* ConstraintScaler::AddConstraint(
   for (; x <= scaling_factor; x *= 2) {
     ComputeScalingErrors(coefficients, lower_bounds, upper_bounds, x,
                          &relative_coeff_error, &scaled_sum_error);
-    if (scaled_sum_error < wanted_precision * x * relative_ref) break;
+    if (scaled_sum_error < wanted_precision * x * ct_norm) break;
   }
   scaling_factor = x;
 
-  const int64 gcd = ComputeGcdOfRoundedDoubles(coefficients, scaling_factor);
+  // Because we deal with an approximate input, scaling with a power of 2 might
+  // not be the best choice. It is also possible user used rational coeff and
+  // then converted them to double (1/2, 1/3, 4/5, etc...). This scaling will
+  // recover such rational input and might result in a smaller overall
+  // coefficient which is good.
+  const double integer_factor = FindFractionalScaling(coefficients, 1e-8);
+  if (integer_factor != 0 && integer_factor < scaling_factor) {
+    ComputeScalingErrors(coefficients, lower_bounds, upper_bounds, x,
+                         &relative_coeff_error, &scaled_sum_error);
+    if (scaled_sum_error < wanted_precision * integer_factor * ct_norm) {
+      scaling_factor = integer_factor;
+    }
+  }
+
+  const int64_t gcd = ComputeGcdOfRoundedDoubles(coefficients, scaling_factor);
   max_relative_coeff_error =
       std::max(relative_coeff_error, max_relative_coeff_error);
   max_scaling_factor = std::max(scaling_factor / gcd, max_scaling_factor);
@@ -182,43 +705,51 @@ ConstraintProto* ConstraintScaler::AddConstraint(
   // we made no error at all during our scaling.
   bool relax_bound = scaled_sum_error > 0;
 
-  for (int i = 0; i < num_coeffs; ++i) {
-    const double scaled_value = mp_constraint.coefficient(i) * scaling_factor;
-    const int64 value = static_cast<int64>(std::round(scaled_value)) / gcd;
+  for (int i = 0; i < coefficients.size(); ++i) {
+    const double scaled_value = coefficients[i] * scaling_factor;
+    const int64_t value = static_cast<int64_t>(std::round(scaled_value)) / gcd;
     if (value != 0) {
-      if (!mp_model.variable(mp_constraint.var_index(i)).is_integer()) {
+      if (!mp_model.variable(var_indices[i]).is_integer()) {
         relax_bound = true;
       }
-      arg->add_vars(mp_constraint.var_index(i));
+      arg->add_vars(var_indices[i]);
       arg->add_coeffs(value);
     }
   }
-  max_sum_error = std::max(max_sum_error,
-                           scaled_sum_error / (scaling_factor * relative_ref));
+  max_relative_rhs_error = std::max(
+      max_relative_rhs_error, scaled_sum_error / (scaling_factor * ct_norm));
 
   // Add the constraint bounds. Because we are sure the scaled constraint fit
-  // on an int64, if the scaled bounds are too large, the constraint is either
+  // on an int64_t, if the scaled bounds are too large, the constraint is either
   // always true or always false.
   if (relax_bound) {
-    lb -= std::max(1.0, std::abs(lb)) * wanted_precision;
+    lb -= std::max(std::abs(lb), 1.0) * wanted_precision;
   }
   const Fractional scaled_lb = std::ceil(lb * scaling_factor);
-  if (lb == -kInfinity || scaled_lb <= kint64min) {
-    arg->add_domain(kint64min);
+  if (lb == kInfinity || scaled_lb >= std::numeric_limits<int64_t>::max()) {
+    // Corner case: infeasible model.
+    arg->add_domain(std::numeric_limits<int64_t>::max());
+  } else if (lb == -kInfinity ||
+             scaled_lb <= std::numeric_limits<int64_t>::min()) {
+    arg->add_domain(std::numeric_limits<int64_t>::min());
   } else {
-    arg->add_domain(CeilRatio(IntegerValue(static_cast<int64>(scaled_lb)),
+    arg->add_domain(CeilRatio(IntegerValue(static_cast<int64_t>(scaled_lb)),
                               IntegerValue(gcd))
                         .value());
   }
 
   if (relax_bound) {
-    ub += std::max(1.0, std::abs(ub)) * wanted_precision;
+    ub += std::max(std::abs(ub), 1.0) * wanted_precision;
   }
   const Fractional scaled_ub = std::floor(ub * scaling_factor);
-  if (ub == kInfinity || scaled_ub >= kint64max) {
-    arg->add_domain(kint64max);
+  if (ub == -kInfinity || scaled_ub <= std::numeric_limits<int64_t>::min()) {
+    // Corner case: infeasible model.
+    arg->add_domain(std::numeric_limits<int64_t>::min());
+  } else if (ub == kInfinity ||
+             scaled_ub >= std::numeric_limits<int64_t>::max()) {
+    arg->add_domain(std::numeric_limits<int64_t>::max());
   } else {
-    arg->add_domain(FloorRatio(IntegerValue(static_cast<int64>(scaled_ub)),
+    arg->add_domain(FloorRatio(IntegerValue(static_cast<int64_t>(scaled_ub)),
                                IntegerValue(gcd))
                         .value());
   }
@@ -230,7 +761,8 @@ ConstraintProto* ConstraintScaler::AddConstraint(
 
 bool ConvertMPModelProtoToCpModelProto(const SatParameters& params,
                                        const MPModelProto& mp_model,
-                                       CpModelProto* cp_model) {
+                                       CpModelProto* cp_model,
+                                       SolverLogger* logger) {
   CHECK(cp_model != nullptr);
   cp_model->Clear();
   cp_model->set_name(mp_model.name());
@@ -247,11 +779,12 @@ bool ConvertMPModelProtoToCpModelProto(const SatParameters& params,
   // similar condition in disguise because problem with a difference of more
   // than 6 magnitudes between the variable values will likely run into numeric
   // trouble.
-  const int64 kMaxVariableBound = static_cast<int64>(params.mip_max_bound());
+  const int64_t kMaxVariableBound =
+      static_cast<int64_t>(params.mip_max_bound());
 
   int num_truncated_bounds = 0;
   int num_small_domains = 0;
-  const int64 kSmallDomainSize = 1000;
+  const int64_t kSmallDomainSize = 1000;
   const double kWantedPrecision = params.mip_wanted_precision();
 
   // Add the variables.
@@ -263,29 +796,21 @@ bool ConvertMPModelProtoToCpModelProto(const SatParameters& params,
 
     // Deal with the corner case of a domain far away from zero.
     //
-    // TODO(user): We should deal with these case by shifting the domain so
-    // that it includes zero instead of just fixing the variable. But that is a
-    // bit of work as it requires some postsolve.
-    if (mp_var.lower_bound() > kMaxVariableBound) {
-      // Fix var to its lower bound.
-      ++num_truncated_bounds;
-      const int64 value = static_cast<int64>(std::round(mp_var.lower_bound()));
-      cp_var->add_domain(value);
-      cp_var->add_domain(value);
-      continue;
-    } else if (mp_var.upper_bound() < -kMaxVariableBound) {
-      // Fix var to its upper_bound.
-      ++num_truncated_bounds;
-      const int64 value = static_cast<int64>(std::round(mp_var.upper_bound()));
-      cp_var->add_domain(value);
-      cp_var->add_domain(value);
-      continue;
+    // TODO(user): We could avoid these cases by shifting the domain of
+    // all variables to contain zero. This should also lead to a better scaling,
+    // but it has some complications with integer variables and require some
+    // post-solve.
+    if (mp_var.lower_bound() > static_cast<double>(kMaxVariableBound) ||
+        mp_var.upper_bound() < static_cast<double>(-kMaxVariableBound)) {
+      SOLVER_LOG(logger, "Error: variable ", mp_var.DebugString(),
+                 " is outside [-mip_max_bound..mip_max_bound]");
+      return false;
     }
 
     // Note that we must process the lower bound first.
     for (const bool lower : {true, false}) {
       const double bound = lower ? mp_var.lower_bound() : mp_var.upper_bound();
-      if (std::abs(bound) >= kMaxVariableBound) {
+      if (std::abs(bound) >= static_cast<double>(kMaxVariableBound)) {
         ++num_truncated_bounds;
         cp_var->add_domain(bound < 0 ? -kMaxVariableBound : kMaxVariableBound);
         continue;
@@ -293,8 +818,14 @@ bool ConvertMPModelProtoToCpModelProto(const SatParameters& params,
 
       // Note that the cast is "perfect" because we forbid large values.
       cp_var->add_domain(
-          static_cast<int64>(lower ? std::ceil(bound - kWantedPrecision)
-                                   : std::floor(bound + kWantedPrecision)));
+          static_cast<int64_t>(lower ? std::ceil(bound - kWantedPrecision)
+                                     : std::floor(bound + kWantedPrecision)));
+    }
+
+    if (cp_var->domain(0) > cp_var->domain(1)) {
+      LOG(WARNING) << "Variable #" << i << " cannot take integer value. "
+                   << mp_var.ShortDebugString();
+      return false;
     }
 
     // Notify if a continuous variable has a small domain as this is likely to
@@ -305,15 +836,19 @@ bool ConvertMPModelProtoToCpModelProto(const SatParameters& params,
     }
   }
 
-  LOG_IF(WARNING, num_truncated_bounds > 0)
-      << num_truncated_bounds << " bounds were truncated to "
-      << kMaxVariableBound << ".";
-  LOG_IF(WARNING, num_small_domains > 0)
-      << num_small_domains << " continuous variable domain with fewer than "
-      << kSmallDomainSize << " values.";
+  if (num_truncated_bounds > 0) {
+    SOLVER_LOG(logger, "Warning: ", num_truncated_bounds,
+               " bounds were truncated to ", kMaxVariableBound, ".");
+  }
+  if (num_small_domains > 0) {
+    SOLVER_LOG(logger, "Warning: ", num_small_domains,
+               " continuous variable domain with fewer than ", kSmallDomainSize,
+               " values.");
+  }
 
   ConstraintScaler scaler;
-  const int64 kScalingTarget = int64{1} << params.mip_max_activity_exponent();
+  const int64_t kScalingTarget = int64_t{1}
+                                 << params.mip_max_activity_exponent();
   scaler.wanted_precision = kWantedPrecision;
   scaler.scaling_target = kScalingTarget;
 
@@ -385,88 +920,152 @@ bool ConvertMPModelProtoToCpModelProto(const SatParameters& params,
     }
   }
 
-  double max_relative_coeff_error = scaler.max_relative_coeff_error;
-  double max_sum_error = scaler.max_sum_error;
-  double max_scaling_factor = scaler.max_scaling_factor;
+  // Display the error/scaling on the constraints.
+  SOLVER_LOG(logger, "Maximum constraint coefficient relative error: ",
+             scaler.max_relative_coeff_error);
+  SOLVER_LOG(logger, "Maximum constraint worst-case activity relative error: ",
+             scaler.max_relative_rhs_error,
+             (scaler.max_relative_rhs_error > params.mip_check_precision()
+                  ? " [Potentially IMPRECISE]"
+                  : ""));
+  SOLVER_LOG(logger,
+             "Maximum constraint scaling factor: ", scaler.max_scaling_factor);
 
-  // Display the error/scaling without taking into account the objective first.
-  VLOG(1) << "Maximum constraint coefficient relative error: "
-          << max_relative_coeff_error;
-  VLOG(1) << "Maximum constraint worst-case sum absolute error: "
-          << max_sum_error;
-  VLOG(1) << "Maximum constraint scaling factor: " << max_scaling_factor;
+  // Since cp_model support a floating point objective, we use that. This will
+  // allow us to scale the objective a bit later so we can potentially do more
+  // domain reduction first.
+  auto* float_objective = cp_model->mutable_floating_point_objective();
+  float_objective->set_maximize(mp_model.maximize());
+  float_objective->set_offset(mp_model.objective_offset());
+  for (int i = 0; i < num_variables; ++i) {
+    const MPVariableProto& mp_var = mp_model.variable(i);
+    if (mp_var.objective_coefficient() != 0.0) {
+      float_objective->add_vars(i);
+      float_objective->add_coeffs(mp_var.objective_coefficient());
+    }
+  }
 
-  // Add the objective.
+  // If the objective is fixed to zero, we consider there is none.
+  if (float_objective->offset() == 0 && float_objective->vars().empty()) {
+    cp_model->clear_floating_point_objective();
+  }
+  return true;
+}
+
+bool ScaleAndSetObjective(const SatParameters& params,
+                          const std::vector<std::pair<int, double>>& objective,
+                          double objective_offset, bool maximize,
+                          CpModelProto* cp_model, SolverLogger* logger) {
+  // Make sure the objective is currently empty.
+  cp_model->clear_objective();
+
+  // We filter constant terms and compute some needed quantities.
+  std::vector<int> var_indices;
   std::vector<double> coefficients;
   std::vector<double> lower_bounds;
   std::vector<double> upper_bounds;
-  for (int i = 0; i < num_variables; ++i) {
-    const MPVariableProto& mp_var = mp_model.variable(i);
-    if (mp_var.objective_coefficient() == 0.0) continue;
-    coefficients.push_back(mp_var.objective_coefficient());
-    const auto& var_proto = cp_model->variables(i);
-    lower_bounds.push_back(var_proto.domain(0));
-    upper_bounds.push_back(var_proto.domain(var_proto.domain_size() - 1));
-  }
-  if (!coefficients.empty() || mp_model.objective_offset() != 0.0) {
-    double scaling_factor = GetBestScalingOfDoublesToInt64(
-        coefficients, lower_bounds, upper_bounds, kScalingTarget);
-
-    // Returns the smallest factor of the form 2^i that gives us an absolute
-    // error of kWantedPrecision and still make sure we will have no integer
-    // overflow.
-    //
-    // TODO(user): Make this faster.
-    double x = std::min(scaling_factor, 1.0);
-    double relative_coeff_error;
-    double scaled_sum_error;
-    for (; x <= scaling_factor; x *= 2) {
-      ComputeScalingErrors(coefficients, lower_bounds, upper_bounds, x,
-                           &relative_coeff_error, &scaled_sum_error);
-      if (scaled_sum_error < kWantedPrecision * x) break;
+  double min_magnitude = std::numeric_limits<double>::infinity();
+  double max_magnitude = 0.0;
+  double l1_norm = 0.0;
+  for (const auto [var, coeff] : objective) {
+    const auto& var_proto = cp_model->variables(var);
+    const int64_t lb = var_proto.domain(0);
+    const int64_t ub = var_proto.domain(var_proto.domain_size() - 1);
+    if (lb == ub) {
+      if (lb != 0) objective_offset += lb * coeff;
+      continue;
     }
-    scaling_factor = x;
+    var_indices.push_back(var);
+    coefficients.push_back(coeff);
+    lower_bounds.push_back(lb);
+    upper_bounds.push_back(ub);
 
-    const int64 gcd = ComputeGcdOfRoundedDoubles(coefficients, scaling_factor);
-    max_relative_coeff_error =
-        std::max(relative_coeff_error, max_relative_coeff_error);
-
-    // Display the objective error/scaling.
-    VLOG(1) << "objective coefficient relative error: " << relative_coeff_error;
-    VLOG(1) << "objective worst-case absolute error: "
-            << scaled_sum_error / scaling_factor;
-    VLOG(1) << "objective scaling factor: " << scaling_factor / gcd;
-
-    // Note that here we set the scaling factor for the inverse operation of
-    // getting the "true" objective value from the scaled one. Hence the
-    // inverse.
-    auto* objective = cp_model->mutable_objective();
-    const int mult = mp_model.maximize() ? -1 : 1;
-    objective->set_offset(mp_model.objective_offset() * scaling_factor / gcd *
-                          mult);
-    objective->set_scaling_factor(1.0 / scaling_factor * gcd * mult);
-    for (int i = 0; i < num_variables; ++i) {
-      const MPVariableProto& mp_var = mp_model.variable(i);
-      const int64 value =
-          static_cast<int64>(
-              std::round(mp_var.objective_coefficient() * scaling_factor)) /
-          gcd;
-      if (value != 0) {
-        objective->add_vars(i);
-        objective->add_coeffs(value * mult);
-      }
-    }
+    min_magnitude = std::min(min_magnitude, std::abs(coeff));
+    max_magnitude = std::max(max_magnitude, std::abs(coeff));
+    l1_norm += std::abs(coeff);
   }
 
-  // Test the precision of the conversion.
-  const double allowed_error =
-      std::max(params.mip_check_precision(), params.mip_wanted_precision());
-  if (max_sum_error > allowed_error) {
-    LOG(WARNING) << "The relative error during double -> int64 conversion "
-                 << "is too high! error:" << max_sum_error
-                 << " check_tolerance:" << allowed_error;
+  if (coefficients.empty() && objective_offset == 0.0) return true;
+
+  if (!coefficients.empty()) {
+    const double average_magnitude =
+        l1_norm / static_cast<double>(coefficients.size());
+    SOLVER_LOG(logger, "[Scaling] Floating point objective has ",
+               coefficients.size(), " terms with magnitude in [", min_magnitude,
+               ", ", max_magnitude, "] average = ", average_magnitude);
+  }
+
+  // Start by computing the largest possible factor that gives something that
+  // will not cause overflow when evaluating the objective value.
+  const int64_t kScalingTarget = int64_t{1}
+                                 << params.mip_max_activity_exponent();
+  double scaling_factor = GetBestScalingOfDoublesToInt64(
+      coefficients, lower_bounds, upper_bounds, kScalingTarget);
+  if (scaling_factor == 0.0) {
+    LOG(ERROR) << "Scaling factor of zero while scaling objective! This "
+                  "likely indicate an infinite coefficient in the objective.";
     return false;
   }
+
+  // Returns the smallest factor of the form 2^i that gives us an absolute
+  // error of kWantedPrecision and still make sure we will have no integer
+  // overflow.
+  //
+  // TODO(user): Make this faster.
+  double x = std::min(scaling_factor, 1.0);
+  double relative_coeff_error;
+  double scaled_sum_error;
+  const double kWantedPrecision =
+      std::max(params.mip_wanted_precision(), params.absolute_gap_limit());
+  for (; x <= scaling_factor; x *= 2) {
+    ComputeScalingErrors(coefficients, lower_bounds, upper_bounds, x,
+                         &relative_coeff_error, &scaled_sum_error);
+    if (scaled_sum_error < kWantedPrecision * x) break;
+  }
+  scaling_factor = x;
+
+  // Same remark as for the constraint scaling code.
+  // TODO(user): Extract common code.
+  const double integer_factor = FindFractionalScaling(coefficients, 1e-8);
+  if (integer_factor != 0 && integer_factor < scaling_factor) {
+    ComputeScalingErrors(coefficients, lower_bounds, upper_bounds, x,
+                         &relative_coeff_error, &scaled_sum_error);
+    if (scaled_sum_error < kWantedPrecision * integer_factor) {
+      scaling_factor = integer_factor;
+    }
+  }
+
+  const int64_t gcd = ComputeGcdOfRoundedDoubles(coefficients, scaling_factor);
+
+  // Display the objective error/scaling.
+  SOLVER_LOG(logger, "[Scaling] Objective coefficient relative error: ",
+             relative_coeff_error);
+  SOLVER_LOG(logger, "[Scaling] Objective worst-case absolute error: ",
+             scaled_sum_error / scaling_factor);
+  SOLVER_LOG(logger,
+             "[Scaling] Objective scaling factor: ", scaling_factor / gcd);
+
+  // Note that here we set the scaling factor for the inverse operation of
+  // getting the "true" objective value from the scaled one. Hence the
+  // inverse.
+  auto* objective_proto = cp_model->mutable_objective();
+  const int64_t mult = maximize ? -1 : 1;
+  objective_proto->set_offset(objective_offset * scaling_factor / gcd * mult);
+  objective_proto->set_scaling_factor(1.0 / scaling_factor * gcd * mult);
+  for (int i = 0; i < coefficients.size(); ++i) {
+    const int64_t value =
+        static_cast<int64_t>(std::round(coefficients[i] * scaling_factor)) /
+        gcd;
+    if (value != 0) {
+      objective_proto->add_vars(var_indices[i]);
+      objective_proto->add_coeffs(value * mult);
+    }
+  }
+
+  if (scaled_sum_error == 0.0) {
+    objective_proto->set_scaling_was_exact(true);
+  }
+
   return true;
 }
 
@@ -526,8 +1125,8 @@ bool ConvertBinaryMPModelProtoToBooleanProblem(const MPModelProto& mp_model,
     }
   }
 
-  // Variables needed to scale the double coefficients into int64.
-  const int64 kInt64Max = std::numeric_limits<int64>::max();
+  // Variables needed to scale the double coefficients into int64_t.
+  const int64_t kInt64Max = std::numeric_limits<int64_t>::max();
   double max_relative_error = 0.0;
   double max_bound_error = 0.0;
   double max_scaling_factor = 0.0;
@@ -548,7 +1147,8 @@ bool ConvertBinaryMPModelProtoToBooleanProblem(const MPModelProto& mp_model,
     }
     GetBestScalingOfDoublesToInt64(coefficients, kInt64Max, &scaling_factor,
                                    &relative_error);
-    const int64 gcd = ComputeGcdOfRoundedDoubles(coefficients, scaling_factor);
+    const int64_t gcd =
+        ComputeGcdOfRoundedDoubles(coefficients, scaling_factor);
     max_relative_error = std::max(relative_error, max_relative_error);
     max_scaling_factor = std::max(scaling_factor / gcd, max_scaling_factor);
 
@@ -556,7 +1156,7 @@ bool ConvertBinaryMPModelProtoToBooleanProblem(const MPModelProto& mp_model,
     for (int i = 0; i < num_coeffs; ++i) {
       const double scaled_value = mp_constraint.coefficient(i) * scaling_factor;
       bound_error += std::abs(round(scaled_value) - scaled_value);
-      const int64 value = static_cast<int64>(round(scaled_value)) / gcd;
+      const int64_t value = static_cast<int64_t>(round(scaled_value)) / gcd;
       if (value != 0) {
         constraint->add_literals(mp_constraint.var_index(i) + 1);
         constraint->add_coefficients(value);
@@ -566,7 +1166,7 @@ bool ConvertBinaryMPModelProtoToBooleanProblem(const MPModelProto& mp_model,
 
     // Add the bounds. Note that we do not pass them to
     // GetBestScalingOfDoublesToInt64() because we know that the sum of absolute
-    // coefficients of the constraint fit on an int64. If one of the scaled
+    // coefficients of the constraint fit on an int64_t. If one of the scaled
     // bound overflows, we don't care by how much because in this case the
     // constraint is just trivial or unsatisfiable.
     const Fractional lb = mp_constraint.lower_bound();
@@ -578,7 +1178,8 @@ bool ConvertBinaryMPModelProtoToBooleanProblem(const MPModelProto& mp_model,
       if (lb * scaling_factor > -static_cast<double>(kInt64Max)) {
         // Otherwise, the constraint is not needed.
         constraint->set_lower_bound(
-            static_cast<int64>(round(lb * scaling_factor - bound_error)) / gcd);
+            static_cast<int64_t>(round(lb * scaling_factor - bound_error)) /
+            gcd);
       }
     }
     const Fractional ub = mp_constraint.upper_bound();
@@ -590,7 +1191,8 @@ bool ConvertBinaryMPModelProtoToBooleanProblem(const MPModelProto& mp_model,
       if (ub * scaling_factor < static_cast<double>(kInt64Max)) {
         // Otherwise, the constraint is not needed.
         constraint->set_upper_bound(
-            static_cast<int64>(round(ub * scaling_factor + bound_error)) / gcd);
+            static_cast<int64_t>(round(ub * scaling_factor + bound_error)) /
+            gcd);
       }
     }
   }
@@ -608,7 +1210,7 @@ bool ConvertBinaryMPModelProtoToBooleanProblem(const MPModelProto& mp_model,
   }
   GetBestScalingOfDoublesToInt64(coefficients, kInt64Max, &scaling_factor,
                                  &relative_error);
-  const int64 gcd = ComputeGcdOfRoundedDoubles(coefficients, scaling_factor);
+  const int64_t gcd = ComputeGcdOfRoundedDoubles(coefficients, scaling_factor);
   max_relative_error = std::max(relative_error, max_relative_error);
 
   // Display the objective error/scaling.
@@ -623,9 +1225,10 @@ bool ConvertBinaryMPModelProtoToBooleanProblem(const MPModelProto& mp_model,
   objective->set_scaling_factor(1.0 / scaling_factor * gcd);
   for (int var_id = 0; var_id < num_variables; ++var_id) {
     const MPVariableProto& mp_var = mp_model.variable(var_id);
-    const int64 value = static_cast<int64>(round(
-                            mp_var.objective_coefficient() * scaling_factor)) /
-                        gcd;
+    const int64_t value =
+        static_cast<int64_t>(
+            round(mp_var.objective_coefficient() * scaling_factor)) /
+        gcd;
     if (value != 0) {
       objective->add_literals(var_id + 1);
       objective->add_coefficients(value);
@@ -638,7 +1241,7 @@ bool ConvertBinaryMPModelProtoToBooleanProblem(const MPModelProto& mp_model,
   // Test the precision of the conversion.
   const double kRelativeTolerance = 1e-8;
   if (max_relative_error > kRelativeTolerance) {
-    LOG(WARNING) << "The relative error during double -> int64 conversion "
+    LOG(WARNING) << "The relative error during double -> int64_t conversion "
                  << "is too high!";
     return false;
   }
@@ -774,6 +1377,58 @@ bool SolveLpAndUseIntegerVariableToStartLNS(const glop::LinearProgram& lp,
   }
   LOG(INFO) << "LNS with " << num_variable_fixed << " fixed variables.";
   return true;
+}
+
+double ComputeTrueObjectiveLowerBound(
+    const CpModelProto& model_proto_with_floating_point_objective,
+    const CpObjectiveProto& integer_objective,
+    const int64_t inner_integer_objective_lower_bound) {
+  // Create an LP with the correct variable domain.
+  glop::LinearProgram lp;
+  const CpModelProto& proto = model_proto_with_floating_point_objective;
+  for (int i = 0; i < proto.variables().size(); ++i) {
+    const auto& domain = proto.variables(i).domain();
+    lp.SetVariableBounds(lp.CreateNewVariable(), static_cast<double>(domain[0]),
+                         static_cast<double>(domain[domain.size() - 1]));
+  }
+
+  // Add the original problem floating point objective.
+  // This is user given, so we do need to deal with duplicate entries.
+  const FloatObjectiveProto& float_obj = proto.floating_point_objective();
+  lp.SetObjectiveOffset(float_obj.offset());
+  lp.SetMaximizationProblem(float_obj.maximize());
+  for (int i = 0; i < float_obj.vars().size(); ++i) {
+    const glop::ColIndex col(float_obj.vars(i));
+    const double old_value = lp.objective_coefficients()[col];
+    lp.SetObjectiveCoefficient(col, old_value + float_obj.coeffs(i));
+  }
+
+  // Add a single constraint "integer_objective >= lower_bound".
+  const glop::RowIndex ct = lp.CreateNewConstraint();
+  lp.SetConstraintBounds(
+      ct, static_cast<double>(inner_integer_objective_lower_bound),
+      std::numeric_limits<double>::infinity());
+  for (int i = 0; i < integer_objective.vars().size(); ++i) {
+    lp.SetCoefficient(ct, glop::ColIndex(integer_objective.vars(i)),
+                      static_cast<double>(integer_objective.coeffs(i)));
+  }
+
+  lp.CleanUp();
+
+  // This should be fast.
+  glop::LPSolver solver;
+  glop::GlopParameters glop_parameters;
+  glop_parameters.set_max_deterministic_time(10);
+  glop_parameters.set_change_status_to_imprecise(false);
+  solver.SetParameters(glop_parameters);
+  const glop::ProblemStatus& status = solver.Solve(lp);
+  if (status == glop::ProblemStatus::OPTIMAL) {
+    return solver.GetObjectiveValue();
+  }
+
+  // Error. Hoperfully this shouldn't happen.
+  return float_obj.maximize() ? std::numeric_limits<double>::infinity()
+                              : -std::numeric_limits<double>::infinity();
 }
 
 }  // namespace sat

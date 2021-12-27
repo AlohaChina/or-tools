@@ -1,4 +1,4 @@
-# Copyright 2010-2018 Google LLC
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -12,8 +12,6 @@
 # limitations under the License.
 """Fill a 72x37 rectangle by a minimum number of non-overlapping squares."""
 
-from __future__ import print_function
-from __future__ import division
 
 from ortools.sat.python import cp_model
 
@@ -85,7 +83,7 @@ def cover_rectangle(num_squares):
     print('%s found in %0.2fs' % (solver.StatusName(status), solver.WallTime()))
 
     # Prints solution.
-    if status == cp_model.FEASIBLE:
+    if status == cp_model.OPTIMAL:
         display = [[' ' for _ in range(size_x)] for _ in range(size_y)]
         for i in range(num_squares):
             sol_x = solver.Value(x_starts[i])

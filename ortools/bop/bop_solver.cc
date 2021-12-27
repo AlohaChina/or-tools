@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -34,9 +34,11 @@
 
 namespace operations_research {
 namespace bop {
+
+using ::operations_research::sat::LinearBooleanProblem;
+
 namespace {
 
-using ::operations_research::LinearBooleanProblem;
 using ::operations_research::glop::ColIndex;
 using ::operations_research::glop::DenseRow;
 
@@ -71,7 +73,6 @@ BopSolver::BopSolver(const LinearBooleanProblem& problem)
       parameters_(),
       stats_("BopSolver") {
   SCOPED_TIME_STAT(&stats_);
-  CHECK_OK(sat::ValidateBooleanProblem(problem));
 }
 
 BopSolver::~BopSolver() { IF_STATS_ENABLED(VLOG(1) << stats_.StatString()); }
@@ -85,6 +86,12 @@ BopSolveStatus BopSolver::Solve() {
 BopSolveStatus BopSolver::SolveWithTimeLimit(TimeLimit* time_limit) {
   CHECK(time_limit != nullptr);
   SCOPED_TIME_STAT(&stats_);
+
+  absl::Status valid = sat::ValidateBooleanProblem(problem_);
+  if (!valid.ok()) {
+    LOG(ERROR) << "Invalid Boolean problem: " << valid.message();
+    return BopSolveStatus::INVALID_PROBLEM;
+  }
 
   UpdateParameters();
 

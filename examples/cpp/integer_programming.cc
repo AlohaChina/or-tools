@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,13 +13,30 @@
 
 // Integer programming example that shows how to use the API.
 
+#include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
+#include "absl/strings/match.h"
+#include "absl/strings/string_view.h"
 #include "ortools/base/logging.h"
 #include "ortools/linear_solver/linear_solver.h"
 
 namespace operations_research {
-void RunIntegerProgrammingExample(
-    MPSolver::OptimizationProblemType optimization_problem_type) {
-  MPSolver solver("IntegerProgrammingExample", optimization_problem_type);
+void RunIntegerProgrammingExample(absl::string_view solver_id) {
+  LOG(INFO) << "---- Integer programming example with " << solver_id << " ----";
+
+  MPSolver::OptimizationProblemType problem_type;
+  if (!MPSolver::ParseSolverType(solver_id, &problem_type)) {
+    LOG(INFO) << "Solver id " << solver_id << " not recognized";
+    return;
+  }
+
+  if (!MPSolver::SupportsProblemType(problem_type)) {
+    LOG(INFO) << "Supports for solver " << solver_id << " not linked in.";
+    return;
+  }
+
+  MPSolver solver("IntegerProgrammingExample", problem_type);
+
   const double infinity = solver.infinity();
   // x and y are integer non-negative variables.
   MPVariable* const x = solver.MakeIntVar(0.0, infinity, "x");
@@ -44,9 +61,6 @@ void RunIntegerProgrammingExample(
   LOG(INFO) << "Number of variables = " << solver.NumVariables();
   LOG(INFO) << "Number of constraints = " << solver.NumConstraints();
 
-  solver.SetNumThreads(8);
-  solver.EnableOutput();
-
   const MPSolver::ResultStatus result_status = solver.Solve();
   // Check that the problem has an optimal solution.
   if (result_status != MPSolver::OPTIMAL) {
@@ -65,32 +79,19 @@ void RunIntegerProgrammingExample(
 }
 
 void RunAllExamples() {
-#if defined(USE_CBC)
-  LOG(INFO) << "---- Integer programming example with CBC ----";
-  RunIntegerProgrammingExample(MPSolver::CBC_MIXED_INTEGER_PROGRAMMING);
-#endif
-#if defined(USE_GLPK)
-  LOG(INFO) << "---- Integer programming example with GLPK ----";
-  RunIntegerProgrammingExample(MPSolver::GLPK_MIXED_INTEGER_PROGRAMMING);
-#endif
-#if defined(USE_SCIP)
-  LOG(INFO) << "---- Integer programming example with SCIP ----";
-  RunIntegerProgrammingExample(MPSolver::SCIP_MIXED_INTEGER_PROGRAMMING);
-#endif
-#if defined(USE_GUROBI)
-  LOG(INFO) << "---- Integer programming example with Gurobi ----";
-  RunIntegerProgrammingExample(MPSolver::GUROBI_MIXED_INTEGER_PROGRAMMING);
-#endif  // USE_GUROBI
-#if defined(USE_CPLEX)
-  LOG(INFO) << "---- Integer programming example with CPLEX ----";
-  RunIntegerProgrammingExample(MPSolver::CPLEX_MIXED_INTEGER_PROGRAMMING);
-#endif  // USE_CPLEX
+  RunIntegerProgrammingExample("CBC");
+  RunIntegerProgrammingExample("SAT");
+  RunIntegerProgrammingExample("SCIP");
+  RunIntegerProgrammingExample("GUROBI");
+  RunIntegerProgrammingExample("GLPK");
+  RunIntegerProgrammingExample("CPLEX");
 }
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
+  absl::SetFlag(&FLAGS_alsologtostderr, true);
   google::InitGoogleLogging(argv[0]);
-  FLAGS_logtostderr = 1;
+  absl::ParseCommandLine(argc, argv);
   operations_research::RunAllExamples();
   return EXIT_SUCCESS;
 }

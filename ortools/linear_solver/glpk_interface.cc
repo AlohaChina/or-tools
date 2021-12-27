@@ -1,4 +1,4 @@
-// Copyright 2010-2018 Google LLC
+// Copyright 2010-2021 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,12 +17,14 @@
 
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/base/attributes.h"
 #include "absl/memory/memory.h"
 #include "absl/strings/str_format.h"
 #include "ortools/base/commandlineflags.h"
@@ -30,6 +32,7 @@
 #include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/timer.h"
+//#include "ortools/glpk/glpk_env_deleter.h"
 #include "ortools/linear_solver/linear_solver.h"
 
 extern "C" {
@@ -133,11 +136,9 @@ class GLPKInterface : public MPSolverInterface {
 
   // ------ Query statistics on the solution and the solve ------
   // Number of simplex iterations
-  int64 iterations() const override;
+  int64_t iterations() const override;
   // Number of branch-and-bound nodes. Only available for discrete problems.
-  int64 nodes() const override;
-  // Best objective bound. Only available for discrete problems.
-  double best_objective_bound() const override;
+  int64_t nodes() const override;
 
   // Returns the basis status of a row.
   MPSolver::BasisStatus row_status(int constraint_index) const override;
@@ -146,8 +147,6 @@ class GLPKInterface : public MPSolverInterface {
 
   // Checks whether a feasible solution exists.
   bool CheckSolutionExists() const override;
-  // Checks whether information on the best objective bound exists.
-  bool CheckBestObjectiveBoundExists() const override;
 
   // ----- Misc -----
   // Query problem type.
@@ -214,6 +213,9 @@ class GLPKInterface : public MPSolverInterface {
 // Creates a LP/MIP instance with the specified name and minimization objective.
 GLPKInterface::GLPKInterface(MPSolver* const solver, bool mip)
     : MPSolverInterface(solver), lp_(nullptr), mip_(mip) {
+  // Make sure glp_free_env() is called at the exit of the current thread.
+  // SetupGlpkEnvAutomaticDeletion();
+
   lp_ = glp_create_prob();
   glp_set_prob_name(lp_, solver_->name_.c_str());
   glp_set_obj_dir(lp_, GLP_MIN);
@@ -567,10 +569,12 @@ MPSolver::ResultStatus GLPKInterface::Solve(const MPSolverParameters& param) {
   // Get the results.
   if (mip_) {
     objective_value_ = glp_mip_obj_val(lp_);
+    best_objective_bound_ = mip_callback_info_->best_objective_bound_;
   } else {
     objective_value_ = glp_get_obj_val(lp_);
   }
-  VLOG(1) << "objective=" << objective_value_;
+  VLOG(1) << "objective=" << objective_value_
+          << ", bound=" << best_objective_bound_;
   for (int i = 0; i < solver_->variables_.size(); ++i) {
     MPVariable* const var = solver_->variables_[i];
     double val;
@@ -669,12 +673,13 @@ MPSolver::BasisStatus GLPKInterface::TransformGLPKBasisStatus(
 
 // ------ Query statistics on the solution and the solve ------
 
-int64 GLPKInterface::iterations() const {
+int64_t GLPKInterface::iterations() const {
 #if GLP_MAJOR_VERSION == 4 && GLP_MINOR_VERSION < 49
   if (!mip_ && CheckSolutionIsSynchronized()) {
     return lpx_get_int_parm(lp_, LPX_K_ITCNT);
   }
-#elif GLP_MAJOR_VERSION == 4 && GLP_MINOR_VERSION >= 53
+#elif (GLP_MAJOR_VERSION == 4 && GLP_MINOR_VERSION >= 53) || \
+    GLP_MAJOR_VERSION >= 5
   if (!mip_ && CheckSolutionIsSynchronized()) {
     return glp_get_it_cnt(lp_);
   }
@@ -683,30 +688,13 @@ int64 GLPKInterface::iterations() const {
   return kUnknownNumberOfIterations;
 }
 
-int64 GLPKInterface::nodes() const {
+int64_t GLPKInterface::nodes() const {
   if (mip_) {
     if (!CheckSolutionIsSynchronized()) return kUnknownNumberOfNodes;
     return mip_callback_info_->num_all_nodes_;
   } else {
     LOG(DFATAL) << "Number of nodes only available for discrete problems";
     return kUnknownNumberOfNodes;
-  }
-}
-
-double GLPKInterface::best_objective_bound() const {
-  if (mip_) {
-    if (!CheckSolutionIsSynchronized() || !CheckBestObjectiveBoundExists()) {
-      return trivial_worst_objective_bound();
-    }
-    if (solver_->variables_.empty() && solver_->constraints_.empty()) {
-      // Special case for empty model.
-      return solver_->Objective().offset();
-    } else {
-      return mip_callback_info_->best_objective_bound_;
-    }
-  } else {
-    LOG(DFATAL) << "Best objective bound only available for discrete problems";
-    return trivial_worst_objective_bound();
   }
 }
 
@@ -734,18 +722,6 @@ bool GLPKInterface::CheckSolutionExists() const {
   } else {
     // Call default implementation
     return MPSolverInterface::CheckSolutionExists();
-  }
-}
-
-bool GLPKInterface::CheckBestObjectiveBoundExists() const {
-  if (result_status_ == MPSolver::ABNORMAL) {
-    LOG(WARNING) << "Ignoring ABNORMAL status from GLPK: This status may or may"
-                 << " not indicate that information is available on the best"
-                 << " objective bound.";
-    return true;
-  } else {
-    // Call default implementation
-    return MPSolverInterface::CheckBestObjectiveBoundExists();
   }
 }
 

@@ -1,4 +1,5 @@
-# Copyright 2010-2018 Google LLC
+#!/usr/bin/env python3
+# Copyright 2010-2021 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -11,10 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # [START program]
-"""Vehicles Routing Problem (VRP)."""
+"""Simple Vehicles Routing Problem (VRP).
+
+   This is a sample using the routing library python wrapper to solve a VRP
+   problem.
+   A description of the problem can be found here:
+   http://en.wikipedia.org/wiki/Vehicle_routing_problem.
+
+   Distances are in meters.
+"""
 
 # [START import]
-from __future__ import print_function
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 # [END import]
@@ -103,6 +111,7 @@ def create_data_model():
 # [START solution_printer]
 def print_solution(data, manager, routing, solution):
     """Prints solution on console."""
+    print(f'Objective: {solution.ObjectiveValue()}')
     max_route_distance = 0
     for vehicle_id in range(data['num_vehicles']):
         index = routing.Start(vehicle_id)
@@ -120,12 +129,11 @@ def print_solution(data, manager, routing, solution):
         max_route_distance = max(route_distance, max_route_distance)
     print('Maximum of the route distances: {}m'.format(max_route_distance))
 
-
 # [END solution_printer]
 
 
 def main():
-    """Solve the CVRP problem."""
+    """Entry point of the program."""
     # Instantiate the data problem.
     # [START data]
     data = create_data_model()
@@ -189,6 +197,8 @@ def main():
     # [START print_solution]
     if solution:
         print_solution(data, manager, routing, solution)
+    else:
+        print('No solution found !')
     # [END print_solution]
 
 

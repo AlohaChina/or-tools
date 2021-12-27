@@ -8,6 +8,7 @@ OS = Windows
 endif
 ifeq ($(OS),Windows)
   SYSTEM = win
+  SHELL = cmd.exe
 else
   SYSTEM = unix
 endif
@@ -39,16 +40,44 @@ ifeq ($(SYSTEM),unix)
       PTRLENGTH = 64
       GUROBI_PLATFORM=linux64
       CANDIDATE_JDK_ROOTS = \
+        /usr/lib64/jvm/default \
+        /usr/lib/jvm/default \
+        /usr/lib64/jvm/default-runtime \
+        /usr/lib/jvm/default-runtime \
+        /usr/lib64/jvm/default-java \
         /usr/lib/jvm/default-java \
+        /usr/lib64/jvm/java-openjdk \
+        /usr/lib/jvm/java-openjdk \
+        /usr/lib/jvm/java-17-openjdk-amd64 \
+        /usr/lib/jvm/java-17-openjdk \
+        /usr/lib/jvm/java-16-openjdk-amd64 \
+        /usr/lib/jvm/java-16-openjdk \
+        /usr/lib/jvm/java-15-openjdk-amd64 \
+        /usr/lib/jvm/java-15-openjdk \
+        /usr/lib/jvm/java-14-openjdk-amd64 \
+        /usr/lib/jvm/java-14-openjdk \
+        /usr/lib/jvm/java-13-openjdk-amd64 \
+        /usr/lib/jvm/java-13-openjdk \
+        /usr/lib/jvm/java-12-openjdk-amd64 \
+        /usr/lib/jvm/java-12-openjdk \
         /usr/lib/jvm/java-11-openjdk-amd64 \
+        /usr/lib/jvm/java-11-openjdk \
+        /usr/lib64/jvm/java-1.11.0-openjdk \
+        /usr/lib/jvm/java-1.11.0-openjdk \
         /usr/lib/jvm/java-1.11.0-openjdk-amd64 \
+        /usr/lib/jvm/java-10-openjdk-amd64 \
+        /usr/lib/jvm/java-10-openjdk \
         /usr/lib/jvm/java-9-openjdk-amd64 \
+        /usr/lib/jvm/java-9-openjdk \
         /usr/lib/jvm/java-8-openjdk-amd64 \
-        /usr/lib/jvm/java-1.8.0-openjdk-amd64 \
+        /usr/lib/jvm/java-8-openjdk \
+        /usr/lib64/jvm/java-1.8.0-openjdk \
         /usr/lib/jvm/java-1.8.0-openjdk \
+        /usr/lib/jvm/java-1.8.0-openjdk-amd64 \
         /usr/lib/jvm/java-7-openjdk-amd64 \
-        /usr/lib/jvm/java-1.7.0-openjdk.x86_64 \
+        /usr/lib64/jvm/java-1.7.0-openjdk \
         /usr/lib/jvm/java-1.7.0-openjdk \
+        /usr/lib/jvm/java-1.7.0-openjdk.x86_64 \
         /usr/lib/jvm/java-6-openjdk-amd64 \
         /usr/lib/jvm/java-1.6.0-openjdk-1.6.0.0.x86_64 \
         /usr/lib64/jvm/java-6-sun-1.6.0.26 \
@@ -61,7 +90,10 @@ ifeq ($(SYSTEM),unix)
       GUROBI_PLATFORM=linux32
       CANDIDATE_JDK_ROOTS = \
         /usr/local/buildtools/java/jdk-32 \
+        /usr/lib/jvm/java-1.13.0-openjdk-i386 \
+        /usr/lib/jvm/java-1.12.0-openjdk-i386 \
         /usr/lib/jvm/java-1.11.0-openjdk-i386 \
+        /usr/lib/jvm/java-1.10.0-openjdk-i386 \
         /usr/lib/jvm/java-1.9.0-openjdk-i386 \
         /usr/lib/jvm/java-1.8.0-openjdk-i386 \
         /usr/lib/jvm/java-1.7.0-openjdk-i386 \
@@ -87,7 +119,7 @@ ifeq ($(SYSTEM),unix)
     else
       JAVA_HOME ?= $(shell /usr/libexec/java_home)
     endif
-    MAC_MIN_VERSION = 10.9
+    MAC_MIN_VERSION = 10.15
   endif # ($(OS),Darwin)
 endif # ($(SYSTEM),unix)
 

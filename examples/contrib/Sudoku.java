@@ -10,6 +10,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package com.google.ortools.contrib;
+
+import com.google.ortools.Loader;
 import com.google.ortools.constraintsolver.DecisionBuilder;
 import com.google.ortools.constraintsolver.IntVar;
 import com.google.ortools.constraintsolver.Solver;
@@ -18,32 +21,18 @@ import java.text.*;
 import java.util.*;
 
 public class Sudoku {
-
-  static {
-    System.loadLibrary("jniortools");
-  }
-
   /** Solves a Sudoku problem. */
   private static void solve() {
-
     Solver solver = new Solver("Sudoku");
 
     int cell_size = 3;
     int n = cell_size * cell_size;
 
     // 0 marks an unknown value
-    int[][] initial_grid =
-        new int[][] {
-          {0, 6, 0, 0, 5, 0, 0, 2, 0},
-          {0, 0, 0, 3, 0, 0, 0, 9, 0},
-          {7, 0, 0, 6, 0, 0, 0, 1, 0},
-          {0, 0, 6, 0, 3, 0, 4, 0, 0},
-          {0, 0, 4, 0, 7, 0, 1, 0, 0},
-          {0, 0, 5, 0, 9, 0, 8, 0, 0},
-          {0, 4, 0, 0, 0, 1, 0, 0, 6},
-          {0, 3, 0, 0, 0, 8, 0, 0, 0},
-          {0, 2, 0, 0, 4, 0, 0, 5, 0}
-        };
+    int[][] initial_grid = new int[][] {{0, 6, 0, 0, 5, 0, 0, 2, 0}, {0, 0, 0, 3, 0, 0, 0, 9, 0},
+        {7, 0, 0, 6, 0, 0, 0, 1, 0}, {0, 0, 6, 0, 3, 0, 4, 0, 0}, {0, 0, 4, 0, 7, 0, 1, 0, 0},
+        {0, 0, 5, 0, 9, 0, 8, 0, 0}, {0, 4, 0, 0, 0, 1, 0, 0, 6}, {0, 3, 0, 0, 0, 8, 0, 0, 0},
+        {0, 2, 0, 0, 4, 0, 0, 5, 0}};
 
     //
     // variables
@@ -124,6 +113,7 @@ public class Sudoku {
   }
 
   public static void main(String[] args) throws Exception {
+    Loader.loadNativeLibraries();
     Sudoku.solve();
   }
 }

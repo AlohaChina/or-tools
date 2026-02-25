@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,32 +11,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_MATH_OPT_SOLVERS_GLOP_SOLVER_H_
-#define OR_TOOLS_MATH_OPT_SOLVERS_GLOP_SOLVER_H_
+#ifndef ORTOOLS_MATH_OPT_SOLVERS_GLOP_SOLVER_H_
+#define ORTOOLS_MATH_OPT_SOLVERS_GLOP_SOLVER_H_
 
 #include <stdint.h>
 
 #include <memory>
-#include <string>
-#include <utility>
-#include <vector>
 
+#include "absl/base/nullability.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/time/time.h"
 #include "absl/types/span.h"
 #include "ortools/glop/lp_solver.h"
 #include "ortools/glop/parameters.pb.h"
 #include "ortools/lp_data/lp_data.h"
 #include "ortools/lp_data/lp_types.h"
 #include "ortools/math_opt/callback.pb.h"
+#include "ortools/math_opt/core/inverted_bounds.h"
 #include "ortools/math_opt/core/solver_interface.h"
+#include "ortools/math_opt/infeasible_subsystem.pb.h"
 #include "ortools/math_opt/model.pb.h"
 #include "ortools/math_opt/model_parameters.pb.h"
 #include "ortools/math_opt/model_update.pb.h"
 #include "ortools/math_opt/parameters.pb.h"
 #include "ortools/math_opt/result.pb.h"
+#include "ortools/math_opt/solution.pb.h"
 #include "ortools/math_opt/sparse_containers.pb.h"
+#include "ortools/util/solve_interrupter.h"
 
 namespace operations_research {
 namespace math_opt {
@@ -44,22 +47,25 @@ namespace math_opt {
 class GlopSolver : public SolverInterface {
  public:
   static absl::StatusOr<std::unique_ptr<SolverInterface>> New(
-      const ModelProto& model, const SolverInitializerProto& initializer);
+      const ModelProto& model, const InitArgs& init_args);
 
   absl::StatusOr<SolveResultProto> Solve(
       const SolveParametersProto& parameters,
       const ModelSolveParametersProto& model_parameters,
-      const CallbackRegistrationProto& callback_registration,
-      Callback cb) override;
-  absl::Status Update(const ModelUpdateProto& model_update) override;
-  bool CanUpdate(const ModelUpdateProto& model_update) override;
+      MessageCallback message_cb,
+      const CallbackRegistrationProto& callback_registration, Callback cb,
+      const SolveInterrupter* absl_nullable interrupter) override;
+  absl::StatusOr<bool> Update(const ModelUpdateProto& model_update) override;
+  absl::StatusOr<ComputeInfeasibleSubsystemResultProto>
+  ComputeInfeasibleSubsystem(
+      const SolveParametersProto& parameters, MessageCallback message_cb,
+      const SolveInterrupter* absl_nullable interrupter) override;
 
   // Returns the merged parameters and a list of warnings from any parameter
   // settings that are invalid for this solver.
-  static std::pair<glop::GlopParameters, std::vector<std::string>>
-  MergeCommonParameters(
-      const CommonSolveParametersProto& common_solver_parameters,
-      const glop::GlopParameters& glop_parameters);
+  static absl::StatusOr<glop::GlopParameters> MergeSolveParameters(
+      const SolveParametersProto& solve_parameters, bool setting_initial_basis,
+      bool has_message_callback, bool is_maximization);
 
  private:
   GlopSolver();
@@ -79,9 +85,22 @@ class GlopSolver : public SolverInterface {
   void UpdateLinearConstraintBounds(
       const LinearConstraintUpdatesProto& linear_constraint_updates);
 
-  void FillSolveResult(glop::ProblemStatus status,
-                       const ModelSolveParametersProto& model_parameters,
-                       SolveResultProto& solve_result);
+  // Returns the ids of variables and linear constraints with inverted bounds.
+  InvertedBounds ListInvertedBounds() const;
+
+  void FillSolution(glop::ProblemStatus status,
+                    const ModelSolveParametersProto& model_parameters,
+                    SolveResultProto& solve_result);
+  absl::StatusOr<SolveResultProto> MakeSolveResult(
+      glop::ProblemStatus status,
+      const ModelSolveParametersProto& model_parameters,
+      const SolveInterrupter* absl_nullable interrupter,
+      absl::Duration solve_time);
+
+  absl::Status FillSolveStats(absl::Duration solve_time,
+                              SolveStatsProto& solve_stats);
+
+  void SetGlopBasis(const BasisProto& basis);
 
   glop::LinearProgram linear_program_;
   glop::LPSolver lp_solver_;
@@ -93,4 +112,4 @@ class GlopSolver : public SolverInterface {
 }  // namespace math_opt
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_MATH_OPT_SOLVERS_GLOP_SOLVER_H_
+#endif  // ORTOOLS_MATH_OPT_SOLVERS_GLOP_SOLVER_H_

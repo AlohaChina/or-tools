@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,80 +11,86 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TopologicalSorter provides topologically sorted traversal of the
-// nodes of a directed acyclic graph (DAG) with up to INT_MAX nodes.
-// It sorts ancestor nodes before their descendants.
+// This file provides topologically sorted traversal of the nodes of a directed
+// acyclic graph (DAG) with up to INT_MAX nodes.
+// It sorts ancestor nodes before their descendants. Multi-arcs are fine.
 //
 // If your graph is not a DAG and you're reading this, you are probably
 // looking for ortools/graph/strongly_connected_components.h which does
 // the topological decomposition of a directed graph.
 //
-// EXAMPLE:
-//
-//   vector<int> result;
-//   vector<string> nodes = {"a", "b", "c"};
-//   vector<pair<string, string>> arcs = {{"a", "c"}, {"a", "b"}, {"b", "c"}};
-//   if (util::StableTopologicalSort(num_nodes, arcs, &result)) {
-//     LOG(INFO) << "The topological order is: " << gtl::LogContainer(result);
-//   } else {
-//     LOG(INFO) << "The graph is cyclic.";
-//     // Note: you can extract a cycle with the TopologicalSorter class, or
-//     // with the API defined in circularity_detector.h.
-//   }
-//   // This will be successful and result will be equal to {"a", "b", "c"}.
-//
-// There are 8 flavors of topological sort, from these 3 bits:
-// - There are OrDie() versions that directly return the topological order, or
-//   crash if a cycle is detected (and LOG the cycle).
-// - There are type-generic versions that can take any node type (including
-//   non-dense integers), but slower, or the "dense int" versions which requires
-//   nodes to be a dense interval [0..num_nodes-1]. Note that the type must
-//   be compatible with LOG << T if you're using the OrDie() version.
-// - The sorting can be either stable or not. "Stable" essentially means that it
-//   will preserve the order of nodes, if possible. More precisely, the returned
-//   topological order will be the lexicographically minimal valid order, where
-//   "lexicographic" applies to the indices of the nodes.
-//
-//   TopologicalSort()
-//   TopologicalSortOrDie()
-//   StableTopologicalSort()
-//   StableTopologicalSortOrDie()
-//   DenseIntTopologicalSort()
-//   DenseIntTopologicalSortOrDie()
-//   DenseIntStableTopologicalSort()
-//   DenseIntStableTopologicalSortOrDie()
-//
-// If you need more control, or a step-by-step topological sort, see the
-// TopologicalSorter classes below.
+// USAGE:
+// - If performance matters, use FastTopologicalSort().
+// - If your nodes are non-integers, or you need to break topological ties by
+//   node index (like "stable_sort"), use one of the DenseIntTopologicalSort()
+//   or TopologicalSort variants (see below).
+// - If you need more control (cycle extraction?), or a step-by-step topological
+//   sort, see the TopologicalSorter classes below.
 
 #ifndef UTIL_GRAPH_TOPOLOGICALSORTER_H__
 #define UTIL_GRAPH_TOPOLOGICALSORTER_H__
 
+#include <cstddef>
+#include <functional>
+#include <limits>
 #include <queue>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "absl/base/attributes.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/inlined_vector.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
+#include "absl/types/span.h"
 #include "ortools/base/container_logging.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
 #include "ortools/base/map_util.h"
+#include "ortools/base/status_builder.h"
 #include "ortools/base/stl_util.h"
+#include "ortools/graph/graph.h"
 
 namespace util {
+namespace graph {
 
-// Returns true if the graph was a DAG, and outputs the topological order in
-// "topological_order". Returns false if the graph is cyclic.
-// Works in O(num_nodes + arcs.size()), and is pretty fast.
-inline ABSL_MUST_USE_RESULT bool DenseIntTopologicalSort(
-    int num_nodes, const std::vector<std::pair<int, int>>& arcs,
-    std::vector<int>* topological_order);
-
-// Like DenseIntTopologicalSort, but stable.
-inline ABSL_MUST_USE_RESULT bool DenseIntStableTopologicalSort(
-    int num_nodes, const std::vector<std::pair<int, int>>& arcs,
-    std::vector<int>* topological_order);
+// This is the recommended API when performance matters. It's also very simple.
+// AdjacencyList is any type that lets you iterate over the neighbors of
+// node with the [] operator, for example vector<vector<int>> or util::Graph.
+//
+// If you don't already have an adjacency list representation, build one using
+// StaticGraph<> in ./graph.h: FastTopologicalSort() can take any such graph as
+// input.
+//
+// If you have a util_graph::Graph and don't need input validation, consider
+// util_graph::TopoOrder(): it has an even simpler API and is only 1.5x slower.
+//
+// ERRORS: returns InvalidArgumentError if the input is broken (negative or
+// out-of-bounds integers) or if the graph is cyclic. In the latter case, the
+// error message will contain "cycle". Note that if cycles may occur in your
+// input, you can probably assume that your input isn't broken, and thus rely
+// on failures to detect that the graph is cyclic.
+//
+// TIE BREAKING: the returned topological order is deterministic and fixed, and
+// corresponds to iterating on nodes in a LIFO (Breadth-first) order.
+//
+// Benchmark: gpaste/4894742655664128.
+//
+// EXAMPLES:
+//   std::vector<std::vector<int>> adj = {{..}, {..}, ..};
+//   ASSIGN_OR_RETURN(std::vector<int> topo_order, FastTopologicalSort(adj));
+//
+// or
+//   std::vector<pair<int, int>> arcs = {{.., ..}, ..., };
+//   ASSIGN_OR_RETURN(
+//       std::vector<int> topo_order,
+//       FastTopologicalSort(util::StaticGraph<>::FromArcs(num_nodes, arcs)));
+//
+template <class AdjacencyLists>  // vector<vector<int>>, util::StaticGraph<>, ..
+absl::StatusOr<
+    std::vector<typename util::GraphTraits<AdjacencyLists>::NodeIndex>>
+FastTopologicalSort(const AdjacencyLists& adj);
 
 // Finds a cycle in the directed graph given as argument: nodes are dense
 // integers in 0..num_nodes-1, and (directed) arcs are pairs of nodes
@@ -92,32 +98,82 @@ inline ABSL_MUST_USE_RESULT bool DenseIntStableTopologicalSort(
 // The returned cycle is a list of nodes that form a cycle, eg. {1, 4, 3}
 // if the cycle 1->4->3->1 exists.
 // If the graph is acyclic, returns an empty vector.
-ABSL_MUST_USE_RESULT std::vector<int> FindCycleInDenseIntGraph(
-    int num_nodes, const std::vector<std::pair<int, int>>& arcs);
+template <class AdjacencyLists>  // vector<vector<int>>, util::StaticGraph<>, ..
+absl::StatusOr<
+    std::vector<typename util::GraphTraits<AdjacencyLists>::NodeIndex>>
+FindCycleInGraph(const AdjacencyLists& adj);
 
-// Like the two above, but with generic node types. The nodes must be provided.
-// Can be significantly slower, but still linear.
+}  // namespace graph
+
+// [Stable]TopologicalSort[OrDie]:
+//
+// These variants are much slower than FastTopologicalSort(), but support
+// non-integer (or integer, but sparse) nodes.
+// Note that if performance matters, you're probably better off building your
+// own mapping from node to dense index with a flat_hash_map and calling
+// FastTopologicalSort().
+
+// Returns true if the graph was a DAG, and outputs the topological order in
+// "topological_order". Returns false if the graph is cyclic, and outputs the
+// detected cycle in "cycle".
 template <typename T>
 ABSL_MUST_USE_RESULT bool TopologicalSort(
     const std::vector<T>& nodes, const std::vector<std::pair<T, T>>& arcs,
     std::vector<T>* topological_order);
+// Override of the above that outputs the detected cycle.
+template <typename T>
+ABSL_MUST_USE_RESULT bool TopologicalSort(
+    const std::vector<T>& nodes, const std::vector<std::pair<T, T>>& arcs,
+    std::vector<T>* topological_order, std::vector<T>* cycle);
+// OrDie() variant of the above.
+template <typename T>
+std::vector<T> TopologicalSortOrDie(const std::vector<T>& nodes,
+                                    const std::vector<std::pair<T, T>>& arcs);
+// The "Stable" variants are a little slower but preserve the input order of
+// nodes, if possible. More precisely, the returned topological order will be
+// the lexicographically minimal valid order, where "lexicographic" applies to
+// the indices of the nodes.
 template <typename T>
 ABSL_MUST_USE_RESULT bool StableTopologicalSort(
     const std::vector<T>& nodes, const std::vector<std::pair<T, T>>& arcs,
     std::vector<T>* topological_order);
-
-// "OrDie()" versions of the 4 functions above. Those directly return the
-// topological order, which makes their API even simpler.
-inline std::vector<int> DenseIntTopologicalSortOrDie(
-    int num_nodes, const std::vector<std::pair<int, int>>& arcs);
-inline std::vector<int> DenseIntStableTopologicalSortOrDie(
-    int num_nodes, const std::vector<std::pair<int, int>>& arcs);
+// Override of the above that outputs the detected cycle.
 template <typename T>
-std::vector<T> TopologicalSortOrDie(const std::vector<T>& nodes,
-                                    const std::vector<std::pair<T, T>>& arcs);
+ABSL_MUST_USE_RESULT bool StableTopologicalSort(
+    const std::vector<T>& nodes, const std::vector<std::pair<T, T>>& arcs,
+    std::vector<T>* topological_order, std::vector<T>* cycle);
+// OrDie() variant of the above.
 template <typename T>
 std::vector<T> StableTopologicalSortOrDie(
     const std::vector<T>& nodes, const std::vector<std::pair<T, T>>& arcs);
+
+// ______________________ END OF THE RECOMMENDED API ___________________________
+
+// DEPRECATED. Use util::graph::FindCycleInGraph() directly.
+inline ABSL_MUST_USE_RESULT std::vector<int> FindCycleInDenseIntGraph(
+    int num_nodes, const std::vector<std::pair<int, int>>& arcs) {
+  return util::graph::FindCycleInGraph(
+             util::StaticGraph<>::FromArcs(num_nodes, arcs))
+      .value();
+}
+
+// DEPRECATED: DenseInt[Stable]TopologicalSort[OrDie].
+// Kept here for legacy reasons, but most new users should use
+// FastTopologicalSort():
+// - If your input is a list of edges, build you own StaticGraph<> (see
+//   ./graph.h) and pass it to FastTopologicalSort().
+// - If you need the "stable sort" bit, contact viger@ and/or or-core-team@
+//   to see if they can create FastStableTopologicalSort().
+ABSL_MUST_USE_RESULT inline bool DenseIntTopologicalSort(
+    int num_nodes, const std::vector<std::pair<int, int>>& arcs,
+    std::vector<int>* topological_order);
+inline std::vector<int> DenseIntStableTopologicalSortOrDie(
+    int num_nodes, const std::vector<std::pair<int, int>>& arcs);
+ABSL_MUST_USE_RESULT inline bool DenseIntStableTopologicalSort(
+    int num_nodes, const std::vector<std::pair<int, int>>& arcs,
+    std::vector<int>* topological_order);
+inline std::vector<int> DenseIntTopologicalSortOrDie(
+    int num_nodes, const std::vector<std::pair<int, int>>& arcs);
 
 namespace internal {
 // Internal wrapper around the *TopologicalSort classes.
@@ -142,7 +198,7 @@ template <bool stable_sort = false>
 class DenseIntTopologicalSorterTpl {
  public:
   // To store the adjacency lists efficiently.
-  typedef std::vector<int> AdjacencyList;
+  typedef absl::InlinedVector<int, 4> AdjacencyList;
 
   // For efficiency, it is best to specify how many nodes are required
   // by using the next constructor.
@@ -160,6 +216,11 @@ class DenseIntTopologicalSorterTpl {
         num_edges_(0),
         num_edges_added_since_last_duplicate_removal_(0) {}
 
+  // This type is neither copyable nor movable.
+  DenseIntTopologicalSorterTpl(const DenseIntTopologicalSorterTpl&) = delete;
+  DenseIntTopologicalSorterTpl& operator=(const DenseIntTopologicalSorterTpl&) =
+      delete;
+
   // Performs in constant amortized time.  Calling this will make all
   // node indices in [0 .. node_index] be valid node indices.  If you
   // can avoid using AddNode(), you should!  If you know the number of
@@ -167,15 +228,20 @@ class DenseIntTopologicalSorterTpl {
   // it will be faster and use less memory.
   void AddNode(int node_index);
 
+  // Performs AddEdge() in bulk. Much faster if you add *all* edges at once.
+  void AddEdges(absl::Span<const std::pair<int, int>> edges);
+
   // Performs in constant amortized time. Calling this will make all
   // node indices in [0, max(from, to)] be valid node indices.
+  // THIS IS MUCH SLOWER than calling AddEdges() if you already have all the
+  // edges.
   void AddEdge(int from, int to);
 
   // Performs in O(average degree) in average. If a cycle is detected
   // and "output_cycle_nodes" isn't NULL, it will require an additional
   // O(number of edges + number of nodes in the graph) time.
   bool GetNext(int* next_node_index, bool* cyclic,
-               std::vector<int>* output_cycle_nodes = NULL);
+               std::vector<int>* output_cycle_nodes = nullptr);
 
   int GetCurrentFringeSize() {
     StartTraversal();
@@ -216,9 +282,6 @@ class DenseIntTopologicalSorterTpl {
   // RemoveDuplicates(). See the .cc.
   int num_edges_;  // current total number of edges.
   int num_edges_added_since_last_duplicate_removal_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DenseIntTopologicalSorterTpl);
 };
 
 extern template class DenseIntTopologicalSorterTpl<false>;
@@ -253,7 +316,6 @@ typedef ::util::internal::DenseIntTopologicalSorterTpl<
 // TopologicalSorter requires that all nodes and edges be added before
 // traversing the nodes, otherwise it will die with a fatal error.
 //
-//
 // Note(user): since all the real work is done by
 // DenseIntTopologicalSorterTpl, and this class is a template, we inline
 // every function here in the .h.
@@ -268,8 +330,12 @@ template <typename T, bool stable_sort = false,
               typename absl::flat_hash_map<T, int, Hash>::key_equal>
 class TopologicalSorter {
  public:
-  TopologicalSorter() {}
-  ~TopologicalSorter() {}
+  TopologicalSorter() = default;
+
+  // This type is neither copyable nor movable.
+  TopologicalSorter(const TopologicalSorter&) = delete;
+  TopologicalSorter& operator=(const TopologicalSorter&) = delete;
+  ~TopologicalSorter() = default;
 
   // Adds a node to the graph, if it has not already been added via
   // previous calls to AddNode()/AddEdge(). If no edges are later
@@ -280,6 +346,11 @@ class TopologicalSorter {
   // called after a traversal has been started (see TraversalStarted()),
   // or if more than INT_MAX nodes are being added.
   void AddNode(const T& node) { int_sorter_.AddNode(LookupOrInsertNode(node)); }
+
+  // Shortcut to AddEdge() in bulk. Not optimized.
+  void AddEdges(const std::vector<std::pair<T, T>>& edges) {
+    for (const auto& [from, to] : edges) AddEdge(from, to);
+  }
 
   // Adds a directed edge with the given endpoints to the graph. There
   // is no requirement (nor is it an error) to call AddNode() for the
@@ -311,12 +382,13 @@ class TopologicalSorter {
   // This starts a traversal (if not started already). Note that the
   // graph can only be traversed once.
   bool GetNext(T* node, bool* cyclic_ptr,
-               std::vector<T>* output_cycle_nodes = NULL) {
+               std::vector<T>* output_cycle_nodes = nullptr) {
     StartTraversal();
     int node_index;
-    if (!int_sorter_.GetNext(&node_index, cyclic_ptr,
-                             output_cycle_nodes ? &cycle_int_nodes_ : NULL)) {
-      if (*cyclic_ptr && output_cycle_nodes != NULL) {
+    if (!int_sorter_.GetNext(
+            &node_index, cyclic_ptr,
+            output_cycle_nodes ? &cycle_int_nodes_ : nullptr)) {
+      if (*cyclic_ptr && output_cycle_nodes != nullptr) {
         output_cycle_nodes->clear();
         for (const int int_node : cycle_int_nodes_) {
           output_cycle_nodes->push_back(nodes_[int_node]);
@@ -376,8 +448,6 @@ class TopologicalSorter {
   int LookupOrInsertNode(const T& node) {
     return gtl::LookupOrInsert(&node_to_index_, node, node_to_index_.size());
   }
-
-  DISALLOW_COPY_AND_ASSIGN(TopologicalSorter);
 };
 
 namespace internal {
@@ -388,9 +458,7 @@ ABSL_MUST_USE_RESULT bool RunTopologicalSorter(
     Sorter* sorter, const std::vector<std::pair<T, T>>& arcs,
     std::vector<T>* topological_order, std::vector<T>* cycle) {
   topological_order->clear();
-  for (const auto& arc : arcs) {
-    sorter->AddEdge(arc.first, arc.second);
-  }
+  sorter->AddEdges(arcs);
   bool cyclic = false;
   sorter->StartTraversal();
   T next;
@@ -405,27 +473,29 @@ ABSL_MUST_USE_RESULT bool DenseIntTopologicalSortImpl(
     int num_nodes, const std::vector<std::pair<int, int>>& arcs,
     std::vector<int>* topological_order) {
   DenseIntTopologicalSorterTpl<stable_sort> sorter(num_nodes);
+  topological_order->reserve(num_nodes);
   return RunTopologicalSorter<int, decltype(sorter)>(
       &sorter, arcs, topological_order, nullptr);
 }
 
 template <typename T, bool stable_sort = false>
 ABSL_MUST_USE_RESULT bool TopologicalSortImpl(
-    const std::vector<T>& nodes, const std::vector<std::pair<T, T>>& arcs,
-    std::vector<T>* topological_order) {
+    absl::Span<const T> nodes, const std::vector<std::pair<T, T>>& arcs,
+    std::vector<T>* topological_order, std::vector<T>* cycle) {
   TopologicalSorter<T, stable_sort> sorter;
   for (const T& node : nodes) {
     sorter.AddNode(node);
   }
   return RunTopologicalSorter<T, decltype(sorter)>(&sorter, arcs,
-                                                   topological_order, nullptr);
+                                                   topological_order, cycle);
 }
 
 // Now, the OrDie() versions, which directly return the topological order.
 template <typename T, typename Sorter>
 std::vector<T> RunTopologicalSorterOrDie(
-    Sorter* sorter, const std::vector<std::pair<T, T>>& arcs) {
+    Sorter* sorter, int num_nodes, const std::vector<std::pair<T, T>>& arcs) {
   std::vector<T> topo_order;
+  topo_order.reserve(num_nodes);
   CHECK(RunTopologicalSorter(sorter, arcs, &topo_order, &topo_order))
       << "Found cycle: " << gtl::LogContainer(topo_order);
   return topo_order;
@@ -435,7 +505,7 @@ template <bool stable_sort = false>
 std::vector<int> DenseIntTopologicalSortOrDieImpl(
     int num_nodes, const std::vector<std::pair<int, int>>& arcs) {
   DenseIntTopologicalSorterTpl<stable_sort> sorter(num_nodes);
-  return RunTopologicalSorterOrDie(&sorter, arcs);
+  return RunTopologicalSorterOrDie(&sorter, num_nodes, arcs);
 }
 
 template <typename T, bool stable_sort = false>
@@ -445,7 +515,7 @@ std::vector<T> TopologicalSortOrDieImpl(
   for (const T& node : nodes) {
     sorter.AddNode(node);
   }
-  return RunTopologicalSorterOrDie(&sorter, arcs);
+  return RunTopologicalSorterOrDie(&sorter, nodes.size(), arcs);
 }
 }  // namespace internal
 
@@ -468,15 +538,33 @@ template <typename T>
 bool TopologicalSort(const std::vector<T>& nodes,
                      const std::vector<std::pair<T, T>>& arcs,
                      std::vector<T>* topological_order) {
-  return internal::TopologicalSortImpl<T, false>(nodes, arcs,
-                                                 topological_order);
+  return internal::TopologicalSortImpl<T, false>(nodes, arcs, topological_order,
+                                                 nullptr);
+}
+
+template <typename T>
+bool TopologicalSort(const std::vector<T>& nodes,
+                     const std::vector<std::pair<T, T>>& arcs,
+                     std::vector<T>* topological_order, std::vector<T>* cycle) {
+  return internal::TopologicalSortImpl<T, false>(nodes, arcs, topological_order,
+                                                 cycle);
 }
 
 template <typename T>
 bool StableTopologicalSort(const std::vector<T>& nodes,
                            const std::vector<std::pair<T, T>>& arcs,
                            std::vector<T>* topological_order) {
-  return internal::TopologicalSortImpl<T, true>(nodes, arcs, topological_order);
+  return internal::TopologicalSortImpl<T, true>(nodes, arcs, topological_order,
+                                                nullptr);
+}
+
+template <typename T>
+bool StableTopologicalSort(const std::vector<T>& nodes,
+                           const std::vector<std::pair<T, T>>& arcs,
+                           std::vector<T>* topological_order,
+                           std::vector<T>* cycle) {
+  return internal::TopologicalSortImpl<T, true>(nodes, arcs, topological_order,
+                                                cycle);
 }
 
 inline std::vector<int> DenseIntTopologicalSortOrDie(
@@ -530,6 +618,143 @@ template <typename T>
 std::vector<T> StableTopologicalSortOrDie(
     const std::vector<T>& nodes, const std::vector<std::pair<T, T>>& arcs) {
   return ::util::StableTopologicalSortOrDie<T>(nodes, arcs);
+}
+
+template <class AdjacencyLists>
+absl::StatusOr<std::vector<typename GraphTraits<AdjacencyLists>::NodeIndex>>
+FastTopologicalSort(const AdjacencyLists& adj) {
+  using NodeIndex = typename GraphTraits<AdjacencyLists>::NodeIndex;
+  if (adj.size() > std::numeric_limits<NodeIndex>::max()) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("Too many nodes: adj.size()=%v", adj.size()));
+  }
+  const NodeIndex num_nodes(adj.size());
+  std::vector<NodeIndex> indegree(static_cast<size_t>(num_nodes), NodeIndex(0));
+  std::vector<NodeIndex> topo_order;
+  topo_order.reserve(static_cast<size_t>(num_nodes));
+  for (NodeIndex from(0); from < num_nodes; ++from) {
+    for (const NodeIndex head : adj[from]) {
+      if (!(NodeIndex(0) <= head && head < num_nodes)) {
+        return absl::InvalidArgumentError(
+            absl::StrFormat("Invalid arc in adj[%v]: %v (num_nodes=%v)", from,
+                            head, num_nodes));
+      }
+      // NOTE(user): We could detect self-arcs here (head == from) and exit
+      // early, but microbenchmarks show a 2 to 4% slow-down if we do it, so we
+      // simply rely on self-arcs being detected as cycles in the topo sort.
+      ++indegree[static_cast<size_t>(head)];
+    }
+  }
+  for (NodeIndex i(0); i < num_nodes; ++i) {
+    if (!indegree[static_cast<size_t>(i)]) topo_order.push_back(i);
+  }
+  size_t num_visited = 0;
+  while (num_visited < topo_order.size()) {
+    const NodeIndex from = topo_order[num_visited++];
+    for (const NodeIndex head : adj[from]) {
+      if (!--indegree[static_cast<size_t>(head)]) topo_order.push_back(head);
+    }
+  }
+  if (topo_order.size() < static_cast<size_t>(num_nodes)) {
+    return absl::InvalidArgumentError("The graph has a cycle");
+  }
+  return topo_order;
+}
+
+template <class AdjacencyLists>
+absl::StatusOr<
+    std::vector<typename util::GraphTraits<AdjacencyLists>::NodeIndex>>
+FindCycleInGraph(const AdjacencyLists& adj) {
+  using NodeIndex = typename GraphTraits<AdjacencyLists>::NodeIndex;
+  if (adj.size() > std::numeric_limits<NodeIndex>::max()) {
+    return absl::InvalidArgumentError(
+        absl::StrFormat("Too many nodes: adj.size()=%v", adj.size()));
+  }
+  const NodeIndex num_nodes(adj.size());
+
+  // First pass to validate that inputs are valid.
+  for (NodeIndex node(0); node < NodeIndex(node); ++node) {
+    for (const NodeIndex head : adj[node]) {
+      if (head >= num_nodes) {
+        return absl::InvalidArgumentError(
+            absl::StrFormat("Invalid child %v in adj[%v]", head, node));
+      }
+    }
+  }
+
+  // To find a cycle, we start a DFS from each yet-unvisited node and
+  // try to find a cycle, if we don't find it then we know for sure that
+  // no cycle is reachable from any of the explored nodes (so, we don't
+  // explore them in later DFSs).
+  std::vector<bool> no_cycle_reachable_from(static_cast<size_t>(num_nodes),
+                                            false);
+  // The DFS stack will contain a chain of nodes, from the root of the
+  // DFS to the current leaf.
+  struct DfsState {
+    NodeIndex node;
+    // Points at the first child node that we did *not* yet look at.
+    decltype(adj[NodeIndex(0)].begin()) children;
+    decltype(adj[NodeIndex(0)].end()) children_end;
+
+    explicit DfsState(NodeIndex _node,
+                      const decltype(adj[NodeIndex(0)])& neighbours)
+        : node(_node),
+          children(neighbours.begin()),
+          children_end(neighbours.end()) {}
+  };
+  std::vector<DfsState> dfs_stack;
+  std::vector<bool> visited(static_cast<size_t>(num_nodes), false);
+  for (NodeIndex start_node(0); start_node < NodeIndex(num_nodes);
+       ++start_node) {
+    if (no_cycle_reachable_from[static_cast<size_t>(start_node)]) continue;
+
+    // Start the DFS.
+    visited[static_cast<size_t>(start_node)] = true;
+    dfs_stack.push_back(DfsState(start_node, adj[start_node]));
+    while (!dfs_stack.empty()) {
+      DfsState* const cur_state = &dfs_stack.back();
+      while (
+          cur_state->children != cur_state->children_end &&
+          no_cycle_reachable_from[static_cast<size_t>(*cur_state->children)]) {
+        ++cur_state->children;
+      }
+      if (cur_state->children == cur_state->children_end) {
+        no_cycle_reachable_from[static_cast<size_t>(cur_state->node)] = true;
+        dfs_stack.pop_back();
+        continue;
+      }
+
+      const NodeIndex child = *cur_state->children;
+      // At that point the child is either:
+      // - visited and all finalized (all its children are visited). We know
+      //   that it's not part of a cycle, otherwise we'd already have
+      //   returned.
+      // - visited and not finalized (some of its children are not visited).
+      //   That means that we've reached it again from a child, so we've found
+      //   a cycle.
+      // - not visited. We push it on the stack and explore it.
+      if (no_cycle_reachable_from[static_cast<size_t>(child)]) continue;
+      if (visited[static_cast<size_t>(child)]) {
+        // We detected a cycle! It corresponds to the tail end of dfs_stack,
+        // in reverse order, until we find "child".
+        size_t cycle_start = dfs_stack.size() - 1;
+        while (dfs_stack[cycle_start].node != child) --cycle_start;
+        const size_t cycle_size = dfs_stack.size() - cycle_start;
+        std::vector<NodeIndex> cycle(cycle_size);
+        for (size_t c = 0; c < cycle_size; ++c) {
+          cycle[c] = dfs_stack[cycle_start + c].node;
+        }
+        return cycle;
+      }
+
+      // Push the child onto the stack.
+      dfs_stack.push_back(DfsState(child, adj[child]));
+      visited[static_cast<size_t>(child)] = true;
+    }
+  }
+
+  // If we're here, then all the DFS stopped, and there is no cycle.
+  return std::vector<NodeIndex>{};
 }
 
 }  // namespace graph

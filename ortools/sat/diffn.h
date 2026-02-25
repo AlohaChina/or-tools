@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,22 +11,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_DIFFN_H_
-#define OR_TOOLS_SAT_DIFFN_H_
+#ifndef ORTOOLS_SAT_DIFFN_H_
+#define ORTOOLS_SAT_DIFFN_H_
 
-#include <functional>
+#include <cstdint>
+#include <optional>
 #include <vector>
 
-#include "ortools/base/int_type.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/types/span.h"
+#include "ortools/sat/2d_orthogonal_packing.h"
 #include "ortools/sat/diffn_util.h"
 #include "ortools/sat/disjunctive.h"
 #include "ortools/sat/integer.h"
-#include "ortools/sat/intervals.h"
+#include "ortools/sat/integer_base.h"
 #include "ortools/sat/model.h"
+#include "ortools/sat/no_overlap_2d_helper.h"
 #include "ortools/sat/sat_base.h"
+#include "ortools/sat/sat_parameters.pb.h"
+#include "ortools/sat/scheduling_helpers.h"
+#include "ortools/sat/synchronization.h"
+#include "ortools/sat/util.h"
+#include "ortools/util/bitset.h"
+#include "ortools/util/time_limit.h"
 
 namespace operations_research {
 namespace sat {
@@ -34,45 +41,42 @@ namespace sat {
 // Propagates using a box energy reasoning.
 class NonOverlappingRectanglesEnergyPropagator : public PropagatorInterface {
  public:
-  // The strict parameters indicates how to place zero width or zero height
-  // boxes. If strict is true, these boxes must not 'cross' another box, and are
-  // pushed by the other boxes.
-  NonOverlappingRectanglesEnergyPropagator(SchedulingConstraintHelper* x,
-                                           SchedulingConstraintHelper* y,
+  NonOverlappingRectanglesEnergyPropagator(NoOverlap2DConstraintHelper* helper,
                                            Model* model)
-      : x_(*x), y_(*y), random_(model->GetOrCreate<ModelRandomGenerator>()) {}
+      : helper_(*helper),
+        random_(model->GetOrCreate<ModelRandomGenerator>()),
+        shared_stats_(model->GetOrCreate<SharedStatistics>()),
+        orthogonal_packing_checker_(*random_, shared_stats_) {}
+
   ~NonOverlappingRectanglesEnergyPropagator() override;
 
   bool Propagate() final;
   int RegisterWith(GenericLiteralWatcher* watcher);
 
  private:
-  void SortBoxesIntoNeighbors(int box, absl::Span<const int> local_boxes,
-                              IntegerValue total_sum_of_areas);
-  bool FailWhenEnergyIsTooLarge(int box, absl::Span<const int> local_boxes,
-                                IntegerValue total_sum_of_areas);
-
-  SchedulingConstraintHelper& x_;
-  SchedulingConstraintHelper& y_;
-  ModelRandomGenerator* random_;
-
-  // When the size of the bounding box is greater than any of the corresponding
-  // rectangles, then there is no point checking for overload.
-  IntegerValue threshold_x_;
-  IntegerValue threshold_y_;
-
-  std::vector<int> active_boxes_;
-  std::vector<IntegerValue> cached_energies_;
-  std::vector<Rectangle> cached_rectangles_;
-
-  struct Neighbor {
-    int box;
-    IntegerValue distance_to_bounding_box;
-    bool operator<(const Neighbor& o) const {
-      return distance_to_bounding_box < o.distance_to_bounding_box;
-    }
+  struct Conflict {
+    // The Orthogonal Packing subproblem we used.
+    std::vector<RectangleInRange> items_for_opp;
+    Rectangle rectangle_with_too_much_energy;
+    OrthogonalPackingResult opp_result;
   };
-  std::vector<Neighbor> neighbors_;
+  std::optional<Conflict> FindConflict(
+      std::vector<RectangleInRange> active_box_ranges);
+
+  std::vector<RectangleInRange> GeneralizeExplanation(const Conflict& conflict);
+
+  bool BuildAndReportEnergyTooLarge(absl::Span<const RectangleInRange> ranges);
+
+  NoOverlap2DConstraintHelper& helper_;
+  ModelRandomGenerator* random_;
+  SharedStatistics* shared_stats_;
+  OrthogonalPackingInfeasibilityDetector orthogonal_packing_checker_;
+
+  int64_t num_calls_ = 0;
+  int64_t num_conflicts_ = 0;
+  int64_t num_conflicts_two_boxes_ = 0;
+  int64_t num_refined_conflicts_ = 0;
+  int64_t num_conflicts_with_slack_ = 0;
 
   NonOverlappingRectanglesEnergyPropagator(
       const NonOverlappingRectanglesEnergyPropagator&) = delete;
@@ -80,43 +84,56 @@ class NonOverlappingRectanglesEnergyPropagator : public PropagatorInterface {
       const NonOverlappingRectanglesEnergyPropagator&) = delete;
 };
 
-// Non overlapping rectangles.
+// Enforces that the boxes with corners in (x, y), (x + dx, y), (x, y + dy)
+// and (x + dx, y + dy) do not overlap.
+void AddNonOverlappingRectangles(
+    const std::vector<Literal>& enforcement_literals,
+    const std::vector<IntervalVariable>& x,
+    const std::vector<IntervalVariable>& y, Model* model);
+
+// Non overlapping rectangles. This includes box with zero-areas.
+// The following is forbidden:
+//   - a point box inside a box with a non zero area
+//   - a line box overlapping a box with a non zero area
+//   - one vertical line box crossing an horizontal line box.
 class NonOverlappingRectanglesDisjunctivePropagator
     : public PropagatorInterface {
  public:
-  // The strict parameters indicates how to place zero width or zero height
-  // boxes. If strict is true, these boxes must not 'cross' another box, and are
-  // pushed by the other boxes.
   // The slow_propagators select which disjunctive algorithms to propagate.
-  NonOverlappingRectanglesDisjunctivePropagator(bool strict,
-                                                SchedulingConstraintHelper* x,
-                                                SchedulingConstraintHelper* y,
-                                                Model* model);
+  NonOverlappingRectanglesDisjunctivePropagator(
+      NoOverlap2DConstraintHelper* helper, Model* model);
   ~NonOverlappingRectanglesDisjunctivePropagator() override;
 
   bool Propagate() final;
   void Register(int fast_priority, int slow_priority);
 
  private:
-  bool PropagateTwoBoxes();
   bool FindBoxesThatMustOverlapAHorizontalLineAndPropagate(
-      bool fast_propagation, const SchedulingConstraintHelper& x,
-      SchedulingConstraintHelper* y);
+      bool fast_propagation, absl::Span<const int> boxes);
 
-  SchedulingConstraintHelper& global_x_;
-  SchedulingConstraintHelper& global_y_;
+  NoOverlap2DConstraintHelper* helper_;
   SchedulingConstraintHelper x_;
-  const bool strict_;
 
   GenericLiteralWatcher* watcher_;
+  TimeLimit* time_limit_;
   int fast_id_;  // Propagator id of the "fast" version.
 
-  std::vector<IndexedInterval> indexed_intervals_;
-  std::vector<std::vector<int>> events_overlapping_boxes_;
+  // Temporary data.
+  std::vector<IndexedInterval> indexed_boxes_;
+  std::vector<Rectangle> rectangles_;
+  std::vector<int> order_;
+  CompactVectorVector<int> events_overlapping_boxes_;
 
-  absl::flat_hash_set<absl::Span<int>> reduced_overlapping_boxes_;
-  std::vector<absl::Span<int>> boxes_to_propagate_;
-  std::vector<absl::Span<int>> disjoint_boxes_;
+  // List of box that are fully fixed in the current dive, and for which we
+  // know they are no conflict between them.
+  bool rev_is_in_dive_ = false;
+  Bitset64<int> already_checked_fixed_boxes_;
+  int last_helper_inprocessing_count_ = -1;
+
+  absl::flat_hash_set<absl::Span<const int>> reduced_overlapping_boxes_;
+  std::vector<absl::Span<const int>> boxes_to_propagate_;
+  std::vector<absl::Span<const int>> disjoint_boxes_;
+  std::vector<int> non_zero_area_boxes_;
 
   DisjunctiveOverloadChecker overload_checker_;
   DisjunctiveDetectablePrecedences forward_detectable_precedences_;
@@ -125,6 +142,7 @@ class NonOverlappingRectanglesDisjunctivePropagator
   DisjunctiveNotLast backward_not_last_;
   DisjunctiveEdgeFinding forward_edge_finding_;
   DisjunctiveEdgeFinding backward_edge_finding_;
+  DisjunctiveWithTwoItems disjunctive_with_two_items_;
 
   NonOverlappingRectanglesDisjunctivePropagator(
       const NonOverlappingRectanglesDisjunctivePropagator&) = delete;
@@ -132,73 +150,48 @@ class NonOverlappingRectanglesDisjunctivePropagator
       const NonOverlappingRectanglesDisjunctivePropagator&) = delete;
 };
 
-// Add a cumulative relaxation. That is, on one dimension, it does not enforce
-// the rectangle aspect, allowing vertical slices to move freely.
-void AddCumulativeRelaxation(const std::vector<IntervalVariable>& x_intervals,
-                             SchedulingConstraintHelper* x,
-                             SchedulingConstraintHelper* y, Model* model);
+// Propagator that compares the boxes pairwise.
+class RectanglePairwisePropagator : public PropagatorInterface {
+ public:
+  RectanglePairwisePropagator(NoOverlap2DConstraintHelper* helper, Model* model)
+      : helper_(helper),
+        shared_stats_(model->GetOrCreate<SharedStatistics>()),
+        params_(model->GetOrCreate<SatParameters>()) {}
 
-// Enforces that the boxes with corners in (x, y), (x + dx, y), (x, y + dy)
-// and (x + dx, y + dy) do not overlap.
-// If strict is true, and if one box has a zero dimension, it still cannot
-// intersect another box.
-inline std::function<void(Model*)> NonOverlappingRectangles(
-    const std::vector<IntervalVariable>& x,
-    const std::vector<IntervalVariable>& y, bool is_strict,
-    bool add_cumulative_relaxation = true) {
-  return [=](Model* model) {
-    SchedulingConstraintHelper* x_helper =
-        new SchedulingConstraintHelper(x, model);
-    SchedulingConstraintHelper* y_helper =
-        new SchedulingConstraintHelper(y, model);
-    model->TakeOwnership(x_helper);
-    model->TakeOwnership(y_helper);
+  ~RectanglePairwisePropagator() override;
 
-    NonOverlappingRectanglesEnergyPropagator* energy_constraint =
-        new NonOverlappingRectanglesEnergyPropagator(x_helper, y_helper, model);
-    GenericLiteralWatcher* const watcher =
-        model->GetOrCreate<GenericLiteralWatcher>();
-    watcher->SetPropagatorPriority(energy_constraint->RegisterWith(watcher), 3);
-    model->TakeOwnership(energy_constraint);
+  bool Propagate() final;
+  int RegisterWith(GenericLiteralWatcher* watcher);
 
-    NonOverlappingRectanglesDisjunctivePropagator* constraint =
-        new NonOverlappingRectanglesDisjunctivePropagator(is_strict, x_helper,
-                                                          y_helper, model);
-    constraint->Register(/*fast_priority=*/3, /*slow_priority=*/4);
-    model->TakeOwnership(constraint);
+ private:
+  RectanglePairwisePropagator(const RectanglePairwisePropagator&) = delete;
+  RectanglePairwisePropagator& operator=(const RectanglePairwisePropagator&) =
+      delete;
 
-    if (add_cumulative_relaxation) {
-      // We must first check if the cumulative relaxation is possible.
-      bool some_boxes_are_only_optional_on_x = false;
-      bool some_boxes_are_only_optional_on_y = false;
-      for (int i = 0; i < x.size(); ++i) {
-        if (x_helper->IsOptional(i) && y_helper->IsOptional(i) &&
-            x_helper->PresenceLiteral(i) != y_helper->PresenceLiteral(i)) {
-          // Abort as the task would be conditioned by two literals.
-          return;
-        }
-        if (x_helper->IsOptional(i) && !y_helper->IsOptional(i)) {
-          // We cannot use x_size as the demand of the cumulative based on
-          // the y_intervals.
-          some_boxes_are_only_optional_on_x = true;
-        }
-        if (y_helper->IsOptional(i) && !x_helper->IsOptional(i)) {
-          // We cannot use y_size as the demand of the cumulative based on
-          // the y_intervals.
-          some_boxes_are_only_optional_on_y = true;
-        }
-      }
-      if (!some_boxes_are_only_optional_on_y) {
-        AddCumulativeRelaxation(x, x_helper, y_helper, model);
-      }
-      if (!some_boxes_are_only_optional_on_x) {
-        AddCumulativeRelaxation(y, y_helper, x_helper, model);
-      }
-    }
-  };
-}
+  // Return false if a conflict is found.
+  bool FindRestrictionsAndPropagateConflict(
+      absl::Span<const ItemWithVariableSize> items1,
+      absl::Span<const ItemWithVariableSize> items2,
+      std::vector<PairwiseRestriction>* restrictions);
+
+  bool PropagateTwoBoxes(const PairwiseRestriction& restriction);
+
+  NoOverlap2DConstraintHelper* helper_;
+  SharedStatistics* shared_stats_;
+  const SatParameters* params_;
+
+  int64_t num_calls_ = 0;
+  int64_t num_pairwise_conflicts_ = 0;
+  int64_t num_pairwise_propagations_ = 0;
+
+  std::vector<ItemWithVariableSize> fixed_non_zero_area_boxes_;
+  std::vector<ItemWithVariableSize> non_fixed_non_zero_area_boxes_;
+  std::vector<ItemWithVariableSize> horizontal_zero_area_boxes_;
+  std::vector<ItemWithVariableSize> vertical_zero_area_boxes_;
+  std::vector<ItemWithVariableSize> point_zero_area_boxes_;
+};
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_DIFFN_H_
+#endif  // ORTOOLS_SAT_DIFFN_H_

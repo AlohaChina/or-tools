@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,19 +11,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_CP_MODEL_SEARCH_H_
-#define OR_TOOLS_SAT_CP_MODEL_SEARCH_H_
+#ifndef ORTOOLS_SAT_CP_MODEL_SEARCH_H_
+#define ORTOOLS_SAT_CP_MODEL_SEARCH_H_
 
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
 
-#include "ortools/base/integral_types.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/random/bit_gen_ref.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "ortools/base/stl_util.h"
 #include "ortools/sat/cp_model.pb.h"
 #include "ortools/sat/cp_model_mapping.h"
 #include "ortools/sat/integer.h"
+#include "ortools/sat/integer_base.h"
 #include "ortools/sat/integer_search.h"
 #include "ortools/sat/model.h"
+#include "ortools/sat/sat_base.h"
+#include "ortools/sat/sat_parameters.pb.h"
 
 namespace operations_research {
 namespace sat {
@@ -48,55 +56,124 @@ class CpModelView {
   int64_t Min(int var) const;
   int64_t Max(int var) const;
 
-  // If under a given partial assignment, the value of a variable has no impact,
-  // this might returns true, and there is no point trying to branch on this
-  // variable.
-  //
-  // This might for example be the case for the start of an unperformed interval
-  // which will not impact the rest of the problem in any way. Note that it is
-  // still possible to branch on ignored variable, this will just not change
-  // anything.
-  bool IsCurrentlyFree(int var) const;
-
   // Helpers to generate a decision.
   BooleanOrIntegerLiteral GreaterOrEqual(int var, int64_t value) const;
   BooleanOrIntegerLiteral LowerOrEqual(int var, int64_t value) const;
   BooleanOrIntegerLiteral MedianValue(int var) const;
+  BooleanOrIntegerLiteral RandomSplit(int var, int64_t lb, int64_t ub) const;
 
  private:
   const CpModelMapping& mapping_;
   const VariablesAssignment& boolean_assignment_;
   const IntegerTrail& integer_trail_;
   const IntegerEncoder& integer_encoder_;
+  mutable absl::BitGenRef random_;
 };
 
-// Constructs the search strategy specified in the given CpModelProto. A
-// positive variable ref in the proto is mapped to variable_mapping[ref] in the
-// model. All the variables referred in the search strategy must be correctly
-// mapped, the other entries can be set to kNoIntegerVariable.
-std::function<BooleanOrIntegerLiteral()> ConstructSearchStrategy(
-    const CpModelProto& cp_model_proto,
-    const std::vector<IntegerVariable>& variable_mapping,
+// Constructs the search strategy specified in the given CpModelProto.
+std::function<BooleanOrIntegerLiteral()> ConstructUserSearchStrategy(
+    const CpModelProto& cp_model_proto, Model* model);
+
+// Constructs a search strategy tailored for the current model.
+std::function<BooleanOrIntegerLiteral()> ConstructHeuristicSearchStrategy(
+    const CpModelProto& cp_model_proto, Model* model);
+
+// Constructs an integer completion search strategy.
+std::function<BooleanOrIntegerLiteral()>
+ConstructIntegerCompletionSearchStrategy(
+    absl::Span<const IntegerVariable> variable_mapping,
     IntegerVariable objective_var, Model* model);
+
+// Constructs a search strategy that follows the hints from the model.
+std::function<BooleanOrIntegerLiteral()> ConstructHintSearchStrategy(
+    const CpModelProto& cp_model_proto, CpModelMapping* mapping, Model* model);
+
+// Constructs our "fixed" search strategy which start with
+// ConstructUserSearchStrategy() if present, but is completed by a couple of
+// automatic heuristics.
+void ConstructFixedSearchStrategy(SearchHeuristics* h, Model* model);
 
 // For debugging fixed-search: display information about the named variables
 // domain before taking each decision. Note that we copy the instrumented
-// stategy so it doesn't have to outlive the returned functions like the other
+// strategy so it doesn't have to outlive the returned functions like the other
 // arguments.
 std::function<BooleanOrIntegerLiteral()> InstrumentSearchStrategy(
     const CpModelProto& cp_model_proto,
-    const std::vector<IntegerVariable>& variable_mapping,
-    const std::function<BooleanOrIntegerLiteral()>& instrumented_strategy,
+    absl::Span<const IntegerVariable> variable_mapping,
+    std::function<BooleanOrIntegerLiteral()> instrumented_strategy,
     Model* model);
 
-// Returns up to "num_workers" different parameters. We do not always return
-// num_worker parameters to leave room for strategies like LNS that do not
-// consume a full worker and can always be interleaved.
-std::vector<SatParameters> GetDiverseSetOfParameters(
+// Returns all the named set of parameters known to the solver. This include our
+// default strategies like "max_lp", "core", etc... It is visible here so that
+// this can be reused by parameter validation.
+//
+// Usually, named strategies just override a few field from the base_params.
+absl::flat_hash_map<std::string, SatParameters> GetNamedParameters(
+    SatParameters base_params);
+
+// Returns a list of full workers to run.
+class SubsolverNameFilter;
+std::vector<SatParameters> GetFullWorkerParameters(
     const SatParameters& base_params, const CpModelProto& cp_model,
-    const int num_workers);
+    int num_already_present, SubsolverNameFilter* name_filter);
+
+// Given a base set of parameter, if non-empty, this repeat them (round-robbin)
+// until we get num_params_to_generate. Note that if we don't have a multiple,
+// the first base parameters will be repeated more than the others.
+//
+// Note that this will also change the random_seed of each of these parameters.
+std::vector<SatParameters> RepeatParameters(
+    absl::Span<const SatParameters> base_params, int num_params_to_generate);
+
+// Returns a vector of base parameters to specify solvers specialized to find a
+// initial solution. This is meant to be used with RepeatParameters() and
+// FilterParameters().
+std::vector<SatParameters> GetFirstSolutionBaseParams(
+    const SatParameters& base_params);
+
+// Simple class used to filter executed subsolver names.
+class SubsolverNameFilter {
+ public:
+  // Warning, params must outlive the class and be constant.
+  explicit SubsolverNameFilter(const SatParameters& params);
+
+  // Shall we keep a parameter with given name?
+  bool Keep(absl::string_view name);
+
+  // Applies Keep() to all the input list.
+  std::vector<SatParameters> Filter(absl::Span<const SatParameters> input) {
+    std::vector<SatParameters> result;
+    for (const SatParameters& param : input) {
+      if (Keep(param.name())) {
+        result.push_back(param);
+      }
+    }
+    return result;
+  }
+
+  // This is just a convenient function to follow the pattern
+  // if (filter.Keep("my_name")) subsovers.Add(.... filter.LastName() ... )
+  // And not repeat "my_name" twice.
+  std::string LastName() const { return last_name_; }
+
+  // Returns the list of all ignored subsolver for use in logs.
+  const std::vector<std::string>& AllIgnored() {
+    gtl::STLSortAndRemoveDuplicates(&ignored_);
+    return ignored_;
+  }
+
+ private:
+  // Copy of absl::log_internal::FNMatch().
+  bool FNMatch(absl::string_view pattern, absl::string_view str);
+
+  std::vector<std::string> filter_patterns_;
+  std::vector<std::string> ignore_patterns_;
+  std::string last_name_;
+
+  std::vector<std::string> ignored_;
+};
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_CP_MODEL_SEARCH_H_
+#endif  // ORTOOLS_SAT_CP_MODEL_SEARCH_H_

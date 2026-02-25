@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,29 +13,43 @@
 
 #include "ortools/bop/bop_lns.h"
 
+#include <algorithm>
+#include <cmath>
 #include <deque>
-#include <string>
+#include <memory>
 #include <vector>
 
-#include "absl/memory/memory.h"
-#include "google/protobuf/text_format.h"
-#include "ortools/base/cleanup.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/stl_util.h"
+#include "absl/cleanup/cleanup.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/random/bit_gen_ref.h"
+#include "absl/random/distributions.h"
+#include "absl/strings/string_view.h"
+#include "ortools/base/strong_vector.h"
+#include "ortools/bop/bop_base.h"
+#include "ortools/bop/bop_parameters.pb.h"
+#include "ortools/bop/bop_solution.h"
+#include "ortools/bop/bop_types.h"
+#include "ortools/bop/bop_util.h"
 #include "ortools/glop/lp_solver.h"
-#include "ortools/lp_data/lp_print_utils.h"
+#include "ortools/lp_data/lp_data.h"
+#include "ortools/lp_data/lp_types.h"
 #include "ortools/sat/boolean_problem.h"
+#include "ortools/sat/boolean_problem.pb.h"
 #include "ortools/sat/lp_utils.h"
+#include "ortools/sat/pb_constraint.h"
+#include "ortools/sat/sat_base.h"
+#include "ortools/sat/sat_parameters.pb.h"
 #include "ortools/sat/sat_solver.h"
-#include "ortools/util/bitset.h"
+#include "ortools/util/stats.h"
+#include "ortools/util/strong_integers.h"
+#include "ortools/util/time_limit.h"
 
 namespace operations_research {
 namespace bop {
 
 using ::operations_research::glop::ColIndex;
 using ::operations_research::glop::DenseRow;
-using ::operations_research::glop::LinearProgram;
-using ::operations_research::glop::LPSolver;
 using ::operations_research::sat::LinearBooleanConstraint;
 using ::operations_research::sat::LinearBooleanProblem;
 
@@ -55,12 +69,12 @@ void UseBopSolutionForSatAssignmentPreference(const BopSolution& solution,
 }  // namespace
 
 BopCompleteLNSOptimizer::BopCompleteLNSOptimizer(
-    const std::string& name, const BopConstraintTerms& objective_terms)
+    absl::string_view name, const BopConstraintTerms& objective_terms)
     : BopOptimizerBase(name),
       state_update_stamp_(ProblemState::kInitialStampValue),
       objective_terms_(objective_terms) {}
 
-BopCompleteLNSOptimizer::~BopCompleteLNSOptimizer() {}
+BopCompleteLNSOptimizer::~BopCompleteLNSOptimizer() = default;
 
 BopOptimizerBase::Status BopCompleteLNSOptimizer::SynchronizeIfNeeded(
     const ProblemState& problem_state, int num_relaxed_vars) {
@@ -70,7 +84,7 @@ BopOptimizerBase::Status BopCompleteLNSOptimizer::SynchronizeIfNeeded(
   state_update_stamp_ = problem_state.update_stamp();
 
   // Load the current problem to the solver.
-  sat_solver_ = absl::make_unique<sat::SatSolver>();
+  sat_solver_ = std::make_unique<sat::SatSolver>();
   const BopOptimizerBase::Status status =
       LoadStateProblemToSatSolver(problem_state, sat_solver_.get());
   if (status != BopOptimizerBase::CONTINUE) return status;
@@ -96,7 +110,7 @@ BopOptimizerBase::Status BopCompleteLNSOptimizer::SynchronizeIfNeeded(
       /*use_lower_bound=*/false, sat::Coefficient(0),
       /*use_upper_bound=*/true, sat::Coefficient(num_relaxed_vars), &cst);
 
-  if (sat_solver_->IsModelUnsat()) return BopOptimizerBase::ABORT;
+  if (sat_solver_->ModelIsUnsat()) return BopOptimizerBase::ABORT;
 
   // It sounds like a good idea to force the solver to find a similar solution
   // from the current one. On another side, this is already somewhat enforced by
@@ -211,7 +225,7 @@ bool UseLinearRelaxationForSatAssignmentPreference(
 // increased anyway. Maybe a better approach is to start by relaxing something
 // like 10 variables instead of having a fixed percentage.
 BopAdaptiveLNSOptimizer::BopAdaptiveLNSOptimizer(
-    const std::string& name, bool use_lp_to_guide_sat,
+    absl::string_view name, bool use_lp_to_guide_sat,
     NeighborhoodGenerator* neighborhood_generator,
     sat::SatSolver* sat_propagator)
     : BopOptimizerBase(name),
@@ -222,7 +236,7 @@ BopAdaptiveLNSOptimizer::BopAdaptiveLNSOptimizer(
   CHECK(sat_propagator != nullptr);
 }
 
-BopAdaptiveLNSOptimizer::~BopAdaptiveLNSOptimizer() {}
+BopAdaptiveLNSOptimizer::~BopAdaptiveLNSOptimizer() = default;
 
 bool BopAdaptiveLNSOptimizer::ShouldBeRun(
     const ProblemState& problem_state) const {
@@ -241,9 +255,8 @@ BopOptimizerBase::Status BopAdaptiveLNSOptimizer::Optimize(
   const double initial_dt = sat_propagator_->deterministic_time();
   auto sat_propagator_cleanup =
       ::absl::MakeCleanup([initial_dt, this, &learned_info, &time_limit]() {
-        if (!sat_propagator_->IsModelUnsat()) {
-          sat_propagator_->SetAssumptionLevel(0);
-          sat_propagator_->RestoreSolverToAssumptionLevel();
+        if (!sat_propagator_->ModelIsUnsat()) {
+          (void)sat_propagator_->ResetToLevelZero();
           ExtractLearnedInfoFromSatSolver(sat_propagator_, learned_info);
         }
         time_limit->AdvanceDeterministicTime(
@@ -275,7 +288,7 @@ BopOptimizerBase::Status BopAdaptiveLNSOptimizer::Optimize(
             << problem_state.original_problem().num_variables();
 
     // Special case if the difficulty is too high.
-    if (!sat_propagator_->IsModelUnsat()) {
+    if (!sat_propagator_->ModelIsUnsat()) {
       if (sat_propagator_->CurrentDecisionLevel() == 0) {
         VLOG(2) << "Nothing fixed!";
         adaptive_difficulty_.DecreaseParameter();
@@ -286,7 +299,7 @@ BopOptimizerBase::Status BopAdaptiveLNSOptimizer::Optimize(
     // Since everything is already set-up, we try the sat_propagator_ with
     // a really low conflict limit. This allow to quickly skip over UNSAT
     // cases without the costly new problem setup.
-    if (!sat_propagator_->IsModelUnsat()) {
+    if (!sat_propagator_->ModelIsUnsat()) {
       sat::SatParameters params;
       params.set_max_number_of_conflicts(
           local_parameters.max_number_of_conflicts_for_quick_check());
@@ -313,15 +326,15 @@ BopOptimizerBase::Status BopAdaptiveLNSOptimizer::Optimize(
     // Restore to the assumption level.
     // This is call is important since all the fixed variable in the
     // propagator_ will be used to construct the local problem below.
-    // Note that calling RestoreSolverToAssumptionLevel() might actually prove
+    // Note that calling ResetToLevelZero() might actually prove
     // the infeasibility. It is important to check the UNSAT status afterward.
-    if (!sat_propagator_->IsModelUnsat()) {
-      sat_propagator_->RestoreSolverToAssumptionLevel();
+    if (!sat_propagator_->ModelIsUnsat()) {
+      (void)sat_propagator_->ResetToLevelZero();
     }
 
     // Check if the problem is proved UNSAT, by previous the search or the
-    // RestoreSolverToAssumptionLevel() call above.
-    if (sat_propagator_->IsModelUnsat()) {
+    // ResetToLevelZero() call above.
+    if (sat_propagator_->ModelIsUnsat()) {
       return problem_state.solution().IsFeasible()
                  ? BopOptimizerBase::OPTIMAL_SOLUTION_FOUND
                  : BopOptimizerBase::INFEASIBLE;
@@ -452,7 +465,7 @@ void ObjectiveBasedNeighborhood::GenerateNeighborhood(
       break;
     }
     sat_propagator->EnqueueDecisionAndBacktrackOnConflict(literal);
-    if (sat_propagator->IsModelUnsat()) return;
+    if (sat_propagator->ModelIsUnsat()) return;
   }
 }
 
@@ -501,7 +514,7 @@ void ConstraintBasedNeighborhood::GenerateNeighborhood(
   for (const sat::Literal literal : to_fix) {
     if (variable_is_relaxed[literal.Variable().value()]) continue;
     sat_propagator->EnqueueDecisionAndBacktrackOnConflict(literal);
-    if (sat_propagator->IsModelUnsat()) return;
+    if (sat_propagator->ModelIsUnsat()) return;
   }
 }
 
@@ -571,8 +584,8 @@ void RelationGraphBasedNeighborhood::GenerateNeighborhood(
     const sat::Literal literal(
         var, problem_state.solution().Value(VariableIndex(var.value())));
     if (variable_is_relaxed[literal.Variable().value()]) continue;
-    const int index =
-        sat_propagator->EnqueueDecisionAndBacktrackOnConflict(literal);
+    int index;
+    sat_propagator->EnqueueDecisionAndBacktrackOnConflict(literal, &index);
     if (sat_propagator->CurrentDecisionLevel() > 0) {
       for (int i = index; i < sat_propagator->LiteralTrail().Index(); ++i) {
         if (variable_is_relaxed
@@ -581,7 +594,7 @@ void RelationGraphBasedNeighborhood::GenerateNeighborhood(
         }
       }
     }
-    if (sat_propagator->IsModelUnsat()) return;
+    if (sat_propagator->ModelIsUnsat()) return;
   }
   VLOG(2) << "target:" << target << " relaxed:" << num_relaxed << " actual:"
           << num_variables - sat_propagator->LiteralTrail().Index();

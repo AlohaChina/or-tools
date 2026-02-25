@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2010-2021 Google LLC
+# Copyright 2010-2025 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Solves a flexible jobshop problems with the CP-SAT solver.
 
 A jobshop is a standard scheduling problem when you must sequence a
@@ -23,7 +24,6 @@ jobs. This is called the makespan.
 """
 
 # overloaded sum() clashes with pytype.
-# pytype: disable=wrong-arg-types
 
 import collections
 
@@ -33,19 +33,21 @@ from ortools.sat.python import cp_model
 class SolutionPrinter(cp_model.CpSolverSolutionCallback):
     """Print intermediate solutions."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         cp_model.CpSolverSolutionCallback.__init__(self)
         self.__solution_count = 0
 
-    def on_solution_callback(self):
+    def on_solution_callback(self) -> None:
         """Called at each new solution."""
-        print('Solution %i, time = %f s, objective = %i' %
-              (self.__solution_count, self.WallTime(), self.ObjectiveValue()))
+        print(
+            f"Solution {self.__solution_count}, time = {self.wall_time} s,"
+            f" objective = {self.objective_value}"
+        )
         self.__solution_count += 1
 
 
-def flexible_jobshop():
-    """Solve a small flexible jobshop problem."""
+def flexible_jobshop() -> None:
+    """solve a small flexible jobshop problem."""
     # Data part.
     jobs = [  # task = (processing_time, machine_id)
         [  # Job 0
@@ -82,13 +84,13 @@ def flexible_jobshop():
                 max_task_duration = max(max_task_duration, alternative[0])
             horizon += max_task_duration
 
-    print('Horizon = %i' % horizon)
+    print(f"Horizon = {horizon}")
 
     # Global storage of variables.
     intervals_per_resources = collections.defaultdict(list)
     starts = {}  # indexed by (job_id, task_id).
     presences = {}  # indexed by (job_id, task_id, alt_id).
-    job_ends = []
+    job_ends: list[cp_model.IntVar] = []
 
     # Scan the jobs and create the relevant variables and intervals.
     for job_id in all_jobs:
@@ -110,40 +112,42 @@ def flexible_jobshop():
                 max_duration = max(max_duration, alt_duration)
 
             # Create main interval for the task.
-            suffix_name = '_j%i_t%i' % (job_id, task_id)
-            start = model.NewIntVar(0, horizon, 'start' + suffix_name)
-            duration = model.NewIntVar(min_duration, max_duration,
-                                       'duration' + suffix_name)
-            end = model.NewIntVar(0, horizon, 'end' + suffix_name)
-            interval = model.NewIntervalVar(start, duration, end,
-                                            'interval' + suffix_name)
+            suffix_name = f"_j{job_id}_t{task_id}"
+            start = model.new_int_var(0, horizon, "start" + suffix_name)
+            duration = model.new_int_var(
+                min_duration, max_duration, "duration" + suffix_name
+            )
+            end = model.new_int_var(0, horizon, "end" + suffix_name)
+            interval = model.new_interval_var(
+                start, duration, end, "interval" + suffix_name
+            )
 
             # Store the start for the solution.
             starts[(job_id, task_id)] = start
 
             # Add precedence with previous task in the same job.
             if previous_end is not None:
-                model.Add(start >= previous_end)
+                model.add(start >= previous_end)
             previous_end = end
 
             # Create alternative intervals.
             if num_alternatives > 1:
                 l_presences = []
                 for alt_id in all_alternatives:
-                    alt_suffix = '_j%i_t%i_a%i' % (job_id, task_id, alt_id)
-                    l_presence = model.NewBoolVar('presence' + alt_suffix)
-                    l_start = model.NewIntVar(0, horizon, 'start' + alt_suffix)
+                    alt_suffix = f"_j{job_id}_t{task_id}_a{alt_id}"
+                    l_presence = model.new_bool_var("presence" + alt_suffix)
+                    l_start = model.new_int_var(0, horizon, "start" + alt_suffix)
                     l_duration = task[alt_id][0]
-                    l_end = model.NewIntVar(0, horizon, 'end' + alt_suffix)
-                    l_interval = model.NewOptionalIntervalVar(
-                        l_start, l_duration, l_end, l_presence,
-                        'interval' + alt_suffix)
+                    l_end = model.new_int_var(0, horizon, "end" + alt_suffix)
+                    l_interval = model.new_optional_interval_var(
+                        l_start, l_duration, l_end, l_presence, "interval" + alt_suffix
+                    )
                     l_presences.append(l_presence)
 
-                    # Link the master variables with the local ones.
-                    model.Add(start == l_start).OnlyEnforceIf(l_presence)
-                    model.Add(duration == l_duration).OnlyEnforceIf(l_presence)
-                    model.Add(end == l_end).OnlyEnforceIf(l_presence)
+                    # Link the primary/global variables with the local ones.
+                    model.add(start == l_start).only_enforce_if(l_presence)
+                    model.add(duration == l_duration).only_enforce_if(l_presence)
+                    model.add(end == l_end).only_enforce_if(l_presence)
 
                     # Add the local interval to the right machine.
                     intervals_per_resources[task[alt_id][1]].append(l_interval)
@@ -152,52 +156,50 @@ def flexible_jobshop():
                     presences[(job_id, task_id, alt_id)] = l_presence
 
                 # Select exactly one presence variable.
-                model.Add(sum(l_presences) == 1)
+                model.add_exactly_one(l_presences)
             else:
                 intervals_per_resources[task[0][1]].append(interval)
-                presences[(job_id, task_id, 0)] = model.NewConstant(1)
+                presences[(job_id, task_id, 0)] = model.new_constant(1)
 
-        job_ends.append(previous_end)
+        if previous_end is not None:
+            job_ends.append(previous_end)
 
     # Create machines constraints.
     for machine_id in all_machines:
         intervals = intervals_per_resources[machine_id]
         if len(intervals) > 1:
-            model.AddNoOverlap(intervals)
+            model.add_no_overlap(intervals)
 
     # Makespan objective
-    makespan = model.NewIntVar(0, horizon, 'makespan')
-    model.AddMaxEquality(makespan, job_ends)
-    model.Minimize(makespan)
+    makespan = model.new_int_var(0, horizon, "makespan")
+    model.add_max_equality(makespan, job_ends)
+    model.minimize(makespan)
 
     # Solve model.
     solver = cp_model.CpSolver()
     solution_printer = SolutionPrinter()
-    status = solver.Solve(model, solution_printer)
+    status = solver.solve(model, solution_printer)
 
     # Print final solution.
-    for job_id in all_jobs:
-        print('Job %i:' % job_id)
-        for task_id in range(len(jobs[job_id])):
-            start_value = solver.Value(starts[(job_id, task_id)])
-            machine = -1
-            duration = -1
-            selected = -1
-            for alt_id in range(len(jobs[job_id][task_id])):
-                if solver.Value(presences[(job_id, task_id, alt_id)]):
-                    duration = jobs[job_id][task_id][alt_id][0]
-                    machine = jobs[job_id][task_id][alt_id][1]
-                    selected = alt_id
-            print(
-                '  task_%i_%i starts at %i (alt %i, machine %i, duration %i)' %
-                (job_id, task_id, start_value, selected, machine, duration))
+    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        print(f"Optimal objective value: {solver.objective_value}")
+        for job_id in all_jobs:
+            print(f"Job {job_id}")
+            for task_id, task in enumerate(jobs[job_id]):
+                start_value = solver.value(starts[(job_id, task_id)])
+                machine: int = -1
+                task_duration: int = -1
+                selected: int = -1
+                for alt_id, alt in enumerate(task):
+                    if solver.boolean_value(presences[(job_id, task_id, alt_id)]):
+                        task_duration, machine = alt
+                        selected = alt_id
+                print(
+                    f"  task_{job_id}_{task_id} starts at {start_value} (alt"
+                    f" {selected}, machine {machine}, duration {task_duration})"
+                )
 
-    print('Solve status: %s' % solver.StatusName(status))
-    print('Optimal objective value: %i' % solver.ObjectiveValue())
-    print('Statistics')
-    print('  - conflicts : %i' % solver.NumConflicts())
-    print('  - branches  : %i' % solver.NumBranches())
-    print('  - wall time : %f s' % solver.WallTime())
+    print(solver.response_stats())
 
 
 flexible_jobshop()

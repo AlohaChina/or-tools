@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,41 +15,48 @@
 // of the functionalities are fixed (name of parameters, format of the
 // input): see http://www.minizinc.org/downloads/doc-1.6/flatzinc-spec.pdf
 
-#include <limits>
-
-#include "absl/strings/str_split.h"
+#include <cstdlib>
+#include <cstring>
 #if defined(__GNUC__)  // Linux or Mac OS X.
 #include <signal.h>
 #endif  // __GNUC__
 
-#include <csignal>
 #include <iostream>
+#include <ostream>
 #include <string>
 #include <vector>
 
 #include "absl/flags/flag.h"
 #include "absl/flags/parse.h"
 #include "absl/flags/usage.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/integral_types.h"
+#include "absl/log/check.h"
+#include "absl/log/flags.h"
+#include "absl/log/initialize.h"
+#include "absl/log/log.h"
+#include "absl/strings/match.h"
+#include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
+#include "absl/time/time.h"
+#include "google/protobuf/text_format.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/threadpool.h"
+#include "ortools/base/path.h"
 #include "ortools/base/timer.h"
 #include "ortools/flatzinc/cp_model_fz_solver.h"
 #include "ortools/flatzinc/model.h"
 #include "ortools/flatzinc/parser.h"
-#include "ortools/flatzinc/presolve.h"
+#include "ortools/sat/model.h"
 #include "ortools/util/logging.h"
 
+constexpr bool kOrToolsMode = true;
+
 ABSL_FLAG(double, time_limit, 0, "time limit in seconds.");
-ABSL_FLAG(bool, all_solutions, false, "Search for all solutions.");
-ABSL_FLAG(int, num_solutions, 0,
-          "Maximum number of solution to search for, 0 means unspecified.");
-ABSL_FLAG(bool, free_search, false,
+ABSL_FLAG(bool, search_all_solutions, false, "Search for all solutions.");
+ABSL_FLAG(bool, display_all_solutions, false,
+          "Display all improving solutions.");
+ABSL_FLAG(bool, free_search, !kOrToolsMode,
           "If false, the solver must follow the defined search."
           "If true, other search are allowed.");
 ABSL_FLAG(int, threads, 0, "Number of threads the solver will use.");
-ABSL_FLAG(bool, presolve, true, "Presolve the model to simplify it.");
 ABSL_FLAG(bool, statistics, false, "Print solver statistics after search.");
 ABSL_FLAG(bool, read_from_stdin, false,
           "Read the FlatZinc from stdin, not from a file.");
@@ -59,34 +66,42 @@ ABSL_FLAG(std::string, fz_model_name, "stdin",
 ABSL_FLAG(std::string, params, "", "SatParameters as a text proto.");
 ABSL_FLAG(bool, fz_logging, false,
           "Print logging information from the flatzinc interpreter.");
-ABSL_FLAG(bool, use_flatzinc_format, true,
+ABSL_FLAG(bool, ortools_mode, kOrToolsMode,
           "Display solutions in the flatzinc format");
+ABSL_FLAG(bool, fz_check_all_solutions, DEBUG_MODE,
+          "Checks all solutions returned by the solver.");
+ABSL_FLAG(bool, ignore_redundant_constraints, false,
+          "Ignore redundant constraints.");
+ABSL_FLAG(bool, ignore_symmetry_breaking_constraints, false,
+          "Ignore symmetry breaking constraints.");
 
 namespace operations_research {
 namespace fz {
 
 std::vector<char*> FixAndParseParameters(int* argc, char*** argv) {
-  char all_param[] = "--all_solutions";
+  char all_param[] = "--search_all_solutions";
+  char print_solutions[] = "--display_all_solutions";
   char free_param[] = "--free_search";
   char threads_param[] = "--threads";
-  char solutions_param[] = "--num_solutions";
   char logging_param[] = "--fz_logging";
   char statistics_param[] = "--statistics";
   char seed_param[] = "--fz_seed";
   char time_param[] = "--time_limit";
   bool use_time_param = false;
+  bool set_free_search = false;
   for (int i = 1; i < *argc; ++i) {
     if (strcmp((*argv)[i], "-a") == 0) {
       (*argv)[i] = all_param;
     }
+    if (strcmp((*argv)[i], "-i") == 0) {
+      (*argv)[i] = print_solutions;
+    }
     if (strcmp((*argv)[i], "-f") == 0) {
       (*argv)[i] = free_param;
+      set_free_search = true;
     }
     if (strcmp((*argv)[i], "-p") == 0) {
       (*argv)[i] = threads_param;
-    }
-    if (strcmp((*argv)[i], "-n") == 0) {
-      (*argv)[i] = solutions_param;
     }
     if (strcmp((*argv)[i], "-l") == 0) {
       (*argv)[i] = logging_param;
@@ -101,6 +116,11 @@ std::vector<char*> FixAndParseParameters(int* argc, char*** argv) {
       (*argv)[i] = time_param;
       use_time_param = true;
     }
+    if (kOrToolsMode) {
+      if (strcmp((*argv)[i], "-v") == 0) {
+        (*argv)[i] = logging_param;
+      }
+    }
   }
   const char kUsage[] =
       "Usage: see flags.\nThis program parses and solve a flatzinc problem.";
@@ -108,31 +128,35 @@ std::vector<char*> FixAndParseParameters(int* argc, char*** argv) {
   absl::SetProgramUsageMessage(kUsage);
   const std::vector<char*> residual_flags =
       absl::ParseCommandLine(*argc, *argv);
-  google::InitGoogleLogging((*argv)[0]);
+  absl::InitializeLog();
 
   // Fix time limit if -t was used.
   if (use_time_param) {
     absl::SetFlag(&FLAGS_time_limit, absl::GetFlag(FLAGS_time_limit) / 1000.0);
   }
+
+  // Define the default number of workers to 1 if -f was used.
+  if (set_free_search && absl::GetFlag(FLAGS_threads) == 0) {
+    absl::SetFlag(&FLAGS_threads, 1);
+  }
+
   return residual_flags;
 }
 
 Model ParseFlatzincModel(const std::string& input, bool input_is_filename,
-                         SolverLogger* logger) {
+                         SolverLogger* logger, absl::Duration* parse_duration) {
   WallTimer timer;
   timer.Start();
-  // Read model.
-  std::string problem_name =
-      input_is_filename ? input : absl::GetFlag(FLAGS_fz_model_name);
-  if (input_is_filename || absl::EndsWith(problem_name, ".fzn")) {
-    CHECK(absl::EndsWith(problem_name, ".fzn"))
-        << "Unrecognized flatzinc file: `" << problem_name << "'";
-    problem_name.resize(problem_name.size() - 4);
-    const size_t found = problem_name.find_last_of("/\\");
-    if (found != std::string::npos) {
-      problem_name = problem_name.substr(found + 1);
-    }
+
+  // Check the extension.
+  if (input_is_filename && !absl::EndsWith(input, ".fzn")) {
+    LOG(FATAL) << "Unrecognized flatzinc file: `" << input << "'";
   }
+
+  // Read model.
+  const std::string problem_name = input_is_filename
+                                       ? std::string(file::Stem(input))
+                                       : absl::GetFlag(FLAGS_fz_model_name);
   Model model(problem_name);
   if (input_is_filename) {
     CHECK(ParseFlatzincFile(input, &model));
@@ -140,18 +164,32 @@ Model ParseFlatzincModel(const std::string& input, bool input_is_filename,
     CHECK(ParseFlatzincString(input, &model));
   }
 
+  *parse_duration = timer.GetDuration();
   SOLVER_LOG(logger, "File ", (input_is_filename ? input : "stdin"),
-             " parsed in ", timer.GetInMs(), " ms");
-  SOLVER_LOG(logger, "");
+             " parsed in ", absl::ToInt64Milliseconds(*parse_duration), " ms");
 
-  // Presolve the model.
-  Presolver presolve(logger);
-  SOLVER_LOG(logger, "Presolve model");
-  timer.Reset();
-  timer.Start();
-  presolve.Run(&model);
-  SOLVER_LOG(logger, "  - done in ", timer.GetInMs(), " ms");
-  SOLVER_LOG(logger);
+  int num_redundant_constraints = 0;
+  int num_symmetry_breaking_constraints = 0;
+  for (Constraint* ct : model.constraints()) {
+    if (ct->is_redundant && absl::GetFlag(FLAGS_ignore_redundant_constraints)) {
+      ++num_redundant_constraints;
+      ct->MarkAsInactive();
+    }
+    if (ct->is_symmetric_breaking &&
+        absl::GetFlag(FLAGS_ignore_symmetry_breaking_constraints)) {
+      ++num_symmetry_breaking_constraints;
+      ct->MarkAsInactive();
+    }
+  }
+  if (num_redundant_constraints > 0) {
+    SOLVER_LOG(logger, "  - ignored redundant constraints: ",
+               num_redundant_constraints);
+  }
+  if (num_symmetry_breaking_constraints > 0) {
+    SOLVER_LOG(logger, "  - ignored symmetry breaking constraints: ",
+               num_symmetry_breaking_constraints);
+  }
+  SOLVER_LOG(logger, "");
 
   // Print statistics.
   ModelStatistics stats(model, logger);
@@ -166,9 +204,9 @@ void LogInFlatzincFormat(const std::string& multi_line_input) {
     return;
   }
   const absl::string_view flatzinc_prefix =
-      absl::GetFlag(FLAGS_use_flatzinc_format) ? "%% " : "";
+      absl::GetFlag(FLAGS_ortools_mode) ? "%% " : "";
   const std::vector<absl::string_view> lines =
-      absl::StrSplit(multi_line_input, '\n', absl::SkipEmpty());
+      absl::StrSplit(multi_line_input, '\n');
   for (const absl::string_view& line : lines) {
     std::cout << flatzinc_prefix << line << std::endl;
   }
@@ -188,6 +226,7 @@ int main(int argc, char** argv) {
     std::string currentLine;
     while (std::getline(std::cin, currentLine)) {
       input.append(currentLine);
+      input.append("\n");
     }
   } else {
     if (residual_flags.empty()) {
@@ -197,35 +236,61 @@ int main(int argc, char** argv) {
     input = residual_flags.back();
   }
 
-  operations_research::SolverLogger logger;
-  logger.EnableLogging(absl::GetFlag(FLAGS_fz_logging));
-  logger.SetLogToStdOut(false);
-  logger.AddInfoLoggingCallback(operations_research::fz::LogInFlatzincFormat);
+  operations_research::sat::Model sat_model;
+  operations_research::SolverLogger* logger =
+      sat_model.GetOrCreate<operations_research::SolverLogger>();
+  if (absl::GetFlag(FLAGS_ortools_mode)) {
+    logger->EnableLogging(absl::GetFlag(FLAGS_fz_logging));
+    // log_to_stdout is disabled later.
+    logger->AddInfoLoggingCallback(
+        operations_research::fz::LogInFlatzincFormat);
+  } else {
+    logger->EnableLogging(true);
+    logger->SetLogToStdOut(true);
+  }
+
+  absl::Duration parse_duration;
   operations_research::fz::Model model =
       operations_research::fz::ParseFlatzincModel(
-          input, !absl::GetFlag(FLAGS_read_from_stdin), &logger);
+          input, !absl::GetFlag(FLAGS_read_from_stdin), logger,
+          &parse_duration);
+  operations_research::sat::ProcessFloatingPointOVariablesAndObjective(&model);
+
   operations_research::fz::FlatzincSatParameters parameters;
-  parameters.display_all_solutions = absl::GetFlag(FLAGS_all_solutions);
+  parameters.display_all_solutions = absl::GetFlag(FLAGS_display_all_solutions);
+  parameters.search_all_solutions = absl::GetFlag(FLAGS_search_all_solutions);
   parameters.use_free_search = absl::GetFlag(FLAGS_free_search);
-  parameters.log_search_progress = absl::GetFlag(FLAGS_fz_logging);
-  if (absl::GetFlag(FLAGS_num_solutions) == 0) {
-    absl::SetFlag(&FLAGS_num_solutions,
-                  absl::GetFlag(FLAGS_all_solutions)
-                      ? std::numeric_limits<int32_t>::max()
-                      : 1);
-  }
-  parameters.max_number_of_solutions = absl::GetFlag(FLAGS_num_solutions);
+  parameters.log_search_progress =
+      absl::GetFlag(FLAGS_fz_logging) || !absl::GetFlag(FLAGS_ortools_mode);
   parameters.random_seed = absl::GetFlag(FLAGS_fz_seed);
   parameters.display_statistics = absl::GetFlag(FLAGS_statistics);
   parameters.number_of_threads = absl::GetFlag(FLAGS_threads);
-  parameters.max_time_in_seconds = absl::GetFlag(FLAGS_time_limit);
+  parameters.max_time_in_seconds =
+      absl::GetFlag(FLAGS_time_limit) - absl::ToInt64Seconds(parse_duration);
+  parameters.ortools_mode = absl::GetFlag(FLAGS_ortools_mode);
+  parameters.check_all_solutions = absl::GetFlag(FLAGS_fz_check_all_solutions);
 
   operations_research::SolverLogger solution_logger;
   solution_logger.SetLogToStdOut(true);
-  solution_logger.EnableLogging(absl::GetFlag(FLAGS_use_flatzinc_format));
+  solution_logger.EnableLogging(parameters.ortools_mode);
 
-  operations_research::sat::SolveFzWithCpModelProto(model, parameters,
-                                                    absl::GetFlag(FLAGS_params),
-                                                    &logger, &solution_logger);
+  if (absl::GetFlag(FLAGS_time_limit) > 0 &&
+      parse_duration > absl::Seconds(absl::GetFlag(FLAGS_time_limit))) {
+    if (parameters.ortools_mode) {
+      SOLVER_LOG(&solution_logger, "%% TIMEOUT");
+    }
+    if (parameters.log_search_progress) {
+      SOLVER_LOG(logger, "CpSolverResponse summary:");
+      SOLVER_LOG(logger, "status: UNKNOWN");
+    }
+    return EXIT_SUCCESS;
+  }
+
+  operations_research::sat::SatParameters flag_parameters;
+  CHECK(google::protobuf::TextFormat::ParseFromString(
+      absl::GetFlag(FLAGS_params), &flag_parameters))
+      << absl::GetFlag(FLAGS_params);
+  operations_research::sat::SolveFzWithCpModelProto(
+      model, parameters, flag_parameters, &sat_model, &solution_logger);
   return EXIT_SUCCESS;
 }

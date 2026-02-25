@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -298,13 +298,13 @@ public class CapacitatedVehicleRoutingProblemWithTimeWindows
             for (int vehicle = 0; vehicle < number_of_vehicles; ++vehicle)
             {
                 String route = "Vehicle " + vehicle + ": ";
-                long order = model.Start(vehicle);
-                if (model.IsEnd(solution.Value(model.NextVar(order))))
+                if (!model.IsVehicleUsed(solution, vehicle))
                 {
                     route += "Empty";
                 }
                 else
                 {
+                    long order = model.Start(vehicle);
                     for (; !model.IsEnd(order); order = solution.Value(model.NextVar(order)))
                     {
                         IntVar local_load = capacity_dimension.CumulVar(order);

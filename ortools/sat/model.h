@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,20 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_MODEL_H_
-#define OR_TOOLS_SAT_MODEL_H_
+#ifndef ORTOOLS_SAT_MODEL_H_
+#define ORTOOLS_SAT_MODEL_H_
 
 #include <cstddef>
+#include <cstdio>
+#include <ctime>
 #include <functional>
-#include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
-#include "ortools/base/map_util.h"
-#include "ortools/base/typeid.h"
 
 namespace operations_research {
 namespace sat {
@@ -33,11 +33,30 @@ namespace sat {
  * Class that owns everything related to a particular optimization model.
  *
  * This class is actually a fully generic wrapper that can hold any type of
- * constraints, watchers, solvers and provide a mecanism to wire them together.
+ * constraints, watchers, solvers and provide a mechanism to wire them together.
  */
 class Model {
+  // FastTypeId<Type>() evaluates at compile/link-time to a unique integer for
+  // the passed in type. Their values are neither contiguous nor small, making
+  // them unfit for using as an index into a vector, but a good match for keys
+  // into maps or straight up comparisons. Note that on 64-bit (unix) systems
+  // size_t is 64-bit while int is 32-bit and the compiler will happily and
+  // quietly assign such a 64-bit value to a 32-bit integer. While a client
+  // should never do that it SHOULD still be safe, assuming the BSS segment
+  // doesn't span more than 4GiB.
+  template <typename Type>
+  static inline size_t FastTypeId() {
+    static_assert(sizeof(char*) <= sizeof(size_t),
+                  "ptr size too large for size_t");
+
+    // This static variable isn't actually used, only its address, so there are
+    // no concurrency issues.
+    static char dummy_var;
+    return reinterpret_cast<size_t>(&dummy_var);
+  }
+
  public:
-  Model() {}
+  Model() = default;
 
   ~Model() {
     // The order of deletion seems to be platform dependent.
@@ -52,6 +71,10 @@ class Model {
    * name them for debugging or logging.
    */
   explicit Model(std::string name) : name_(name) {}
+
+  // This type is neither copyable nor movable.
+  Model(const Model&) = delete;
+  Model& operator=(const Model&) = delete;
 
   /**
    * This makes it possible  to have a nicer API on the client side, and it
@@ -104,7 +127,7 @@ class Model {
    */
   template <typename T>
   T* GetOrCreate() {
-    const size_t type_id = gtl::FastTypeId<T>();
+    const size_t type_id = FastTypeId<T>();
     auto find = singletons_.find(type_id);
     if (find != singletons_.end()) {
       return static_cast<T*>(find->second);
@@ -125,8 +148,9 @@ class Model {
    */
   template <typename T>
   const T* Get() const {
-    return static_cast<const T*>(
-        gtl::FindWithDefault(singletons_, gtl::FastTypeId<T>(), nullptr));
+    const auto& it = singletons_.find(FastTypeId<T>());
+    return it != singletons_.end() ? static_cast<const T*>(it->second)
+                                   : nullptr;
   }
 
   /**
@@ -134,8 +158,8 @@ class Model {
    */
   template <typename T>
   T* Mutable() const {
-    return static_cast<T*>(
-        gtl::FindWithDefault(singletons_, gtl::FastTypeId<T>(), nullptr));
+    const auto& it = singletons_.find(FastTypeId<T>());
+    return it != singletons_.end() ? static_cast<T*>(it->second) : nullptr;
   }
 
   /**
@@ -144,8 +168,9 @@ class Model {
    * It will be destroyed when the model is.
    */
   template <typename T>
-  void TakeOwnership(T* t) {
+  T* TakeOwnership(T* t) {
     cleanup_list_.emplace_back(new Delete<T>(t));
+    return t;
   }
 
   /**
@@ -167,7 +192,7 @@ class Model {
    */
   template <typename T>
   void Register(T* non_owned_class) {
-    const size_t type_id = gtl::FastTypeId<T>();
+    const size_t type_id = FastTypeId<T>();
     CHECK(!singletons_.contains(type_id));
     singletons_[type_id] = non_owned_class;
   }
@@ -213,11 +238,9 @@ class Model {
   // don't care too much about efficiency here and this was easier to get
   // working.
   std::vector<std::unique_ptr<DeleteInterface>> cleanup_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(Model);
 };
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_MODEL_H_
+#endif  // ORTOOLS_SAT_MODEL_H_

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,42 +14,25 @@
 // Solve the Slitherlink problem:
 //    see https://en.wikipedia.org/wiki/Slitherlink
 
+#include <iostream>
 #include <string>
 #include <vector>
 
+#include "absl/flags/parse.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/strings/str_format.h"
+#include "absl/types/span.h"
 #include "ortools/sat/cp_model.h"
-#include "ortools/sat/model.h"
-
-const std::vector<std::vector<int> > tiny = {{3, 3, 1}};
-
-const std::vector<std::vector<int> > small = {
-    {3, 2, -1, 3}, {-1, -1, -1, 2}, {3, -1, -1, -1}, {3, -1, 3, 1}};
-
-const std::vector<std::vector<int> > medium = {
-    {-1, 0, -1, 1, -1, -1, 1, -1},  {-1, 3, -1, -1, 2, 3, -1, 2},
-    {-1, -1, 0, -1, -1, -1, -1, 0}, {-1, 3, -1, -1, 0, -1, -1, -1},
-    {-1, -1, -1, 3, -1, -1, 0, -1}, {1, -1, -1, -1, -1, 3, -1, -1},
-    {3, -1, 1, 3, -1, -1, 3, -1},   {-1, 0, -1, -1, 3, -1, 3, -1}};
-
-const std::vector<std::vector<int> > big = {
-    {3, -1, -1, -1, 2, -1, 1, -1, 1, 2},
-    {1, -1, 0, -1, 3, -1, 2, 0, -1, -1},
-    {-1, 3, -1, -1, -1, -1, -1, -1, 3, -1},
-    {2, 0, -1, 3, -1, 2, 3, -1, -1, -1},
-    {-1, -1, -1, 1, 1, 1, -1, -1, 3, 3},
-    {2, 3, -1, -1, 2, 2, 3, -1, -1, -1},
-    {-1, -1, -1, 1, 2, -1, 2, -1, 3, 3},
-    {-1, 2, -1, -1, -1, -1, -1, -1, 2, -1},
-    {-1, -1, 1, 1, -1, 2, -1, 1, -1, 3},
-    {3, 3, -1, 1, -1, 2, -1, -1, -1, 2}};
+#include "ortools/sat/cp_model.pb.h"
+#include "ortools/sat/cp_model_solver.h"
 
 namespace operations_research {
 namespace sat {
 
-void PrintSolution(const std::vector<std::vector<int> >& data,
-                   const std::vector<std::vector<bool> >& h_arcs,
-                   const std::vector<std::vector<bool> >& v_arcs) {
+void PrintSolution(absl::Span<const std::vector<int>> data,
+                   absl::Span<const std::vector<bool>> h_arcs,
+                   absl::Span<const std::vector<bool>> v_arcs) {
   const int num_rows = data.size();
   const int num_columns = data[0].size();
 
@@ -83,7 +66,7 @@ void PrintSolution(const std::vector<std::vector<int> >& data,
   std::cout << last_line << std::endl;
 }
 
-void SlitherLink(const std::vector<std::vector<int> >& data) {
+void SlitherLink(absl::Span<const std::vector<int>> data) {
   const int num_rows = data.size();
   const int num_columns = data[0].size();
 
@@ -112,10 +95,12 @@ void SlitherLink(const std::vector<std::vector<int> >& data) {
   CpModelBuilder builder;
 
   std::vector<BoolVar> horizontal_arcs;
+  horizontal_arcs.reserve(2 * num_horizontal_arcs);
   for (int arc = 0; arc < 2 * num_horizontal_arcs; ++arc) {
     horizontal_arcs.push_back(builder.NewBoolVar());
   }
   std::vector<BoolVar> vertical_arcs;
+  vertical_arcs.reserve(2 * num_vertical_arcs);
   for (int arc = 0; arc < 2 * num_vertical_arcs; ++arc) {
     vertical_arcs.push_back(builder.NewBoolVar());
   }
@@ -219,7 +204,7 @@ void SlitherLink(const std::vector<std::vector<int> >& data) {
 
   const CpSolverResponse response = Solve(builder.Build());
 
-  std::vector<std::vector<bool> > h_arcs(num_rows + 1);
+  std::vector<std::vector<bool>> h_arcs(num_rows + 1);
   for (int y = 0; y < num_rows + 1; ++y) {
     for (int x = 0; x < num_columns; ++x) {
       const int arc = undirected_horizontal_arc(x, y);
@@ -229,7 +214,7 @@ void SlitherLink(const std::vector<std::vector<int> >& data) {
     }
   }
 
-  std::vector<std::vector<bool> > v_arcs(num_columns + 1);
+  std::vector<std::vector<bool>> v_arcs(num_columns + 1);
   for (int y = 0; y < num_rows; ++y) {
     for (int x = 0; x < num_columns + 1; ++x) {
       const int arc = undirected_vertical_arc(x, y);
@@ -246,7 +231,31 @@ void SlitherLink(const std::vector<std::vector<int> >& data) {
 }  // namespace sat
 }  // namespace operations_research
 
-int main() {
+int main(int argc, char** argv) {
+  absl::ParseCommandLine(argc, argv);
+  const std::vector<std::vector<int>> tiny = {{3, 3, 1}};
+
+  const std::vector<std::vector<int>> small = {
+      {3, 2, -1, 3}, {-1, -1, -1, 2}, {3, -1, -1, -1}, {3, -1, 3, 1}};
+
+  const std::vector<std::vector<int>> medium = {
+      {-1, 0, -1, 1, -1, -1, 1, -1},  {-1, 3, -1, -1, 2, 3, -1, 2},
+      {-1, -1, 0, -1, -1, -1, -1, 0}, {-1, 3, -1, -1, 0, -1, -1, -1},
+      {-1, -1, -1, 3, -1, -1, 0, -1}, {1, -1, -1, -1, -1, 3, -1, -1},
+      {3, -1, 1, 3, -1, -1, 3, -1},   {-1, 0, -1, -1, 3, -1, 3, -1}};
+
+  const std::vector<std::vector<int>> big = {
+      {3, -1, -1, -1, 2, -1, 1, -1, 1, 2},
+      {1, -1, 0, -1, 3, -1, 2, 0, -1, -1},
+      {-1, 3, -1, -1, -1, -1, -1, -1, 3, -1},
+      {2, 0, -1, 3, -1, 2, 3, -1, -1, -1},
+      {-1, -1, -1, 1, 1, 1, -1, -1, 3, 3},
+      {2, 3, -1, -1, 2, 2, 3, -1, -1, -1},
+      {-1, -1, -1, 1, 2, -1, 2, -1, 3, 3},
+      {-1, 2, -1, -1, -1, -1, -1, -1, 2, -1},
+      {-1, -1, 1, 1, -1, 2, -1, 1, -1, 3},
+      {3, 3, -1, 1, -1, 2, -1, -1, -1, 2}};
+
   std::cout << "Tiny problem" << std::endl;
   operations_research::sat::SlitherLink(tiny);
   std::cout << "Small problem" << std::endl;

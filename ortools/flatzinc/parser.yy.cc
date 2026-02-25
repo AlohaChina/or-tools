@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -709,10 +709,11 @@ static const flex_int32_t yy_rule_can_match_eol[32] = {
 /* Allow parameter passing to and from the bison parser. */
 /* Rename yy to orfz_ in public functions. */
 #line 11 "./ortools/flatzinc/parser.lex"
+#include <cstdint>
 #include <string>
 
+#include "absl/log/check.h"
 #include "absl/strings/numbers.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/flatzinc/parser.tab.hh"
 #if defined(_MSC_VER)
 #define YY_NO_UNISTD_H
@@ -1387,16 +1388,16 @@ YY_DECL {
         default:
           YY_FATAL_ERROR("fatal flex scanner internal error--no action found");
       } /* end of action switch */
-    }   /* end of scanning one token */
-  }     /* end of user's declarations */
+    } /* end of scanning one token */
+  } /* end of user's declarations */
 } /* end of yylex */
 
 /* yy_get_next_buffer - try to read in a new buffer
  *
  * Returns a code representing an action:
- *	EOB_ACT_LAST_MATCH -
- *	EOB_ACT_CONTINUE_SCAN - continue scanning from current position
- *	EOB_ACT_END_OF_FILE - end of file
+ *    EOB_ACT_LAST_MATCH -
+ *    EOB_ACT_CONTINUE_SCAN - continue scanning from current position
+ *    EOB_ACT_END_OF_FILE - end of file
  */
 static int yy_get_next_buffer(yyscan_t yyscanner) {
   struct yyguts_t* yyg = (struct yyguts_t*)yyscanner;
@@ -1550,7 +1551,7 @@ static yy_state_type yy_get_previous_state(yyscan_t yyscanner) {
 /* yy_try_NUL_trans - try to make a transition on the NUL character
  *
  * synopsis
- *	next_state = yy_try_NUL_trans( current_state );
+ *    next_state = yy_try_NUL_trans( current_state );
  */
 static yy_state_type yy_try_NUL_trans(yy_state_type yy_current_state,
                                       yyscan_t yyscanner) {
@@ -1718,8 +1719,8 @@ void yy_switch_to_buffer(YY_BUFFER_STATE new_buffer, yyscan_t yyscanner) {
 
   /* TODO. We should be able to replace this entire function body
    * with
-   *		yypop_buffer_state();
-   *		yypush_buffer_state(new_buffer);
+   *        yypop_buffer_state();
+   *        yypush_buffer_state(new_buffer);
    */
   yyensure_buffer_stack(yyscanner);
   if (YY_CURRENT_BUFFER == new_buffer) return;
@@ -2323,8 +2324,7 @@ static void yy_flex_strncpy(char* s1, const char* s2, int n,
 #ifdef YY_NEED_STRLEN
 static int yy_flex_strlen(const char* s, yyscan_t yyscanner) {
   int n;
-  for (n = 0; s[n]; ++n)
-    ;
+  for (n = 0; s[n]; ++n);
 
   return n;
 }

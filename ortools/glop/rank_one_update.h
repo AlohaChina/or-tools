@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,8 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_GLOP_RANK_ONE_UPDATE_H_
-#define OR_TOOLS_GLOP_RANK_ONE_UPDATE_H_
+#ifndef ORTOOLS_GLOP_RANK_ONE_UPDATE_H_
+#define ORTOOLS_GLOP_RANK_ONE_UPDATE_H_
+
+#include <vector>
 
 #include "ortools/base/logging.h"
 #include "ortools/lp_data/lp_types.h"
@@ -136,6 +138,11 @@ class RankOneUpdateFactorization {
   // that switch between a sparse/dense version.
   RankOneUpdateFactorization() : hypersparse_ratio_(0.05) {}
 
+  // This type is neither copyable nor movable.
+  RankOneUpdateFactorization(const RankOneUpdateFactorization&) = delete;
+  RankOneUpdateFactorization& operator=(const RankOneUpdateFactorization&) =
+      delete;
+
   // This is currently only visible for testing.
   void set_hypersparse_ratio(double value) { hypersparse_ratio_ = value; }
 
@@ -170,7 +177,7 @@ class RankOneUpdateFactorization {
     }
 
     // y->is_non_zero is always all false before and after this code.
-    DCHECK(IsAllFalse(y->is_non_zero));
+    DCHECK(y->is_non_zero.IsAllFalse());
     y->RepopulateSparseMask();
     bool use_dense = y->ShouldUseDenseIteration(hypersparse_ratio_);
     for (int i = elementary_matrices_.size() - 1; i >= 0; --i) {
@@ -206,7 +213,7 @@ class RankOneUpdateFactorization {
     }
 
     // d->is_non_zero is always all false before and after this code.
-    DCHECK(IsAllFalse(d->is_non_zero));
+    DCHECK(d->is_non_zero.IsAllFalse());
     d->RepopulateSparseMask();
     bool use_dense = d->ShouldUseDenseIteration(hypersparse_ratio_);
     const size_t end = elementary_matrices_.size();
@@ -240,10 +247,9 @@ class RankOneUpdateFactorization {
   double hypersparse_ratio_;
   EntryIndex num_entries_;
   std::vector<RankOneUpdateElementaryMatrix> elementary_matrices_;
-  DISALLOW_COPY_AND_ASSIGN(RankOneUpdateFactorization);
 };
 
 }  // namespace glop
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_GLOP_RANK_ONE_UPDATE_H_
+#endif  // ORTOOLS_GLOP_RANK_ONE_UPDATE_H_

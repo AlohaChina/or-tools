@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,6 +12,10 @@
 // limitations under the License.
 
 #include "ortools/glop/basis_representation.h"
+
+#include <algorithm>
+#include <cstdlib>
+#include <vector>
 
 #include "ortools/base/stl_util.h"
 #include "ortools/glop/status.h"
@@ -46,7 +50,7 @@ EtaMatrix::EtaMatrix(ColIndex eta_col, const ScatteredColumn& direction)
   }
 }
 
-EtaMatrix::~EtaMatrix() {}
+EtaMatrix::~EtaMatrix() = default;
 
 void EtaMatrix::LeftSolve(DenseRow* y) const {
   RETURN_IF_NULL(y);
@@ -188,7 +192,7 @@ BasisFactorization::BasisFactorization(
   SetParameters(parameters_);
 }
 
-BasisFactorization::~BasisFactorization() {}
+BasisFactorization::~BasisFactorization() = default;
 
 void BasisFactorization::Clear() {
   SCOPED_TIME_STAT(&stats_);
@@ -269,9 +273,10 @@ Status BasisFactorization::MiddleProductFormUpdate(
   // Initialize scratchpad_ with the right update vector.
   DCHECK(IsAllZero(scratchpad_));
   scratchpad_.resize(right_storage_.num_rows(), 0.0);
-  for (const EntryIndex i : right_storage_.Column(right_index)) {
-    const RowIndex row = right_storage_.EntryRow(i);
-    scratchpad_[row] = right_storage_.EntryCoefficient(i);
+  const auto view = right_storage_.view();
+  for (const EntryIndex i : view.Column(right_index)) {
+    const RowIndex row = view.EntryRow(i);
+    scratchpad_[row] = view.EntryCoefficient(i);
     scratchpad_non_zeros_.push_back(row);
   }
   // Subtract the column of U from scratchpad_.
@@ -418,7 +423,7 @@ void BasisFactorization::LeftSolveForUnitRow(ColIndex j,
     const ColIndex start = lu_factorization_.LeftSolveUForUnitRow(j, y);
     if (y->non_zeros.empty()) {
       left_pool_mapping_[j] = storage_.AddDenseColumnPrefix(
-          Transpose(y->values), ColToRowIndex(start));
+          Transpose(y->values).const_view(), ColToRowIndex(start));
     } else {
       left_pool_mapping_[j] = storage_.AddDenseColumnWithNonZeros(
           Transpose(y->values),

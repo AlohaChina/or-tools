@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2010-2021 Google LLC
+# Copyright 2010-2025 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -11,12 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 # [START program]
 """Vehicle Routing example."""
 
 # [START import]
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
+
 # [END import]
 
 
@@ -37,7 +39,6 @@ def main():
     # Create Routing Model.
     # [START routing_model]
     routing = pywrapcp.RoutingModel(manager)
-
     # [END routing_model]
 
     # Create and register a transit callback.
@@ -61,7 +62,8 @@ def main():
     # [START parameters]
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     search_parameters.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)  # pylint: disable=no-member
+        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    )  # pylint: disable=no-member
     # [END parameters]
 
     # Solve the problem.
@@ -71,21 +73,21 @@ def main():
 
     # Print solution on console.
     # [START print_solution]
-    print('Objective: {}'.format(assignment.ObjectiveValue()))
+    print(f"Objective: {assignment.ObjectiveValue()}")
     index = routing.Start(0)
-    plan_output = 'Route for vehicle 0:\n'
+    plan_output = "Route for vehicle 0:\n"
     route_distance = 0
     while not routing.IsEnd(index):
-        plan_output += '{} -> '.format(manager.IndexToNode(index))
+        plan_output += f"{manager.IndexToNode(index)} -> "
         previous_index = index
         index = assignment.Value(routing.NextVar(index))
         route_distance += routing.GetArcCostForVehicle(previous_index, index, 0)
-    plan_output += '{}\n'.format(manager.IndexToNode(index))
-    plan_output += 'Distance of the route: {}m\n'.format(route_distance)
+    plan_output += f"{manager.IndexToNode(index)}\n"
+    plan_output += f"Distance of the route: {route_distance}m\n"
     print(plan_output)
     # [END print_solution]
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 # [END program]

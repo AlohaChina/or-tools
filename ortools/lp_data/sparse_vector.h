@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -27,17 +27,19 @@
 //
 // Both books also contain a wealth of references.
 
-#ifndef OR_TOOLS_LP_DATA_SPARSE_VECTOR_H_
-#define OR_TOOLS_LP_DATA_SPARSE_VECTOR_H_
+#ifndef ORTOOLS_LP_DATA_SPARSE_VECTOR_H_
+#define ORTOOLS_LP_DATA_SPARSE_VECTOR_H_
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "absl/strings/str_format.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"  // for CHECK*
+#include "ortools/base/types.h"
 #include "ortools/graph/iterators.h"
 #include "ortools/lp_data/lp_types.h"
 #include "ortools/lp_data/permutation.h"
@@ -381,8 +383,8 @@ class SparseVector {
   EntryIndex capacity_;
 
   // Pointers to the first elements of the index and coefficient arrays.
-  Index* index_;
-  Fractional* coefficient_;
+  Index* index_ = nullptr;
+  Fractional* coefficient_ = nullptr;
 
   // This is here to speed up the CheckNoDuplicates() methods and is mutable
   // so we can perform checks on const argument.
@@ -899,10 +901,13 @@ void SparseVector<IndexType, IteratorType>::AddMultipleToSparseVectorInternal(
       ++ia;
       ++ib;
     } else if (index_a < index_b) {
-      c.MutableIndex(ic) = index_a;
-      c.MutableCoefficient(ic) = multiplier * a.GetCoefficient(ia);
+      const Fractional new_value = multiplier * a.GetCoefficient(ia);
+      if (std::abs(new_value) > drop_tolerance) {
+        c.MutableIndex(ic) = index_a;
+        c.MutableCoefficient(ic) = new_value;
+        ++ic;
+      }
       ++ia;
-      ++ic;
     } else {  // index_b < index_a
       c.MutableIndex(ic) = b.GetIndex(ib);
       c.MutableCoefficient(ic) = b.GetCoefficient(ib);
@@ -911,10 +916,13 @@ void SparseVector<IndexType, IteratorType>::AddMultipleToSparseVectorInternal(
     }
   }
   while (ia < size_a) {
-    c.MutableIndex(ic) = a.GetIndex(ia);
-    c.MutableCoefficient(ic) = multiplier * a.GetCoefficient(ia);
+    const Fractional new_value = multiplier * a.GetCoefficient(ia);
+    if (std::abs(new_value) > drop_tolerance) {
+      c.MutableIndex(ic) = a.GetIndex(ia);
+      c.MutableCoefficient(ic) = new_value;
+      ++ic;
+    }
     ++ia;
-    ++ic;
   }
   while (ib < size_b) {
     c.MutableIndex(ic) = b.GetIndex(ib);
@@ -925,6 +933,7 @@ void SparseVector<IndexType, IteratorType>::AddMultipleToSparseVectorInternal(
   c.ResizeDown(ic);
   c.may_contain_duplicates_ = false;
   c.Swap(accumulator_vector);
+  DCHECK(accumulator_vector->IsCleanedUp());
 }
 
 template <typename IndexType, typename IteratorType>
@@ -1022,4 +1031,4 @@ std::string SparseVector<IndexType, IteratorType>::DebugString() const {
 }  // namespace glop
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_LP_DATA_SPARSE_VECTOR_H_
+#endif  // ORTOOLS_LP_DATA_SPARSE_VECTOR_H_

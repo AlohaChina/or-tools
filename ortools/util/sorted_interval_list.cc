@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,16 +15,20 @@
 
 #include <algorithm>
 #include <cmath>
-#include <map>
+#include <cstdint>
+#include <cstdlib>
+#include <limits>
+#include <ostream>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/container/inlined_vector.h"
+#include "absl/numeric/int128.h"
 #include "absl/strings/str_format.h"
 #include "absl/types/span.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
+#include "ortools/base/types.h"
 #include "ortools/util/saturated_arithmetic.h"
 
 namespace operations_research {
@@ -60,18 +64,33 @@ std::string IntervalsAsString(const Intervals& intervals) {
   return result;
 }
 
+void SortAndRemoveInvalidIntervals(
+    absl::InlinedVector<ClosedInterval, 1>* intervals) {
+  intervals->erase(std::remove_if(intervals->begin(), intervals->end(),
+                                  [](const ClosedInterval& interval) {
+                                    return interval.start > interval.end;
+                                  }),
+                   intervals->end());
+  std::sort(intervals->begin(), intervals->end());
+}
+
 // Transforms a sorted list of intervals in a sorted DISJOINT list for which
 // IntervalsAreSortedAndNonAdjacent() would return true.
 void UnionOfSortedIntervals(absl::InlinedVector<ClosedInterval, 1>* intervals) {
   DCHECK(std::is_sorted(intervals->begin(), intervals->end()));
-  int new_size = 0;
-  for (const ClosedInterval& i : *intervals) {
-    if (new_size > 0 && i.start <= CapAdd((*intervals)[new_size - 1].end, 1)) {
-      (*intervals)[new_size - 1].end =
-          std::max(i.end, (*intervals)[new_size - 1].end);
-    } else {
-      (*intervals)[new_size++] = i;
+  const int size = intervals->size();
+  if (size == 0) return;
+
+  int new_size = 1;
+  for (int i = 1; i < size; ++i) {
+    const ClosedInterval& current = (*intervals)[i];
+    const int64_t end = (*intervals)[new_size - 1].end;
+    if (end == std::numeric_limits<int64_t>::max() ||
+        current.start <= end + 1) {
+      (*intervals)[new_size - 1].end = std::max(current.end, end);
+      continue;
     }
+    (*intervals)[new_size++] = current;
   }
   intervals->resize(new_size);
 
@@ -135,6 +154,12 @@ Domain::Domain(int64_t left, int64_t right)
 
 Domain Domain::AllValues() { return Domain(kint64min, kint64max); }
 
+Domain Domain::LowerOrEqual(int64_t value) { return Domain(kint64min, value); }
+
+Domain Domain::GreaterOrEqual(int64_t value) {
+  return Domain(value, kint64max);
+}
+
 Domain Domain::FromValues(std::vector<int64_t> values) {
   std::sort(values.begin(), values.end());
   Domain result;
@@ -144,6 +169,9 @@ Domain Domain::FromValues(std::vector<int64_t> values) {
     } else {
       result.intervals_.back().end = v;
     }
+    if (result.intervals_.back().end == std::numeric_limits<int64_t>::max()) {
+      break;
+    }
   }
   return result;
 }
@@ -151,7 +179,7 @@ Domain Domain::FromValues(std::vector<int64_t> values) {
 Domain Domain::FromIntervals(absl::Span<const ClosedInterval> intervals) {
   Domain result;
   result.intervals_.assign(intervals.begin(), intervals.end());
-  std::sort(result.intervals_.begin(), result.intervals_.end());
+  SortAndRemoveInvalidIntervals(&result.intervals_);
   UnionOfSortedIntervals(&result.intervals_);
   return result;
 }
@@ -164,7 +192,7 @@ Domain Domain::FromFlatSpanOfIntervals(
   for (int i = 0; i < flat_intervals.size(); i += 2) {
     result.intervals_.push_back({flat_intervals[i], flat_intervals[i + 1]});
   }
-  std::sort(result.intervals_.begin(), result.intervals_.end());
+  SortAndRemoveInvalidIntervals(&result.intervals_);
   UnionOfSortedIntervals(&result.intervals_);
   return result;
 }
@@ -184,7 +212,7 @@ Domain Domain::FromVectorIntervals(
       result.intervals_.push_back({interval[0], interval[1]});
     }
   }
-  std::sort(result.intervals_.begin(), result.intervals_.end());
+  SortAndRemoveInvalidIntervals(&result.intervals_);
   UnionOfSortedIntervals(&result.intervals_);
   return result;
 }
@@ -228,6 +256,61 @@ int64_t Domain::SmallestValue() const {
   return result;
 }
 
+Domain Domain::PartAroundZero() const {
+  for (const ClosedInterval interval : intervals_) {
+    if (interval.start <= 0 && interval.end >= 0) {
+      return Domain(interval.start, interval.end);
+    }
+  }
+  return Domain();
+}
+
+// TODO(user): Use std::upper_bound() like in ValueAtOrBefore() ?
+int64_t Domain::ClosestValue(int64_t wanted) const {
+  DCHECK(!IsEmpty());
+  if (wanted <= intervals_[0].start) {
+    return intervals_[0].start;
+  }
+  int64_t best_point;
+  int64_t best_distance;
+  for (const ClosedInterval interval : intervals_) {
+    if (interval.start <= wanted && wanted <= interval.end) {
+      return wanted;
+    } else if (interval.start >= wanted) {
+      return CapSub(interval.start, wanted) <= best_distance ? interval.start
+                                                             : best_point;
+    } else {
+      best_point = interval.end;
+      best_distance = CapSub(wanted, interval.end);
+    }
+  }
+  return best_point;
+}
+
+int64_t Domain::ValueAtOrBefore(int64_t input) const {
+  // Because we only compare by start and there is no duplicate starts, this
+  // should be the next interval after the one that has a chance to contains
+  // value.
+  auto it = std::upper_bound(intervals_.begin(), intervals_.end(),
+                             ClosedInterval(input, input));
+  if (it == intervals_.begin()) return input;
+  --it;
+  return input <= it->end ? input : it->end;
+}
+
+int64_t Domain::ValueAtOrAfter(int64_t input) const {
+  // Because we only compare by start and there is no duplicate starts, this
+  // should be the next interval after the one that has a chance to contains
+  // value.
+  auto it = std::upper_bound(intervals_.begin(), intervals_.end(),
+                             ClosedInterval(input, input));
+  if (it == intervals_.end()) return input;
+  const int64_t candidate = it->start;
+  if (it == intervals_.begin()) return candidate;
+  --it;
+  return input <= it->end ? input : candidate;
+}
+
 int64_t Domain::FixedValue() const {
   DCHECK(IsFixed());
   return intervals_.front().start;
@@ -244,6 +327,21 @@ bool Domain::Contains(int64_t value) const {
   return value <= it->end;
 }
 
+// TODO(user): Deal with overflow.
+int64_t Domain::Distance(int64_t value) const {
+  int64_t min_distance = std::numeric_limits<int64_t>::max();
+  for (const ClosedInterval interval : intervals_) {
+    if (value >= interval.start && value <= interval.end) return 0;
+    if (interval.start > value) {
+      min_distance = std::min(min_distance, interval.start - value);
+      break;
+    } else {
+      min_distance = value - interval.end;
+    }
+  }
+  return min_distance;
+}
+
 bool Domain::IsIncludedIn(const Domain& domain) const {
   int i = 0;
   const auto& others = domain.intervals_;
@@ -255,6 +353,29 @@ bool Domain::IsIncludedIn(const Domain& domain) const {
     if (interval.start < others[i].start) return false;
   }
   return true;
+}
+
+bool Domain::OverlapsWith(const Domain& domain) const {
+  const auto& a = intervals_;
+  const auto& b = domain.intervals_;
+  for (int i = 0, j = 0; i < a.size() && j < b.size();) {
+    if (a[i].start <= b[j].start) {
+      if (a[i].end < b[j].start) {
+        // Empty intersection. We advance past the first interval.
+        ++i;
+      } else {  // a[i].end >= b[j].start
+        return true;
+      }
+    } else {  // a[i].start > b[i].start.
+      // We do the exact same thing as above, but swapping a and b.
+      if (b[j].end < a[i].start) {
+        ++j;
+      } else {  // b[j].end >= a[i].start
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 Domain Domain::Complement() const {
@@ -352,8 +473,16 @@ Domain Domain::AdditionWith(const Domain& domain) const {
   result.intervals_.reserve(a.size() * b.size());
   for (const ClosedInterval& i : a) {
     for (const ClosedInterval& j : b) {
-      result.intervals_.push_back(
-          {CapAdd(i.start, j.start), CapAdd(i.end, j.end)});
+      if (i.start > 0 && j.start > 0) {
+        if (AddOverflows(i.start, j.start)) continue;  // empty.
+        result.intervals_.push_back({i.start + j.start, CapAdd(i.end, j.end)});
+      } else if (i.end < 0 && j.end < 0) {
+        if (AddOverflows(i.end, j.end)) continue;  // empty.
+        result.intervals_.push_back({CapAdd(i.start, j.start), i.end + j.end});
+      } else {
+        result.intervals_.push_back(
+            {CapAdd(i.start, j.start), CapAdd(i.end, j.end)});
+      }
     }
   }
 
@@ -517,6 +646,108 @@ Domain Domain::PositiveDivisionBySuperset(const Domain& divisor) const {
   CHECK_GT(divisor.Min(), 0);
   return Domain(std::min(Min() / divisor.Max(), Min() / divisor.Min()),
                 std::max(Max() / divisor.Min(), Max() / divisor.Max()));
+}
+
+Domain Domain::SquareSuperset() const {
+  if (IsEmpty()) return Domain();
+  const Domain abs_domain =
+      IntersectionWith({0, std::numeric_limits<int64_t>::max()})
+          .UnionWith(Negation().IntersectionWith(
+              {0, std::numeric_limits<int64_t>::max()}));
+  if (abs_domain.Size() >= kDomainComplexityLimit) {
+    Domain result;
+    result.intervals_.reserve(abs_domain.NumIntervals());
+    for (const auto& interval : abs_domain) {
+      result.intervals_.push_back(
+          ClosedInterval(CapProd(interval.start, interval.start),
+                         CapProd(interval.end, interval.end)));
+    }
+    UnionOfSortedIntervals(&result.intervals_);
+    return result;
+  } else {
+    std::vector<int64_t> values;
+    values.reserve(abs_domain.Size());
+    for (const int64_t value : abs_domain.Values()) {
+      values.push_back(CapProd(value, value));
+    }
+    return Domain::FromValues(std::move(values));
+  }
+}
+
+namespace {
+ClosedInterval EvaluateQuadraticProdInterval(int64_t a, int64_t b, int64_t c,
+                                             int64_t d, int64_t variable_min,
+                                             int64_t variable_max) {
+  // We have (a*x + b)(c*x + d) = a*c*x*x + (a*d + b*c)*x + b*d
+  // The minimum or maximum is at x = -(a*d + b*c)/(2*a*c)
+  //
+  // The minimum and maximum of the expression happens when x is one of the
+  // following:
+  // - variable_min;
+  // - variable_max;
+  // - the closest point to the parabola extreme, rounded down;
+  // - the closest point to the parabola extreme, rounded up.
+
+  const absl::int128 nominator =
+      -absl::int128{a} * absl::int128{d} - absl::int128{b} * absl::int128{c};
+  const absl::int128 denominator = absl::int128{a} * absl::int128{c};
+  const absl::int128 evaluated_minimum_point = (nominator / denominator) / 2;
+
+  const auto& evaluate = [&a, &b, &c, &d](const int64_t x) {
+    return CapProd(CapAdd(CapProd(a, x), b), CapAdd(CapProd(c, x), d));
+  };
+
+  const int64_t at_min_x = evaluate(variable_min);
+  const int64_t at_max_x = evaluate(variable_max);
+  int64_t min_var = std::min(at_min_x, at_max_x);
+  int64_t max_var = std::max(at_min_x, at_max_x);
+
+  if (evaluated_minimum_point > variable_min &&
+      evaluated_minimum_point < variable_max) {
+    const int64_t point_at_minimum_64 =
+        static_cast<int64_t>(evaluated_minimum_point);
+    const int rounder = ((nominator > 0) == (denominator > 0) ? 1 : -1);
+    const int64_t point1 = evaluate(point_at_minimum_64);
+    const int64_t point2 = evaluate(point_at_minimum_64 + rounder);
+    min_var = std::min(min_var, std::min(point1, point2));
+    max_var = std::max(max_var, std::max(point1, point2));
+  }
+
+  return ClosedInterval(min_var, max_var);
+}
+}  // namespace
+
+Domain Domain::QuadraticSuperset(int64_t a, int64_t b, int64_t c,
+                                 int64_t d) const {
+  if (IsEmpty()) return Domain();
+
+  if (Size() < kDomainComplexityLimit) {
+    std::vector<int64_t> values;
+    values.reserve(Size());
+    for (const int64_t value : Values()) {
+      values.push_back(  //
+          CapProd(       //
+              CapAdd(CapProd(a, value), b), CapAdd(CapProd(c, value), d)));
+    }
+    return Domain::FromValues(std::move(values));
+  }
+
+  if (a == 0) {
+    return MultiplicationBy(CapProd(c, b)).AdditionWith(Domain(CapProd(d, b)));
+  }
+  if (c == 0) {
+    return MultiplicationBy(CapProd(a, d)).AdditionWith(Domain(CapProd(d, b)));
+  }
+
+  Domain result;
+  result.intervals_.reserve(NumIntervals());
+  for (const auto& interval : intervals_) {
+    result.intervals_.push_back(EvaluateQuadraticProdInterval(
+        a, b, c, d, interval.start, interval.end));
+  }
+  std::sort(result.intervals_.begin(), result.intervals_.end());
+  UnionOfSortedIntervals(&result.intervals_);
+  return result;
 }
 
 // It is a bit difficult to see, but this code is doing the same thing as
@@ -716,48 +947,6 @@ SortedDisjointIntervalList::Iterator SortedDisjointIntervalList::InsertInterval(
   const_cast<ClosedInterval*>(&(*it))->start = new_start;
   const_cast<ClosedInterval*>(&(*it))->end = new_end;
   return it;
-}
-
-SortedDisjointIntervalList::Iterator SortedDisjointIntervalList::GrowRightByOne(
-    int64_t value, int64_t* newly_covered) {
-  auto it = intervals_.upper_bound({value, kint64max});
-  auto it_prev = it;
-
-  // No interval containing or adjacent to "value" on the left (i.e. below).
-  if (it != begin()) {
-    --it_prev;
-  }
-  if (it == begin() || ((value != kint64min) && it_prev->end < value - 1)) {
-    *newly_covered = value;
-    if (it == end() || it->start != value + 1) {
-      // No interval adjacent to "value" on the right: insert a singleton.
-      return intervals_.insert(it, {value, value});
-    } else {
-      // There is an interval adjacent to "value" on the right. Extend it by
-      // one. Note that we already know that there won't be a merge with another
-      // interval on the left, since there were no interval adjacent to "value"
-      // on the left.
-      DCHECK_EQ(it->start, value + 1);
-      const_cast<ClosedInterval*>(&(*it))->start = value;
-      return it;
-    }
-  }
-
-  // At this point, "it_prev" points to an interval containing or adjacent to
-  // "value" on the left: grow it by one, and if it now touches the next
-  // interval, merge with it.
-  CHECK_NE(kint64max, it_prev->end) << "Cannot grow right by one: the interval "
-                                       "that would grow already ends at "
-                                       "kint64max";
-  *newly_covered = it_prev->end + 1;
-  if (it != end() && it_prev->end + 2 == it->start) {
-    // We need to merge it_prev with 'it'.
-    const_cast<ClosedInterval*>(&(*it_prev))->end = it->end;
-    intervals_.erase(it);
-  } else {
-    const_cast<ClosedInterval*>(&(*it_prev))->end = it_prev->end + 1;
-  }
-  return it_prev;
 }
 
 template <class T>

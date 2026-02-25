@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,13 +13,27 @@
 
 #include "ortools/bop/bop_base.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <string>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "ortools/sat/boolean_problem.h"
+#include "ortools/base/strong_vector.h"
+#include "ortools/bop/bop_parameters.pb.h"
+#include "ortools/bop/bop_solution.h"
+#include "ortools/bop/bop_types.h"
+#include "ortools/lp_data/lp_types.h"
+#include "ortools/sat/boolean_problem.pb.h"
+#include "ortools/sat/clause.h"
+#include "ortools/sat/sat_base.h"
+#include "ortools/util/stats.h"
+#include "ortools/util/strong_integers.h"
 
 namespace operations_research {
 namespace bop {
@@ -27,7 +41,7 @@ namespace bop {
 using ::operations_research::sat::LinearBooleanProblem;
 using ::operations_research::sat::LinearObjective;
 
-BopOptimizerBase::BopOptimizerBase(const std::string& name)
+BopOptimizerBase::BopOptimizerBase(absl::string_view name)
     : name_(name), stats_(name) {
   SCOPED_TIME_STAT(&stats_);
 }
@@ -254,6 +268,5 @@ const std::vector<sat::BinaryClause>& ProblemState::NewlyAddedBinaryClauses()
 void ProblemState::SynchronizationDone() {
   binary_clause_manager_.ClearNewlyAdded();
 }
-
 }  // namespace bop
 }  // namespace operations_research

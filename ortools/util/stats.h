@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -65,19 +65,17 @@
 // macro IF_STATS_ENABLED() that does nothing if OR_STATS is not defined or just
 // translates to its argument otherwise.
 
-#ifndef OR_TOOLS_UTIL_STATS_H_
-#define OR_TOOLS_UTIL_STATS_H_
+#ifndef ORTOOLS_UTIL_STATS_H_
+#define ORTOOLS_UTIL_STATS_H_
 
-#include <map>
+#include <cstdint>
+#include <memory>
 #include <string>
+#include <vector>
 
-#ifdef HAS_PERF_SUBSYSTEM
-#include "absl/strings/str_replace.h"
-#include "exegesis/exegesis/itineraries/perf_subsystem.h"
-#include "ortools/util/time_limit.h"
-#endif  // HAS_PERF_SUBSYSTEM
-
-#include "ortools/base/macros.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/strings/string_view.h"
+#include "absl/time/time.h"
 #include "ortools/base/timer.h"
 
 namespace operations_research {
@@ -92,10 +90,10 @@ class TimeDistribution;
 // Base class for a statistic that can be pretty-printed.
 class Stat {
  public:
-  explicit Stat(const std::string& name) : name_(name) {}
+  explicit Stat(absl::string_view name) : name_(name) {}
 
   // Also add this stat to the given group.
-  Stat(const std::string& name, StatsGroup* group);
+  Stat(absl::string_view name, StatsGroup* group);
   virtual ~Stat() {}
 
   // Only used for display purposes.
@@ -135,9 +133,13 @@ class StatsGroup {
     SORT_BY_NAME = 1,
   };
 
-  explicit StatsGroup(const std::string& name)
+  explicit StatsGroup(absl::string_view name)
       : name_(name), stats_(), time_distributions_() {}
-  ~StatsGroup();
+
+  // This type is neither copyable nor movable.
+  StatsGroup(const StatsGroup&) = delete;
+  StatsGroup& operator=(const StatsGroup&) = delete;
+  ~StatsGroup() = default;
 
   // Registers a Stat, which will appear in the string returned by StatString().
   // The Stat object must live as long as this StatsGroup.
@@ -153,9 +155,9 @@ class StatsGroup {
   void SetPrintOrder(PrintOrder print_order) { print_order_ = print_order; }
 
   // Returns and if needed creates and registers a TimeDistribution with the
-  // given name. Note that this involve a map lookup and his thus slower than
-  // directly accessing a TimeDistribution variable.
-  TimeDistribution* LookupOrCreateTimeDistribution(std::string name);
+  // given name. Note that this involve a hash map lookup and is thus slower
+  // than directly accessing a TimeDistribution variable.
+  TimeDistribution* LookupOrCreateTimeDistribution(absl::string_view name);
 
   // Calls Reset() on all the statistics registered with this group.
   void Reset();
@@ -164,9 +166,8 @@ class StatsGroup {
   std::string name_;
   PrintOrder print_order_ = SORT_BY_PRIORITY_THEN_VALUE;
   std::vector<Stat*> stats_;
-  std::map<std::string, TimeDistribution*> time_distributions_;
-
-  DISALLOW_COPY_AND_ASSIGN(StatsGroup);
+  absl::flat_hash_map<std::string, std::unique_ptr<TimeDistribution>>
+      time_distributions_;
 };
 
 // Base class to track and compute statistics about the distribution of a
@@ -174,9 +175,9 @@ class StatsGroup {
 // the values are added to the sequence and in the way the stats are printed.
 class DistributionStat : public Stat {
  public:
-  explicit DistributionStat(const std::string& name);
+  explicit DistributionStat(absl::string_view name);
   DistributionStat() : DistributionStat("") {}
-  DistributionStat(const std::string& name, StatsGroup* group);
+  DistributionStat(absl::string_view name, StatsGroup* group);
   ~DistributionStat() override {}
   void Reset() override;
   bool WorthPrinting() const override { return num_ != 0; }
@@ -220,10 +221,10 @@ class DistributionStat : public Stat {
 // if the sum of times reaches 52 days for a 2GHz processor.
 class TimeDistribution : public DistributionStat {
  public:
-  explicit TimeDistribution(const std::string& name)
+  explicit TimeDistribution(absl::string_view name)
       : DistributionStat(name), timer_() {}
   TimeDistribution() : TimeDistribution("") {}
-  TimeDistribution(const std::string& name, StatsGroup* group)
+  TimeDistribution(absl::string_view name, StatsGroup* group)
       : DistributionStat(name, group), timer_() {}
   std::string ValueAsString() const override;
 
@@ -237,6 +238,9 @@ class TimeDistribution : public DistributionStat {
 
   // Adds a time in seconds to this distribution.
   void AddTimeInSec(double seconds);
+  void AddTime(absl::Duration duration) {
+    AddTimeInSec(absl::ToDoubleSeconds(duration));
+  }
 
   // Adds a time in CPU cycles to this distribution.
   void AddTimeInCycles(double cycles);
@@ -262,10 +266,9 @@ class TimeDistribution : public DistributionStat {
 // Statistic on the distribution of a sequence of ratios, displayed as %.
 class RatioDistribution : public DistributionStat {
  public:
-  explicit RatioDistribution(const std::string& name)
-      : DistributionStat(name) {}
+  explicit RatioDistribution(absl::string_view name) : DistributionStat(name) {}
   RatioDistribution() : RatioDistribution("") {}
-  RatioDistribution(const std::string& name, StatsGroup* group)
+  RatioDistribution(absl::string_view name, StatsGroup* group)
       : DistributionStat(name, group) {}
   std::string ValueAsString() const override;
   void Add(double value);
@@ -274,10 +277,10 @@ class RatioDistribution : public DistributionStat {
 // Statistic on the distribution of a sequence of doubles.
 class DoubleDistribution : public DistributionStat {
  public:
-  explicit DoubleDistribution(const std::string& name)
+  explicit DoubleDistribution(absl::string_view name)
       : DistributionStat(name) {}
   DoubleDistribution() : DoubleDistribution("") {}
-  DoubleDistribution(const std::string& name, StatsGroup* group)
+  DoubleDistribution(absl::string_view name, StatsGroup* group)
       : DistributionStat(name, group) {}
   std::string ValueAsString() const override;
   void Add(double value);
@@ -286,10 +289,10 @@ class DoubleDistribution : public DistributionStat {
 // Statistic on the distribution of a sequence of integers.
 class IntegerDistribution : public DistributionStat {
  public:
-  explicit IntegerDistribution(const std::string& name)
+  explicit IntegerDistribution(absl::string_view name)
       : DistributionStat(name) {}
   IntegerDistribution() : IntegerDistribution("") {}
-  IntegerDistribution(const std::string& name, StatsGroup* group)
+  IntegerDistribution(absl::string_view name, StatsGroup* group)
       : DistributionStat(name, group) {}
   std::string ValueAsString() const override;
   void Add(int64_t value);
@@ -316,6 +319,12 @@ class EnabledScopedTimeDistributionUpdater {
       : stat_(stat), also_update_(nullptr) {
     stat->StartTimer();
   }
+
+  // This type is neither copyable nor movable.
+  EnabledScopedTimeDistributionUpdater(
+      const EnabledScopedTimeDistributionUpdater&) = delete;
+  EnabledScopedTimeDistributionUpdater& operator=(
+      const EnabledScopedTimeDistributionUpdater&) = delete;
   ~EnabledScopedTimeDistributionUpdater() {
     const double cycles = stat_->StopTimerAndAddElapsedTime();
     if (also_update_ != nullptr) {
@@ -337,68 +346,28 @@ class EnabledScopedTimeDistributionUpdater {
  private:
   TimeDistribution* stat_;
   TimeDistribution* also_update_;
-  DISALLOW_COPY_AND_ASSIGN(EnabledScopedTimeDistributionUpdater);
 };
 
 class DisabledScopedTimeDistributionUpdater {
  public:
-  explicit DisabledScopedTimeDistributionUpdater(TimeDistribution* stat) {}
-  void AlsoUpdate(TimeDistribution* also_update) {}
+  explicit DisabledScopedTimeDistributionUpdater(TimeDistribution*) {}
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(DisabledScopedTimeDistributionUpdater);
+  // This type is neither copyable nor movable.
+  DisabledScopedTimeDistributionUpdater(
+      const DisabledScopedTimeDistributionUpdater&) = delete;
+  DisabledScopedTimeDistributionUpdater& operator=(
+      const DisabledScopedTimeDistributionUpdater&) = delete;
+  void AlsoUpdate(TimeDistribution*) {}
 };
 
-#ifdef HAS_PERF_SUBSYSTEM
-// Helper classes to count instructions during execution of a block of code and
-// add print the results to logs.
-//
-// Note: To enable instruction counting on machines running Debian, execute the
-// following commands to modify the permissions.
-//   sudo echo "1" > /proc/sys/kernel/perf_event_paranoid
-//   sudo echo "0" > /proc/sys/kernel/kptr_restrict
-class EnabledScopedInstructionCounter {
+class DisabledScopedTimeStats {
  public:
-  explicit EnabledScopedInstructionCounter(const std::string& name,
-                                           TimeLimit* time_limit);
-  EnabledScopedInstructionCounter(const EnabledScopedInstructionCounter&) =
-      delete;
-  EnabledScopedInstructionCounter& operator=(
-      const EnabledScopedInstructionCounter&) = delete;
-  ~EnabledScopedInstructionCounter();
-
-  // Used only for testing.
-  double ReadInstructionCount() { return ending_count_ - starting_count_; }
-
- private:
-  TimeLimit* time_limit_;
-  std::string name_;
-  double starting_count_;
-  double ending_count_;
+  explicit DisabledScopedTimeStats(StatsGroup*, const char*) {}
+  DisabledScopedTimeStats(const DisabledScopedTimeStats&) = delete;
+  DisabledScopedTimeStats& operator=(const DisabledScopedTimeStats&) = delete;
+  DisabledScopedTimeStats(DisabledScopedTimeStats&&) = delete;
+  DisabledScopedTimeStats& operator=(DisabledScopedTimeStats&&) = delete;
 };
-#endif  // HAS_PERF_SUBSYSTEM
-
-class DisabledScopedInstructionCounter {
- public:
-  explicit DisabledScopedInstructionCounter(const std::string& name) {}
-  DisabledScopedInstructionCounter(const DisabledScopedInstructionCounter&) =
-      delete;
-  DisabledScopedInstructionCounter& operator=(
-      const DisabledScopedInstructionCounter&) = delete;
-};
-
-#ifdef OR_STATS
-
-using ScopedTimeDistributionUpdater = EnabledScopedTimeDistributionUpdater;
-#ifdef HAS_PERF_SUBSYSTEM
-using ScopedInstructionCounter = EnabledScopedInstructionCounter;
-#else   // HAS_PERF_SUBSYSTEM
-using ScopedInstructionCounter = DisabledScopedInstructionCounter;
-#endif  // HAS_PERF_SUBSYSTEM
-
-// Simple macro to be used by a client that want to execute costly operations
-// only if OR_STATS is defined.
-#define IF_STATS_ENABLED(instructions) instructions
 
 // Measures the time from this macro line to the end of the scope and adds it
 // to the distribution (from the given StatsGroup) with the same name as the
@@ -407,39 +376,51 @@ using ScopedInstructionCounter = DisabledScopedInstructionCounter;
 // Note(user): This adds more extra overhead around the measured code compared
 // to defining your own TimeDistribution stat in your StatsGroup. About 80ns
 // per measurement compared to about 20ns (as of 2012-06, on my workstation).
-#define SCOPED_TIME_STAT(stats)                                        \
-  operations_research::ScopedTimeDistributionUpdater scoped_time_stat( \
-      (stats)->LookupOrCreateTimeDistribution(__FUNCTION__))
+class EnabledScopedTimeStats {
+ public:
+  explicit EnabledScopedTimeStats(StatsGroup* stats,
+                                  absl::string_view function_name)
+      : scoped_time_stat_(
+            stats->LookupOrCreateTimeDistribution(function_name)) {}
+  EnabledScopedTimeStats(const EnabledScopedTimeStats&) = delete;
+  EnabledScopedTimeStats& operator=(const EnabledScopedTimeStats&) = delete;
+  EnabledScopedTimeStats(EnabledScopedTimeStats&&) = delete;
+  EnabledScopedTimeStats& operator=(EnabledScopedTimeStats&&) = delete;
 
-#ifdef HAS_PERF_SUBSYSTEM
+ private:
+  operations_research::EnabledScopedTimeDistributionUpdater scoped_time_stat_;
+};
 
-inline std::string RemoveOperationsResearchAndGlop(
-    const std::string& pretty_function) {
-  return strings::GlobalReplaceSubstrings(
-      pretty_function, {{"operations_research::", ""}, {"glop::", ""}});
-}
+#ifdef OR_STATS
 
-#define SCOPED_INSTRUCTION_COUNT(time_limit)                              \
-  operations_research::ScopedInstructionCounter scoped_instruction_count( \
-      RemoveOperationsResearchAndGlop(__PRETTY_FUNCTION__), time_limit)
+using ScopedTimeDistributionUpdater = EnabledScopedTimeDistributionUpdater;
+using ScopedTimeStats = EnabledScopedTimeStats;
 
-#else  // !HAS_PERF_SUBSYSTEM
-#define SCOPED_INSTRUCTION_COUNT(time_limit)
-#endif  // HAS_PERF_SUBSYSTEM
+// Simple macro to be used by a client that want to execute costly operations
+// only if OR_STATS is defined.
+#define IF_STATS_ENABLED(instructions) instructions
 
 #else  // !OR_STATS
 // If OR_STATS is not defined, we remove some instructions that may be time
 // consuming.
 
 using ScopedTimeDistributionUpdater = DisabledScopedTimeDistributionUpdater;
-using ScopedInstructionCounter = DisabledScopedInstructionCounter;
+using ScopedTimeStats = DisabledScopedTimeStats;
 
-#define IF_STATS_ENABLED(instructions)
-#define SCOPED_TIME_STAT(stats)
-#define SCOPED_INSTRUCTION_COUNT(time_limit)
+// Defining it that way makes sure that the compiler still sees the code and
+// checks that the syntax & types are valid.
+#define IF_STATS_ENABLED(instructions) \
+  if constexpr (false) {               \
+    instructions;                      \
+  }
 
 #endif  // OR_STATS
 
+#define SCOPED_TIME_STAT(stats) \
+  operations_research::ScopedTimeStats scoped_time_stat(stats, __FUNCTION__);
+
+#define SCOPED_INSTRUCTION_COUNT(time_limit)
+
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_UTIL_STATS_H_
+#endif  // ORTOOLS_UTIL_STATS_H_

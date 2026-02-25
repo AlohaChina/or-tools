@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,21 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_CIRCUIT_H_
-#define OR_TOOLS_SAT_CIRCUIT_H_
+#ifndef ORTOOLS_SAT_CIRCUIT_H_
+#define ORTOOLS_SAT_CIRCUIT_H_
 
 #include <functional>
-#include <memory>
+#include <utility>
 #include <vector>
 
+#include "absl/container/btree_set.h"
 #include "absl/container/flat_hash_map.h"
-#include "ortools/base/int_type.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
+#include "absl/types/span.h"
+#include "ortools/graph/strongly_connected_components.h"
+#include "ortools/sat/enforcement.h"
+#include "ortools/sat/enforcement_helper.h"
 #include "ortools/sat/integer.h"
 #include "ortools/sat/model.h"
 #include "ortools/sat/sat_base.h"
+#include "ortools/sat/util.h"
 #include "ortools/util/rev.h"
 
 namespace operations_research {
@@ -35,7 +37,7 @@ namespace sat {
 //
 // Nodes that are not in the unique allowed sub-circuit must point to themseves.
 // A nodes that has no self-arc must thus be inside the sub-circuit. If there is
-// no self-arc at all, then this constaint forces the circuit to go through all
+// no self-arc at all, then this constraint forces the circuit to go through all
 // the nodes. Multi-arcs are NOT supported.
 //
 // Important: for correctness, this constraint requires that "exactly one"
@@ -51,17 +53,23 @@ class CircuitPropagator : PropagatorInterface, ReversibleInterface {
 
   // The constraints take a sparse representation of a graph on [0, n). Each arc
   // being present when the given literal is true.
-  CircuitPropagator(int num_nodes, const std::vector<int>& tails,
-                    const std::vector<int>& heads,
-                    const std::vector<Literal>& literals, Options options,
+  CircuitPropagator(int num_nodes, absl::Span<const int> tails,
+                    absl::Span<const int> heads,
+                    absl::Span<const Literal> enforcement_literals,
+                    absl::Span<const Literal> literals, Options options,
                     Model* model);
+
+  // This type is neither copyable nor movable.
+  CircuitPropagator(const CircuitPropagator&) = delete;
+  CircuitPropagator& operator=(const CircuitPropagator&) = delete;
 
   void SetLevel(int level) final;
   bool Propagate() final;
   bool IncrementalPropagate(const std::vector<int>& watch_indices) final;
-  void RegisterWith(GenericLiteralWatcher* watcher);
 
  private:
+  int RegisterWith(GenericLiteralWatcher* watcher);
+
   // Updates the structures when the given arc is added to the paths.
   void AddArc(int tail, int head, LiteralIndex literal_index);
 
@@ -70,10 +78,17 @@ class CircuitPropagator : PropagatorInterface, ReversibleInterface {
   // start (not like a rho shape).
   void FillReasonForPath(int start_node, std::vector<Literal>* reason) const;
 
+  // Reports a conflict if the constraint is enforced, or propagates the unique
+  // unassigned enforcement literal otherwise.
+  bool ReportConflictOrPropagateEnforcement(std::vector<Literal>* reason);
+
   const int num_nodes_;
   const Options options_;
-  Trail* trail_;
+  Trail& trail_;
+  EnforcementHelper& enforcement_helper_;
+  EnforcementId enforcement_id_;
   const VariablesAssignment& assignment_;
+  bool enabled_;
 
   // We use this to query in O(1) for an arc existence. The self-arcs are
   // accessed often, so we use a more efficient std::vector<> for them. Note
@@ -81,7 +96,7 @@ class CircuitPropagator : PropagatorInterface, ReversibleInterface {
   //
   // TODO(user): for large dense graph, using a matrix is faster and uses less
   // memory. If the need arise we can have the two implementations.
-  std::vector<Literal> self_arcs_;
+  std::vector<LiteralIndex> self_arcs_;
   absl::flat_hash_map<std::pair<int, int>, Literal> graph_;
 
   // Data used to interpret the watch indices passed to IncrementalPropagate().
@@ -90,10 +105,7 @@ class CircuitPropagator : PropagatorInterface, ReversibleInterface {
     int head;
   };
   std::vector<Literal> watch_index_to_literal_;
-  std::vector<std::vector<Arc>> watch_index_to_arcs_;
-
-  // Index in trail_ up to which we propagated all the assigned Literals.
-  int propagation_trail_index_ = 0;
+  CompactVectorVector<int, Arc> watch_index_to_arcs_;
 
   // Current partial chains of arc that are present.
   std::vector<int> next_;  // -1 if not assigned yet.
@@ -113,8 +125,48 @@ class CircuitPropagator : PropagatorInterface, ReversibleInterface {
   // Temporary vectors.
   std::vector<bool> processed_;
   std::vector<bool> in_current_path_;
+  std::vector<Literal> temp_reason_;
+};
 
-  DISALLOW_COPY_AND_ASSIGN(CircuitPropagator);
+// Enforce the fact that there is no cycle in the given directed graph.
+class NoCyclePropagator : PropagatorInterface, ReversibleInterface {
+ public:
+  NoCyclePropagator(int num_nodes, absl::Span<const int> tails,
+                    absl::Span<const int> heads,
+                    absl::Span<const Literal> literals, Model* model);
+
+  void SetLevel(int level) final;
+  bool Propagate() final;
+  bool IncrementalPropagate(const std::vector<int>& watch_indices) final;
+
+ private:
+  void RegisterWith(GenericLiteralWatcher* watcher);
+
+  const int num_nodes_;
+  Trail* trail_;
+  const VariablesAssignment& assignment_;
+
+  // The set of all watched literals and to what arc they correspond.
+  std::vector<Literal> watch_index_to_literal_;
+  std::vector<std::vector<std::pair<int, int>>> watch_index_to_arcs_;
+
+  // This will only contains the subgraph with all the arc at true.
+  // We maintain it incrementally and update this on SetLevel()/Propagate().
+  std::vector<std::vector<int>> graph_;
+  std::vector<std::vector<Literal>> graph_literals_;
+
+  // For now we redo a strongly connected component on the graph formed of arcs
+  // at one.
+  //
+  // TODO(user): code a true algo.
+  std::vector<std::vector<int>> components_;
+  StronglyConnectedComponentsFinder<int, std::vector<std::vector<int>>,
+                                    std::vector<std::vector<int>>>
+      ssc_;
+
+  // SAT incremental state.
+  std::vector<int> level_ends_;
+  std::vector<int> touched_nodes_;
 };
 
 // This constraint ensures that the graph is a covering of all nodes by
@@ -131,7 +183,7 @@ class CircuitPropagator : PropagatorInterface, ReversibleInterface {
 class CircuitCoveringPropagator : PropagatorInterface, ReversibleInterface {
  public:
   CircuitCoveringPropagator(std::vector<std::vector<Literal>> graph,
-                            const std::vector<int>& distinguished_nodes,
+                            absl::Span<const int> distinguished_nodes,
                             Model* model);
 
   void SetLevel(int level) final;
@@ -165,12 +217,13 @@ class CircuitCoveringPropagator : PropagatorInterface, ReversibleInterface {
 // Changes the node indices so that we get a graph in [0, num_nodes) where every
 // node has at least one incoming or outgoing arc. Returns the number of nodes.
 template <class IntContainer>
-int ReindexArcs(IntContainer* tails, IntContainer* heads) {
+int ReindexArcs(IntContainer* tails, IntContainer* heads,
+                absl::flat_hash_map<int, int>* mapping_output = nullptr) {
   const int num_arcs = tails->size();
   if (num_arcs == 0) return 0;
 
   // Put all nodes in a set.
-  std::set<int> nodes;
+  absl::btree_set<int> nodes;
   for (int arc = 0; arc < num_arcs; ++arc) {
     nodes.insert((*tails)[arc]);
     nodes.insert((*heads)[arc]);
@@ -188,6 +241,11 @@ int ReindexArcs(IntContainer* tails, IntContainer* heads) {
     (*tails)[arc] = mapping[(*tails)[arc]];
     (*heads)[arc] = mapping[(*heads)[arc]];
   }
+
+  if (mapping_output != nullptr) {
+    *mapping_output = std::move(mapping);
+  }
+
   return nodes.size();
 }
 
@@ -196,21 +254,22 @@ int ReindexArcs(IntContainer* tails, IntContainer* heads) {
 // ============================================================================
 
 // This just wraps CircuitPropagator. See the comment there to see what this
-// does. Note that any nodes with no outoing or no incoming arc will cause the
+// does. Note that any nodes with no outgoing or no incoming arc will cause the
 // problem to be UNSAT. One can call ReindexArcs() first to ignore such nodes.
-std::function<void(Model*)> SubcircuitConstraint(
-    int num_nodes, const std::vector<int>& tails, const std::vector<int>& heads,
-    const std::vector<Literal>& literals,
-    bool multiple_subcircuit_through_zero = false);
+void LoadSubcircuitConstraint(int num_nodes, absl::Span<const int> tails,
+                              absl::Span<const int> heads,
+                              absl::Span<const Literal> enforcement_literals,
+                              absl::Span<const Literal> literals, Model* model,
+                              bool multiple_subcircuit_through_zero = false);
 
 // TODO(user): Change to a sparse API like for the function above.
 std::function<void(Model*)> ExactlyOnePerRowAndPerColumn(
-    const std::vector<std::vector<Literal>>& graph);
+    absl::Span<const std::vector<Literal>> graph);
 std::function<void(Model*)> CircuitCovering(
-    const std::vector<std::vector<Literal>>& graph,
-    const std::vector<int>& distinguished_nodes);
+    absl::Span<const std::vector<Literal>> graph,
+    absl::Span<const int> distinguished_nodes);
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_CIRCUIT_H_
+#endif  // ORTOOLS_SAT_CIRCUIT_H_

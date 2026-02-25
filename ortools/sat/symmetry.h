@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,15 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_SYMMETRY_H_
-#define OR_TOOLS_SAT_SYMMETRY_H_
+#ifndef ORTOOLS_SAT_SYMMETRY_H_
+#define ORTOOLS_SAT_SYMMETRY_H_
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
 #include "absl/types/span.h"
 #include "ortools/algorithms/sparse_permutation.h"
-#include "ortools/base/macros.h"
 #include "ortools/base/strong_vector.h"
 #include "ortools/sat/sat_base.h"
 #include "ortools/util/stats.h"
@@ -43,7 +43,7 @@ namespace sat {
 // assignment order) the idea is to compute (as efficiently as possible) for
 // each permutation added to this class what is called the first (under the
 // trail assignment order) non-symmetric literal. A literal 'l' is said to be
-// non-symmetric under a given assignement and for a given permutation 'p' if
+// non-symmetric under a given assignment and for a given permutation 'p' if
 // 'l' is assigned to true but not 'p(l)'.
 //
 // If a first non-symmetric literal 'l' for a permutation 'p' is not a decision,
@@ -61,12 +61,17 @@ namespace sat {
 class SymmetryPropagator : public SatPropagator {
  public:
   SymmetryPropagator();
+
+  // This type is neither copyable nor movable.
+  SymmetryPropagator(const SymmetryPropagator&) = delete;
+  SymmetryPropagator& operator=(const SymmetryPropagator&) = delete;
+
   ~SymmetryPropagator() override;
 
   bool Propagate(Trail* trail) final;
   void Untrail(const Trail& trail, int trail_index) final;
-  absl::Span<const Literal> Reason(const Trail& trail,
-                                   int trail_index) const final;
+  absl::Span<const Literal> Reason(const Trail& trail, int trail_index,
+                                   int64_t conflict_id) const final;
 
   // Adds a new permutation to this symmetry propagator. The ownership is
   // transferred. This must be an integer permutation such that:
@@ -86,6 +91,27 @@ class SymmetryPropagator : public SatPropagator {
   // called (DCHECKed). Not sure if we need more incrementality though.
   void AddSymmetry(std::unique_ptr<SparsePermutation> permutation);
   int num_permutations() const { return permutations_.size(); }
+
+  // When the loader runs the symmetry detection code, it can only take into
+  // account the variables that existed at that time, even if some code paths
+  // will create new booleans later. Those new booleans might not be invariant
+  // under the symmetry that were detected, which might lead this propagator to
+  // propagate wrong clauses. This method allows to specify that all literals
+  // from 0 to `num_literals-1` were known when the symmetry detection code ran.
+  //
+  // For example, suppose we have a model with three literals: lit0, lit1 and
+  // lit2 and it's symmetrical with respect to swapping lit0 and lit1. Thus if
+  // (lit0, lit2) is a clause, we can deduce (lit1, lit2).
+  //
+  // Then, suppose we add a new literal: lit3 = lit0 & lit2.
+  //
+  // Now we can still deduce (lit1, lit2) from (lit0, lit2), but we cannot
+  // deduce (lit1, lit3) from (lit0, lit3). `num_literals` being set to 3 would
+  // allow the propagator to handle lit2 and lit3 differently, even if both are
+  // not part of any symmetry permutation.
+  void SetNumLiterals(int num_literals) {
+    num_literals_with_knonw_symmetry_ = num_literals;
+  }
 
   // Visible for testing.
   //
@@ -110,7 +136,7 @@ class SymmetryPropagator : public SatPropagator {
     int permutation_index;
     Literal image;
   };
-  absl::StrongVector<LiteralIndex, std::vector<ImageInfo>> images_;
+  util_intops::StrongVector<LiteralIndex, std::vector<ImageInfo>> images_;
 
   // For each permutation p, we maintain the list of all assigned literals
   // affected by p whose trail index is < propagation_trail_index_; sorted by
@@ -141,7 +167,7 @@ class SymmetryPropagator : public SatPropagator {
   // The identity permutation over all the literals.
   // This is temporary modified to encode a sparse permutation and then always
   // restored to the identity.
-  mutable absl::StrongVector<LiteralIndex, Literal> tmp_literal_mapping_;
+  mutable util_intops::StrongVector<LiteralIndex, Literal> tmp_literal_mapping_;
 
   // Symmetry reason indexed by trail_index.
   struct ReasonInfo {
@@ -153,10 +179,10 @@ class SymmetryPropagator : public SatPropagator {
   mutable StatsGroup stats_;
   int num_propagations_;
   int num_conflicts_;
-  DISALLOW_COPY_AND_ASSIGN(SymmetryPropagator);
+  int num_literals_with_knonw_symmetry_;
 };
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_SYMMETRY_H_
+#endif  // ORTOOLS_SAT_SYMMETRY_H_

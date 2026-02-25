@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,16 +15,18 @@
 // http://www.minizinc.org/), parses it, and spits out the model it
 // has built.
 
+#include <cstddef>
 #include <string>
 
+#include "absl/base/log_severity.h"
 #include "absl/flags/flag.h"
-#include "absl/flags/parse.h"
-#include "absl/flags/usage.h"
-#include "ortools/base/commandlineflags.h"
+#include "absl/log/check.h"
+#include "absl/log/globals.h"
+#include "absl/strings/match.h"
+#include "ortools/base/init_google.h"
 #include "ortools/base/timer.h"
 #include "ortools/flatzinc/model.h"
 #include "ortools/flatzinc/parser.h"
-#include "ortools/flatzinc/presolve.h"
 #include "ortools/util/logging.h"
 
 ABSL_FLAG(std::string, input, "", "Input file in the flatzinc format.");
@@ -34,7 +36,7 @@ ABSL_FLAG(bool, statistics, false, "Print model statistics");
 
 namespace operations_research {
 namespace fz {
-void ParseFile(const std::string& filename, bool presolve) {
+void ParseFile(const std::string& filename) {
   WallTimer timer;
   timer.Start();
 
@@ -57,14 +59,6 @@ void ParseFile(const std::string& filename, bool presolve) {
 
   Model model(problem_name);
   CHECK(ParseFlatzincFile(filename, &model));
-  if (presolve) {
-    SOLVER_LOG(&logger, "Presolve model");
-    timer.Reset();
-    timer.Start();
-    Presolver presolve(&logger);
-    presolve.Run(&model);
-    SOLVER_LOG(&logger, "  - done in ", timer.GetInMs(), " ms");
-  }
   if (absl::GetFlag(FLAGS_statistics)) {
     ModelStatistics stats(model, &logger);
     stats.BuildStatistics();
@@ -81,12 +75,8 @@ int main(int argc, char** argv) {
   const char kUsage[] =
       "Parses a flatzinc .fzn file, optionally presolve it, and prints it in "
       "human-readable format";
-  absl::SetFlag(&FLAGS_log_prefix, false);
-  absl::SetFlag(&FLAGS_logtostderr, true);
-  absl::SetProgramUsageMessage(kUsage);
-  absl::ParseCommandLine(argc, argv);
-  google::InitGoogleLogging(argv[0]);
-  operations_research::fz::ParseFile(absl::GetFlag(FLAGS_input),
-                                     absl::GetFlag(FLAGS_presolve));
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
+  InitGoogle(kUsage, &argc, &argv, /*remove_flags=*/true);
+  operations_research::fz::ParseFile(absl::GetFlag(FLAGS_input));
   return 0;
 }

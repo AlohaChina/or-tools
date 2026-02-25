@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,18 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_BASE_MURMUR_H_
-#define OR_TOOLS_BASE_MURMUR_H_
+#ifndef ORTOOLS_BASE_MURMUR_H_
+#define ORTOOLS_BASE_MURMUR_H_
 
-#include "ortools/base/thorough_hash.h"
+#include <cstddef>
+#include <cstdint>
+
+#include "ortools/base/hash.h"
 
 namespace util_hash {
 // In the or-tools project, MurmurHash64 is just a redirection towards
-// ThoroughHash. Ideally, it is meant to be using the murmurhash
-// algorithm described in http://murmurhash.googlepages.com.
+// fast_hash.
 inline uint64_t MurmurHash64(const char* buf, const size_t len) {
-  return ::operations_research::ThoroughHash(buf, len);
+  return operations_research::fasthash64(buf, len,
+                                         uint64_t{0xa5b85c5e198ed849});
 }
 }  // namespace util_hash
 
-#endif  // OR_TOOLS_BASE_MURMUR_H_
+#endif  // ORTOOLS_BASE_MURMUR_H_

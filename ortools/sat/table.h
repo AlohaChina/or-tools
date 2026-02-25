@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,16 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_TABLE_H_
-#define OR_TOOLS_SAT_TABLE_H_
+#ifndef ORTOOLS_SAT_TABLE_H_
+#define ORTOOLS_SAT_TABLE_H_
 
-#include <cstdint>
 #include <functional>
 #include <vector>
 
 #include "absl/types/span.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/sat/integer.h"
 #include "ortools/sat/model.h"
 #include "ortools/sat/sat_base.h"
 
@@ -32,10 +29,10 @@ namespace sat {
 // This constraint assumes that exactly one literal per column of the
 // literal_tuples matrix is true.
 std::function<void(Model*)> LiteralTableConstraint(
-    const std::vector<std::vector<Literal>>& literal_tuples,
-    const std::vector<Literal>& line_literals);
+    absl::Span<const std::vector<Literal>> literal_tuples,
+    absl::Span<const Literal> line_literals);
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_TABLE_H_
+#endif  // ORTOOLS_SAT_TABLE_H_

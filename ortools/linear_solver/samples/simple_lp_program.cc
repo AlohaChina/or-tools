@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,6 +14,12 @@
 // Minimal example to call the GLOP solver.
 // [START program]
 // [START import]
+#include <memory>
+#include <ostream>
+
+#include "absl/base/log_severity.h"
+#include "absl/log/globals.h"
+#include "ortools/base/init_google.h"
 #include "ortools/linear_solver/linear_solver.h"
 // [END import]
 
@@ -78,7 +84,9 @@ void SimpleLpProgram() {
 }
 }  // namespace operations_research
 
-int main() {
+int main(int argc, char* argv[]) {
+  InitGoogle(argv[0], &argc, &argv, true);
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
   operations_research::SimpleLpProgram();
   return EXIT_SUCCESS;
 }

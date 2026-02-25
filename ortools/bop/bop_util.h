@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,15 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_BOP_BOP_UTIL_H_
-#define OR_TOOLS_BOP_BOP_UTIL_H_
+#ifndef ORTOOLS_BOP_BOP_UTIL_H_
+#define ORTOOLS_BOP_BOP_UTIL_H_
 
 #include <vector>
 
-#include "ortools/base/basictypes.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/bop/bop_base.h"
 #include "ortools/bop/bop_solution.h"
+#include "ortools/sat/sat_base.h"
 #include "ortools/sat/sat_solver.h"
 
 namespace operations_research {
@@ -87,4 +86,4 @@ class LubyAdaptiveParameterValue {
 };
 }  // namespace bop
 }  // namespace operations_research
-#endif  // OR_TOOLS_BOP_BOP_UTIL_H_
+#endif  // ORTOOLS_BOP_BOP_UTIL_H_

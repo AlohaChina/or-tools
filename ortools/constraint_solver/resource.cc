@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <queue>
 #include <string>
@@ -32,12 +33,12 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
+#include "absl/strings/string_view.h"
 #include "ortools/base/commandlineflags.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
 #include "ortools/base/mathutil.h"
 #include "ortools/base/stl_util.h"
+#include "ortools/base/types.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/bitset.h"
@@ -448,7 +449,7 @@ class CumulativeLambdaThetaTree : public MonoidOperationTree<LambdaThetaNode> {
 // resource constraint.
 class NotLast {
  public:
-  NotLast(Solver* const solver, const std::vector<IntervalVar*>& intervals,
+  NotLast(Solver* solver, const std::vector<IntervalVar*>& intervals,
           bool mirror, bool strict);
 
   ~NotLast() { gtl::STLDeleteElements(&by_start_min_); }
@@ -508,7 +509,8 @@ bool NotLast::Propagate() {
            twi->interval->EndMax() > by_start_max_[j]->interval->StartMax()) {
       if (j > 0 && theta_tree_.Ect() > by_start_max_[j]->interval->StartMax()) {
         const int64_t new_end_max = by_start_max_[j - 1]->interval->StartMax();
-        new_lct_[by_start_max_[j]->index] = new_end_max;
+        new_lct_[by_start_max_[j]->index] =
+            std::min(new_lct_[by_start_max_[j]->index], new_end_max);
       }
       theta_tree_.Insert(by_start_max_[j]);
       j++;
@@ -521,9 +523,10 @@ bool NotLast::Propagate() {
     if (inserted) {
       theta_tree_.Insert(twi);
     }
-    if (ect_theta_less_i > twi->interval->EndMax() && j > 0) {
-      const int64_t new_end_max = by_start_max_[j - 1]->interval->EndMax();
-      if (new_end_max > new_lct_[twi->index]) {
+
+    if (ect_theta_less_i > twi->interval->StartMax() && j > 0) {
+      const int64_t new_end_max = by_start_max_[j - 1]->interval->StartMax();
+      if (new_end_max < new_lct_[twi->index]) {
         new_lct_[twi->index] = new_end_max;
       }
     }
@@ -548,7 +551,7 @@ bool NotLast::Propagate() {
 // which is why they are grouped together.
 class EdgeFinderAndDetectablePrecedences {
  public:
-  EdgeFinderAndDetectablePrecedences(Solver* const solver,
+  EdgeFinderAndDetectablePrecedences(Solver* solver,
                                      const std::vector<IntervalVar*>& intervals,
                                      bool mirror, bool strict);
   ~EdgeFinderAndDetectablePrecedences() {
@@ -958,6 +961,11 @@ class FullDisjunctiveConstraint : public DisjunctiveConstraint {
         mirror_not_last_(s, intervals, true, strict),
         strict_(strict) {}
 
+  // This type is neither copyable nor movable.
+  FullDisjunctiveConstraint(const FullDisjunctiveConstraint&) = delete;
+  FullDisjunctiveConstraint& operator=(const FullDisjunctiveConstraint&) =
+      delete;
+
   ~FullDisjunctiveConstraint() override {}
 
   void Post() override {
@@ -1181,7 +1189,6 @@ class FullDisjunctiveConstraint : public DisjunctiveConstraint {
   std::vector<IntervalVar*> performed_;
   std::vector<IntervalVar*> optional_;
   const bool strict_;
-  DISALLOW_COPY_AND_ASSIGN(FullDisjunctiveConstraint);
 };
 
 // =====================================================================
@@ -1256,6 +1263,10 @@ class DualCapacityThetaTree
         capacity_max_(-1),
         residual_capacity_(-1) {}
 
+  // This type is neither copyable nor movable.
+  DualCapacityThetaTree(const DualCapacityThetaTree&) = delete;
+  DualCapacityThetaTree& operator=(const DualCapacityThetaTree&) = delete;
+
   virtual ~DualCapacityThetaTree() {}
 
   void Init(int64_t capacity_max, int64_t residual_capacity) {
@@ -1279,7 +1290,6 @@ class DualCapacityThetaTree
  private:
   int64_t capacity_max_;
   int64_t residual_capacity_;
-  DISALLOW_COPY_AND_ASSIGN(DualCapacityThetaTree);
 };
 
 const int64_t DualCapacityThetaTree::kNotInitialized = -1LL;
@@ -1376,7 +1386,11 @@ class UpdatesForADemand {
   explicit UpdatesForADemand(int size)
       : updates_(size, 0), up_to_date_(false) {}
 
-  const int64_t Update(int index) { return updates_[index]; }
+  // This type is neither copyable nor movable.
+  UpdatesForADemand(const UpdatesForADemand&) = delete;
+  UpdatesForADemand& operator=(const UpdatesForADemand&) = delete;
+
+  int64_t Update(int index) { return updates_[index]; }
   void Reset() { up_to_date_ = false; }
   void SetUpdate(int index, int64_t update) {
     DCHECK(!up_to_date_);
@@ -1389,7 +1403,6 @@ class UpdatesForADemand {
  private:
   std::vector<int64_t> updates_;
   bool up_to_date_;
-  DISALLOW_COPY_AND_ASSIGN(UpdatesForADemand);
 };
 
 // One-sided cumulative edge finder.
@@ -1407,6 +1420,10 @@ class EdgeFinder : public Constraint {
         lt_tree_(tasks.size(), capacity_->Max()),
         dual_capacity_tree_(tasks.size()),
         has_zero_demand_tasks_(true) {}
+
+  // This type is neither copyable nor movable.
+  EdgeFinder(const EdgeFinder&) = delete;
+  EdgeFinder& operator=(const EdgeFinder&) = delete;
 
   ~EdgeFinder() override {
     gtl::STLDeleteElements(&tasks_);
@@ -1661,8 +1678,6 @@ class EdgeFinder : public Constraint {
 
   // Has one task a demand min == 0
   Rev<bool> has_zero_demand_tasks_;
-
-  DISALLOW_COPY_AND_ASSIGN(EdgeFinder);
 };
 
 // A point in time where the usage profile changes.
@@ -1720,6 +1735,10 @@ class CumulativeTimeTable : public Constraint {
     profile_non_unique_time_.reserve(profile_max_size);
     profile_unique_time_.reserve(profile_max_size);
   }
+
+  // This type is neither copyable nor movable.
+  CumulativeTimeTable(const CumulativeTimeTable&) = delete;
+  CumulativeTimeTable& operator=(const CumulativeTimeTable&) = delete;
 
   ~CumulativeTimeTable() override { gtl::STLDeleteElements(&by_start_min_); }
 
@@ -1888,8 +1907,6 @@ class CumulativeTimeTable : public Constraint {
   Profile profile_non_unique_time_;
   std::vector<Task*> by_start_min_;
   IntVar* const capacity_;
-
-  DISALLOW_COPY_AND_ASSIGN(CumulativeTimeTable);
 };
 
 // Cumulative idempotent Time-Table.
@@ -2176,7 +2193,7 @@ class CumulativeConstraint : public Constraint {
   CumulativeConstraint(Solver* const s,
                        const std::vector<IntervalVar*>& intervals,
                        const std::vector<int64_t>& demands,
-                       IntVar* const capacity, const std::string& name)
+                       IntVar* const capacity, absl::string_view name)
       : Constraint(s),
         capacity_(capacity),
         intervals_(intervals),
@@ -2187,11 +2204,15 @@ class CumulativeConstraint : public Constraint {
     }
   }
 
+  // This type is neither copyable nor movable.
+  CumulativeConstraint(const CumulativeConstraint&) = delete;
+  CumulativeConstraint& operator=(const CumulativeConstraint&) = delete;
+
   void Post() override {
     // For the cumulative constraint, there are many propagators, and they
     // don't dominate each other. So the strongest propagation is obtained
     // by posting a bunch of different propagators.
-    const ConstraintSolverParameters& params = solver()->parameters();
+    const ConstraintSolverParameters& params = solver()->const_parameters();
     if (params.use_cumulative_time_table()) {
       if (params.use_cumulative_time_table_sync()) {
         PostOneSidedConstraint(false, false, true);
@@ -2326,7 +2347,7 @@ class CumulativeConstraint : public Constraint {
     } else {
       Solver* const s = solver();
       if (edge_finder) {
-        const ConstraintSolverParameters& params = solver()->parameters();
+        const ConstraintSolverParameters& params = solver()->const_parameters();
         return useful_tasks.size() < params.max_edge_finder_size()
                    ? s->RevAlloc(new EdgeFinder<CumulativeTask>(s, useful_tasks,
                                                                 capacity_))
@@ -2360,8 +2381,6 @@ class CumulativeConstraint : public Constraint {
   const std::vector<IntervalVar*> intervals_;
   // Array of demands for the visitor.
   const std::vector<int64_t> demands_;
-
-  DISALLOW_COPY_AND_ASSIGN(CumulativeConstraint);
 };
 
 class VariableDemandCumulativeConstraint : public Constraint {
@@ -2370,7 +2389,7 @@ class VariableDemandCumulativeConstraint : public Constraint {
                                      const std::vector<IntervalVar*>& intervals,
                                      const std::vector<IntVar*>& demands,
                                      IntVar* const capacity,
-                                     const std::string& name)
+                                     absl::string_view name)
       : Constraint(s),
         capacity_(capacity),
         intervals_(intervals),
@@ -2381,11 +2400,17 @@ class VariableDemandCumulativeConstraint : public Constraint {
     }
   }
 
+  // This type is neither copyable nor movable.
+  VariableDemandCumulativeConstraint(
+      const VariableDemandCumulativeConstraint&) = delete;
+  VariableDemandCumulativeConstraint& operator=(
+      const VariableDemandCumulativeConstraint&) = delete;
+
   void Post() override {
     // For the cumulative constraint, there are many propagators, and they
     // don't dominate each other. So the strongest propagation is obtained
     // by posting a bunch of different propagators.
-    const ConstraintSolverParameters& params = solver()->parameters();
+    const ConstraintSolverParameters& params = solver()->const_parameters();
     if (params.use_cumulative_time_table()) {
       PostOneSidedConstraint(false, false, false);
       PostOneSidedConstraint(true, false, false);
@@ -2548,8 +2573,6 @@ class VariableDemandCumulativeConstraint : public Constraint {
   const std::vector<IntervalVar*> intervals_;
   // Array of demands for the visitor.
   const std::vector<IntVar*> demands_;
-
-  DISALLOW_COPY_AND_ASSIGN(VariableDemandCumulativeConstraint);
 };
 }  // namespace
 
@@ -2572,7 +2595,7 @@ DisjunctiveConstraint::~DisjunctiveConstraint() {}
 void DisjunctiveConstraint::SetTransitionTime(
     std::function<int64_t(int64_t, int64_t)> transition_time) {
   if (transition_time != nullptr) {
-    transition_time_ = transition_time;
+    transition_time_ = std::move(transition_time);
   } else {
     transition_time_ = [](int64_t x, int64_t y) { return 0; };
   }
@@ -2615,7 +2638,7 @@ Constraint* Solver::MakeCumulative(const std::vector<IntervalVar*>& intervals,
 Constraint* Solver::MakeCumulative(const std::vector<IntervalVar*>& intervals,
                                    const std::vector<int64_t>& demands,
                                    IntVar* const capacity,
-                                   const std::string& name) {
+                                   absl::string_view name) {
   CHECK_EQ(intervals.size(), demands.size());
   for (int i = 0; i < intervals.size(); ++i) {
     CHECK_GE(demands[i], 0);

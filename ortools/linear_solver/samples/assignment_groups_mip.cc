@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,15 +10,20 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 // [START program]
 // Solve a simple assignment problem.
 // [START import]
 #include <cstdint>
+#include <memory>
 #include <numeric>
 #include <utility>
 #include <vector>
 
+#include "absl/base/log_severity.h"
+#include "absl/log/globals.h"
 #include "absl/strings/str_format.h"
+#include "ortools/base/init_google.h"
 #include "ortools/base/logging.h"
 #include "ortools/linear_solver/linear_solver.h"
 // [END import]
@@ -55,7 +60,8 @@ void AssignmentTeamsMip() {
   using WorkerIndex = int;
   using Binome = std::pair<WorkerIndex, WorkerIndex>;
   using AllowedBinomes = std::vector<Binome>;
-  const AllowedBinomes group1 = {{ // group of worker 0-3
+  const AllowedBinomes group1 = {{
+      // group of worker 0-3
       {2, 3},
       {1, 3},
       {1, 2},
@@ -63,7 +69,8 @@ void AssignmentTeamsMip() {
       {0, 2},
   }};
 
-  const AllowedBinomes group2 = {{ // group of worker 4-7
+  const AllowedBinomes group2 = {{
+      // group of worker 4-7
       {6, 7},
       {5, 7},
       {5, 6},
@@ -71,7 +78,8 @@ void AssignmentTeamsMip() {
       {4, 7},
   }};
 
-  const AllowedBinomes group3 = {{ // group of worker 8-11
+  const AllowedBinomes group3 = {{
+      // group of worker 8-11
       {10, 11},
       {9, 11},
       {9, 10},
@@ -129,8 +137,7 @@ void AssignmentTeamsMip() {
   // task.
   std::vector<const MPVariable*> work(num_workers);
   for (int worker : all_workers) {
-    work[worker] =
-        solver->MakeBoolVar(absl::StrFormat("work[%d]", worker));
+    work[worker] = solver->MakeBoolVar(absl::StrFormat("work[%d]", worker));
   }
 
   for (int worker : all_workers) {
@@ -144,7 +151,7 @@ void AssignmentTeamsMip() {
   // Group1
   {
     MPConstraint* g1 = solver->MakeRowConstraint(1, 1);
-    for (int i=0; i < group1.size(); ++i) {
+    for (int i = 0; i < group1.size(); ++i) {
       // a*b can be transformed into 0 <= a + b - 2*p <= 1 with p in [0,1]
       // p is true if a AND b, false otherwise
       MPConstraint* tmp = solver->MakeRowConstraint(0, 1);
@@ -159,7 +166,7 @@ void AssignmentTeamsMip() {
   // Group2
   {
     MPConstraint* g2 = solver->MakeRowConstraint(1, 1);
-    for (int i=0; i < group2.size(); ++i) {
+    for (int i = 0; i < group2.size(); ++i) {
       // a*b can be transformed into 0 <= a + b - 2*p <= 1 with p in [0,1]
       // p is true if a AND b, false otherwise
       MPConstraint* tmp = solver->MakeRowConstraint(0, 1);
@@ -174,7 +181,7 @@ void AssignmentTeamsMip() {
   // Group3
   {
     MPConstraint* g3 = solver->MakeRowConstraint(1, 1);
-    for (int i=0; i < group3.size(); ++i) {
+    for (int i = 0; i < group3.size(); ++i) {
       // a*b can be transformed into 0 <= a + b - 2*p <= 1 with p in [0,1]
       // p is true if a AND b, false otherwise
       MPConstraint* tmp = solver->MakeRowConstraint(0, 1);
@@ -226,7 +233,9 @@ void AssignmentTeamsMip() {
 }
 }  // namespace operations_research
 
-int main(int argc, char** argv) {
+int main(int argc, char* argv[]) {
+  InitGoogle(argv[0], &argc, &argv, true);
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
   operations_research::AssignmentTeamsMip();
   return EXIT_SUCCESS;
 }

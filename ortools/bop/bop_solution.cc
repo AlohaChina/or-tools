@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,6 +14,14 @@
 #include "ortools/bop/bop_solution.h"
 
 #include <cstdint>
+#include <cstdlib>
+#include <string>
+
+#include "absl/log/check.h"
+#include "absl/strings/string_view.h"
+#include "ortools/base/strong_vector.h"
+#include "ortools/bop/bop_types.h"
+#include "ortools/sat/boolean_problem.pb.h"
 
 namespace operations_research {
 namespace bop {
@@ -26,7 +34,7 @@ using ::operations_research::sat::LinearObjective;
 // BopSolution
 //------------------------------------------------------------------------------
 BopSolution::BopSolution(const LinearBooleanProblem& problem,
-                         const std::string& name)
+                         absl::string_view name)
     : problem_(&problem),
       name_(name),
       values_(problem.num_variables(), false),

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -18,9 +19,10 @@
 
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "ortools/base/integral_types.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
+#include "ortools/base/types.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/saturated_arithmetic.h"
@@ -42,7 +44,7 @@ IntExpr* BuildEndExpr(IntervalVar* var);
 IntExpr* BuildSafeStartExpr(IntervalVar* var, int64_t unperformed_value);
 IntExpr* BuildSafeDurationExpr(IntervalVar* var, int64_t unperformed_value);
 IntExpr* BuildSafeEndExpr(IntervalVar* var, int64_t unperformed_value);
-void LinkVarExpr(Solver* const s, IntExpr* const expr, IntVar* const var);
+void LinkVarExpr(Solver* s, IntExpr* expr, IntVar* var);
 
 // It's good to have the two extreme values being symmetrical around zero: it
 // makes mirroring easier.
@@ -60,6 +62,10 @@ class MirrorIntervalVar : public IntervalVar {
  public:
   MirrorIntervalVar(Solver* const s, IntervalVar* const t)
       : IntervalVar(s, "Mirror<" + t->name() + ">"), t_(t) {}
+
+  // This type is neither copyable nor movable.
+  MirrorIntervalVar(const MirrorIntervalVar&) = delete;
+  MirrorIntervalVar& operator=(const MirrorIntervalVar&) = delete;
   ~MirrorIntervalVar() override {}
 
   // These methods query, set and watch the start position of the
@@ -143,7 +149,6 @@ class MirrorIntervalVar : public IntervalVar {
 
  private:
   IntervalVar* const t_;
-  DISALLOW_COPY_AND_ASSIGN(MirrorIntervalVar);
 };
 
 // An IntervalVar that passes all function calls to an underlying interval
@@ -171,6 +176,12 @@ class AlwaysPerformedIntervalVarWrapper : public IntervalVar {
         start_expr_(nullptr),
         duration_expr_(nullptr),
         end_expr_(nullptr) {}
+
+  // This type is neither copyable nor movable.
+  AlwaysPerformedIntervalVarWrapper(const AlwaysPerformedIntervalVarWrapper&) =
+      delete;
+  AlwaysPerformedIntervalVarWrapper& operator=(
+      const AlwaysPerformedIntervalVarWrapper&) = delete;
 
   ~AlwaysPerformedIntervalVarWrapper() override {}
   int64_t StartMin() const override {
@@ -274,7 +285,7 @@ class AlwaysPerformedIntervalVarWrapper : public IntervalVar {
   IntExpr* SafeEndExpr(int64_t unperformed_value) override { return EndExpr(); }
 
  protected:
-  IntervalVar* const underlying() const { return t_; }
+  IntervalVar* underlying() const { return t_; }
   bool MayUnderlyingBePerformed() const {
     return underlying()->MayBePerformed();
   }
@@ -284,7 +295,6 @@ class AlwaysPerformedIntervalVarWrapper : public IntervalVar {
   IntExpr* start_expr_;
   IntExpr* duration_expr_;
   IntExpr* end_expr_;
-  DISALLOW_COPY_AND_ASSIGN(AlwaysPerformedIntervalVarWrapper);
 };
 
 // An interval variable that wraps around an underlying one, relaxing the max
@@ -746,11 +756,11 @@ class PerformedVar : public BooleanVar {
 
 class FixedDurationIntervalVar : public BaseIntervalVar {
  public:
-  FixedDurationIntervalVar(Solver* const s, int64_t start_min,
-                           int64_t start_max, int64_t duration, bool optional,
+  FixedDurationIntervalVar(Solver* s, int64_t start_min, int64_t start_max,
+                           int64_t duration, bool optional,
                            const std::string& name);
   // Unperformed interval.
-  FixedDurationIntervalVar(Solver* const s, const std::string& name);
+  FixedDurationIntervalVar(Solver* s, const std::string& name);
   ~FixedDurationIntervalVar() override {}
 
   int64_t StartMin() const override;
@@ -987,11 +997,11 @@ std::string FixedDurationIntervalVar::DebugString() const {
 
 class FixedDurationPerformedIntervalVar : public BaseIntervalVar {
  public:
-  FixedDurationPerformedIntervalVar(Solver* const s, int64_t start_min,
+  FixedDurationPerformedIntervalVar(Solver* s, int64_t start_min,
                                     int64_t start_max, int64_t duration,
                                     const std::string& name);
   // Unperformed interval.
-  FixedDurationPerformedIntervalVar(Solver* const s, const std::string& name);
+  FixedDurationPerformedIntervalVar(Solver* s, const std::string& name);
   ~FixedDurationPerformedIntervalVar() override {}
 
   int64_t StartMin() const override;
@@ -1184,8 +1194,8 @@ std::string FixedDurationPerformedIntervalVar::DebugString() const {
 
 class StartVarPerformedIntervalVar : public IntervalVar {
  public:
-  StartVarPerformedIntervalVar(Solver* const s, IntVar* const var,
-                               int64_t duration, const std::string& name);
+  StartVarPerformedIntervalVar(Solver* s, IntVar* var, int64_t duration,
+                               const std::string& name);
   ~StartVarPerformedIntervalVar() override {}
 
   int64_t StartMin() const override;
@@ -1350,8 +1360,8 @@ std::string StartVarPerformedIntervalVar::DebugString() const {
 
 class StartVarIntervalVar : public BaseIntervalVar {
  public:
-  StartVarIntervalVar(Solver* const s, IntVar* const start, int64_t duration,
-                      IntVar* const performed, const std::string& name);
+  StartVarIntervalVar(Solver* s, IntVar* start, int64_t duration,
+                      IntVar* performed, const std::string& name);
   ~StartVarIntervalVar() override {}
 
   int64_t StartMin() const override;
@@ -1625,7 +1635,7 @@ class LinkStartVarIntervalVar : public Constraint {
 
 class FixedInterval : public IntervalVar {
  public:
-  FixedInterval(Solver* const s, int64_t start, int64_t duration,
+  FixedInterval(Solver* s, int64_t start, int64_t duration,
                 const std::string& name);
   ~FixedInterval() override {}
 
@@ -2057,6 +2067,12 @@ class FixedDurationSyncedIntervalVar : public IntervalVar {
         t_(t),
         duration_(duration),
         offset_(offset) {}
+
+  // This type is neither copyable nor movable.
+  FixedDurationSyncedIntervalVar(const FixedDurationSyncedIntervalVar&) =
+      delete;
+  FixedDurationSyncedIntervalVar& operator=(
+      const FixedDurationSyncedIntervalVar&) = delete;
   ~FixedDurationSyncedIntervalVar() override {}
   int64_t DurationMin() const override { return duration_; }
   int64_t DurationMax() const override { return duration_; }
@@ -2106,9 +2122,6 @@ class FixedDurationSyncedIntervalVar : public IntervalVar {
   IntervalVar* const t_;
   const int64_t duration_;
   const int64_t offset_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(FixedDurationSyncedIntervalVar);
 };
 
 // ----- Fixed duration interval var synced on start -----
@@ -2285,7 +2298,7 @@ IntervalVar* Solver::MakeFixedDurationIntervalVar(int64_t start_min,
 
 void Solver::MakeFixedDurationIntervalVarArray(
     int count, int64_t start_min, int64_t start_max, int64_t duration,
-    bool optional, const std::string& name, std::vector<IntervalVar*>* array) {
+    bool optional, absl::string_view name, std::vector<IntervalVar*>* array) {
   CHECK_GT(count, 0);
   CHECK(array != nullptr);
   array->clear();
@@ -2330,7 +2343,7 @@ IntervalVar* Solver::MakeFixedDurationIntervalVar(
 
 void Solver::MakeFixedDurationIntervalVarArray(
     const std::vector<IntVar*>& start_variables, int64_t duration,
-    const std::string& name, std::vector<IntervalVar*>* array) {
+    absl::string_view name, std::vector<IntervalVar*>* array) {
   CHECK(array != nullptr);
   array->clear();
   for (int i = 0; i < start_variables.size(); ++i) {
@@ -2344,7 +2357,7 @@ void Solver::MakeFixedDurationIntervalVarArray(
 // the corresponding start variables.
 void Solver::MakeFixedDurationIntervalVarArray(
     const std::vector<IntVar*>& start_variables,
-    const std::vector<int64_t>& durations, const std::string& name,
+    absl::Span<const int64_t> durations, absl::string_view name,
     std::vector<IntervalVar*>* array) {
   CHECK(array != nullptr);
   CHECK_EQ(start_variables.size(), durations.size());
@@ -2358,7 +2371,7 @@ void Solver::MakeFixedDurationIntervalVarArray(
 
 void Solver::MakeFixedDurationIntervalVarArray(
     const std::vector<IntVar*>& start_variables,
-    const std::vector<int>& durations, const std::string& name,
+    absl::Span<const int> durations, absl::string_view name,
     std::vector<IntervalVar*>* array) {
   CHECK(array != nullptr);
   CHECK_EQ(start_variables.size(), durations.size());
@@ -2372,8 +2385,8 @@ void Solver::MakeFixedDurationIntervalVarArray(
 
 void Solver::MakeFixedDurationIntervalVarArray(
     const std::vector<IntVar*>& start_variables,
-    const std::vector<int>& durations,
-    const std::vector<IntVar*>& performed_variables, const std::string& name,
+    absl::Span<const int> durations,
+    const std::vector<IntVar*>& performed_variables, absl::string_view name,
     std::vector<IntervalVar*>* array) {
   CHECK(array != nullptr);
   array->clear();
@@ -2386,8 +2399,8 @@ void Solver::MakeFixedDurationIntervalVarArray(
 
 void Solver::MakeFixedDurationIntervalVarArray(
     const std::vector<IntVar*>& start_variables,
-    const std::vector<int64_t>& durations,
-    const std::vector<IntVar*>& performed_variables, const std::string& name,
+    absl::Span<const int64_t> durations,
+    const std::vector<IntVar*>& performed_variables, absl::string_view name,
     std::vector<IntervalVar*>* array) {
   CHECK(array != nullptr);
   array->clear();
@@ -2413,7 +2426,7 @@ void Solver::MakeIntervalVarArray(int count, int64_t start_min,
                                   int64_t start_max, int64_t duration_min,
                                   int64_t duration_max, int64_t end_min,
                                   int64_t end_max, bool optional,
-                                  const std::string& name,
+                                  absl::string_view name,
                                   std::vector<IntervalVar*>* const array) {
   CHECK_GT(count, 0);
   CHECK(array != nullptr);

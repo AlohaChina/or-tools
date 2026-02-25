@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,21 +14,33 @@
 #include "ortools/algorithms/find_graph_symmetries.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
-#include <limits>
+#include <memory>
 #include <numeric>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "absl/memory/memory.h"
+#include "absl/algorithm/container.h"
+#include "absl/base/log_severity.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/flags/flag.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/numeric/int128.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
+#include "absl/types/span.h"
 #include "ortools/algorithms/dense_doubly_linked_list.h"
 #include "ortools/algorithms/dynamic_partition.h"
 #include "ortools/algorithms/dynamic_permutation.h"
 #include "ortools/algorithms/sparse_permutation.h"
-#include "ortools/base/commandlineflags.h"
+#include "ortools/graph/graph.h"
 #include "ortools/graph/iterators.h"
 #include "ortools/graph/util.h"
 
@@ -41,6 +53,70 @@ ABSL_FLAG(bool, minimize_permutation_support_size, false,
 namespace operations_research {
 
 using util::GraphIsSymmetric;
+
+std::vector<int> CountTriangles(const ::util::StaticGraph<int, int>& graph,
+                                int max_degree) {
+  std::vector<int> num_triangles(graph.num_nodes(), 0);
+  absl::flat_hash_set<std::pair<int, int>> arcs;
+  arcs.reserve(graph.num_arcs());
+  for (int a = 0; a < graph.num_arcs(); ++a) {
+    arcs.insert({graph.Tail(a), graph.Head(a)});
+  }
+  for (int node = 0; node < graph.num_nodes(); ++node) {
+    if (graph.OutDegree(node) > max_degree) continue;
+    int triangles = 0;
+    for (int neigh1 : graph[node]) {
+      for (int neigh2 : graph[node]) {
+        if (arcs.contains({neigh1, neigh2})) ++triangles;
+      }
+    }
+    num_triangles[node] = triangles;
+  }
+  return num_triangles;
+}
+
+void LocalBfs(const ::util::StaticGraph<int, int>& graph, int source,
+              int stop_after_num_nodes, std::vector<int>* visited,
+              std::vector<int>* num_within_radius,
+              // For performance, the user provides us with an already-
+              // allocated bitmask of size graph.num_nodes() with all values set
+              // to "false", which we'll restore in the same state upon return.
+              std::vector<bool>* tmp_mask) {
+  const int n = graph.num_nodes();
+  visited->clear();
+  num_within_radius->clear();
+  num_within_radius->push_back(1);
+  DCHECK_EQ(tmp_mask->size(), n);
+  DCHECK(absl::c_find(*tmp_mask, true) == tmp_mask->end());
+  visited->push_back(source);
+  (*tmp_mask)[source] = true;
+  int num_settled = 0;
+  int next_distance_change = 1;
+  while (num_settled < visited->size()) {
+    const int from = (*visited)[num_settled++];
+    for (const int child : graph[from]) {
+      if ((*tmp_mask)[child]) continue;
+      (*tmp_mask)[child] = true;
+      visited->push_back(child);
+    }
+    if (num_settled == next_distance_change) {
+      // We already know all the nodes at the next distance.
+      num_within_radius->push_back(visited->size());
+      if (num_settled >= stop_after_num_nodes) break;
+      next_distance_change = visited->size();
+    }
+  }
+  // Clean up 'tmp_mask' sparsely.
+  for (const int node : *visited) (*tmp_mask)[node] = false;
+  // If we explored the whole connected component, num_within_radius contains
+  // a spurious entry: remove it.
+  if (num_settled == visited->size()) {
+    DCHECK_GE(num_within_radius->size(), 2);
+    DCHECK_EQ(num_within_radius->back(),
+              (*num_within_radius)[num_within_radius->size() - 2]);
+    num_within_radius->pop_back();
+  }
+}
 
 namespace {
 // Some routines used below.
@@ -400,7 +476,7 @@ absl::Status GraphSymmetryFinder::FindSymmetries(
                         "During the initial refinement.");
   }
   VLOG(4) << "Base partition: "
-          << base_partition.DebugString(DynamicPartition::SORT_BY_PART);
+          << base_partition.DebugString(/*sort_parts_lexicographically=*/false);
 
   MergingPartition node_equivalence_classes(NumNodes());
   std::vector<std::vector<int>> permutations_displacing_node(NumNodes());
@@ -450,7 +526,8 @@ absl::Status GraphSymmetryFinder::FindSymmetries(
     DistinguishNodeInPartition(invariant_node, &base_partition, nullptr);
     VLOG(4) << "Invariant dive: invariant node = " << invariant_node
             << "; partition after: "
-            << base_partition.DebugString(DynamicPartition::SORT_BY_PART);
+            << base_partition.DebugString(
+                   /*sort_parts_lexicographically=*/false);
     if (time_limit_->LimitReached()) {
       return absl::Status(absl::StatusCode::kDeadlineExceeded,
                           "During the invariant dive.");
@@ -476,7 +553,8 @@ absl::Status GraphSymmetryFinder::FindSymmetries(
     image_partition.UndoRefineUntilNumPartsEqual(base_num_parts);
     VLOG(4) << "Backtracking invariant dive: root node = " << root_node
             << "; partition: "
-            << base_partition.DebugString(DynamicPartition::SORT_BY_PART);
+            << base_partition.DebugString(
+                   /*sort_parts_lexicographically=*/false);
 
     // Now we'll try to map "root_node" to all image nodes that seem compatible
     // and that aren't "root_node" itself.
@@ -620,14 +698,23 @@ std::unique_ptr<SparsePermutation>
 GraphSymmetryFinder::FindOneSuitablePermutation(
     int root_node, int root_image_node, DynamicPartition* base_partition,
     DynamicPartition* image_partition,
-    const std::vector<std::unique_ptr<SparsePermutation>>&
+    absl::Span<const std::unique_ptr<SparsePermutation>>
         generators_found_so_far,
-    const std::vector<std::vector<int>>& permutations_displacing_node) {
+    absl::Span<const std::vector<int>> permutations_displacing_node) {
   // DCHECKs() and statistics.
   ScopedTimeDistributionUpdater search_time_updater(&stats_.search_time);
   DCHECK_EQ("", tmp_dynamic_permutation_.DebugString());
-  DCHECK_EQ(base_partition->DebugString(DynamicPartition::SORT_BY_PART),
-            image_partition->DebugString(DynamicPartition::SORT_BY_PART));
+  DCHECK_EQ(base_partition->NumParts(), image_partition->NumParts());
+  if (DEBUG_MODE) {
+    for (int i = 0; i < base_partition->NumParts(); ++i) {
+      DCHECK_EQ(base_partition->FprintOfPart(i),
+                image_partition->FprintOfPart(i))
+          << base_partition->DebugString(/*sort_parts_lexicographically=*/false)
+          << " "
+          << image_partition->DebugString(
+                 /*sort_parts_lexicographically=*/false);
+    }
+  }
   DCHECK(search_states_.empty());
 
   // These will be used during the search. See their usage.
@@ -680,8 +767,10 @@ GraphSymmetryFinder::FindOneSuitablePermutation(
                                  &image_singletons);
     }
     VLOG(4) << ss.DebugString();
-    VLOG(4) << base_partition->DebugString(DynamicPartition::SORT_BY_PART);
-    VLOG(4) << image_partition->DebugString(DynamicPartition::SORT_BY_PART);
+    VLOG(4) << base_partition->DebugString(
+        /*sort_parts_lexicographically=*/false);
+    VLOG(4) << image_partition->DebugString(
+        /*sort_parts_lexicographically=*/false);
 
     // Run some diagnoses on the two partitions. There are many outcomes, so
     // it's a bit complicated:
@@ -767,7 +856,7 @@ GraphSymmetryFinder::FindOneSuitablePermutation(
         tmp_dynamic_permutation_.UndoLastMappings(&base_singletons);
       } else {
         ScopedTimeDistributionUpdater u(&stats_.map_reelection_time);
-        // TODO(user, viger): try to get the non-singleton part from
+        // TODO(user): try to get the non-singleton part from
         // DynamicPermutation in O(1). On some graphs like the symmetry of the
         // mip problem lectsched-4-obj.mps.gz, this take the majority of the
         // time!
@@ -883,8 +972,8 @@ GraphSymmetryFinder::TailsOfIncomingArcsTo(int node) const {
 
 void GraphSymmetryFinder::PruneOrbitsUnderPermutationsCompatibleWithPartition(
     const DynamicPartition& partition,
-    const std::vector<std::unique_ptr<SparsePermutation>>& permutations,
-    const std::vector<int>& permutation_indices, std::vector<int>* nodes) {
+    absl::Span<const std::unique_ptr<SparsePermutation>> permutations,
+    absl::Span<const int> permutation_indices, std::vector<int>* nodes) {
   VLOG(4) << "    Pruning [" << absl::StrJoin(*nodes, ", ") << "]";
   // TODO(user): apply a smarter test to decide whether to do the pruning
   // or not: we can accurately estimate the cost of pruning (iterate through
@@ -927,7 +1016,7 @@ void GraphSymmetryFinder::PruneOrbitsUnderPermutationsCompatibleWithPartition(
             compatible = false;
             break;
           }
-          part = partition.PartOf(node);  // Initilization of 'part'.
+          part = partition.PartOf(node);  // Initialization of 'part'.
         }
       }
     }

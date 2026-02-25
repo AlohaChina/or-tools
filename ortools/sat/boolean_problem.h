@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,14 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_BOOLEAN_PROBLEM_H_
-#define OR_TOOLS_SAT_BOOLEAN_PROBLEM_H_
+#ifndef ORTOOLS_SAT_BOOLEAN_PROBLEM_H_
+#define ORTOOLS_SAT_BOOLEAN_PROBLEM_H_
 
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "absl/status/status.h"
+#include "absl/types/span.h"
 #include "ortools/algorithms/sparse_permutation.h"
 #include "ortools/base/strong_vector.h"
 #include "ortools/sat/boolean_problem.pb.h"
@@ -98,7 +99,7 @@ bool IsAssignmentValid(const LinearBooleanProblem& problem,
 std::string LinearBooleanProblemToCnfString(
     const LinearBooleanProblem& problem);
 
-// Store a variable assignment into the given BooleanAssignement proto.
+// Store a variable assignment into the given BooleanAssignment proto.
 // Note that only the assigned variables are stored, so the assignment may be
 // incomplete.
 void StoreAssignment(const VariablesAssignment& assignment,
@@ -106,7 +107,7 @@ void StoreAssignment(const VariablesAssignment& assignment,
 
 // Constructs a sub-problem formed by the constraints with given indices.
 void ExtractSubproblem(const LinearBooleanProblem& problem,
-                       const std::vector<int>& constraint_indices,
+                       absl::Span<const int> constraint_indices,
                        LinearBooleanProblem* subproblem);
 
 // Modifies the given LinearBooleanProblem so that all the literals appearing
@@ -129,7 +130,7 @@ void FindLinearBooleanProblemSymmetries(
 // of the correct size. It can also map a literal index to kTrueLiteralIndex
 // or kFalseLiteralIndex in order to fix the variable.
 void ApplyLiteralMappingToBooleanProblem(
-    const absl::StrongVector<LiteralIndex, LiteralIndex>& mapping,
+    const util_intops::StrongVector<LiteralIndex, LiteralIndex>& mapping,
     LinearBooleanProblem* problem);
 
 // A simple preprocessing step that does basic probing and removes the fixed and
@@ -142,4 +143,4 @@ void ProbeAndSimplifyProblem(SatPostsolver* postsolver,
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_BOOLEAN_PROBLEM_H_
+#endif  // ORTOOLS_SAT_BOOLEAN_PROBLEM_H_

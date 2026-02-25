@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,27 +14,17 @@
 // Utility helpers for manipulating LinearProgram and other types defined in
 // lp_data.
 
-#ifndef OR_TOOLS_LP_DATA_LP_DATA_UTILS_H_
-#define OR_TOOLS_LP_DATA_LP_DATA_UTILS_H_
+#ifndef ORTOOLS_LP_DATA_LP_DATA_UTILS_H_
+#define ORTOOLS_LP_DATA_LP_DATA_UTILS_H_
 
 #include "ortools/glop/parameters.pb.h"
 #include "ortools/lp_data/lp_data.h"
 #include "ortools/lp_data/lp_types.h"
 #include "ortools/lp_data/matrix_scaler.h"
+#include "ortools/lp_data/scattered_vector.h"
 
 namespace operations_research {
 namespace glop {
-
-// For all constraints in linear_program, if the constraint has a slack
-// variable, change its value in *values so that the constraints itself is
-// satisfied.
-// Note that this obviously won't always imply that the bounds of the slack
-// variable itself will be satisfied.
-// The code assumes (and DCHECKs) that all constraints with a slack variable
-// have their upper and lower bounds both set to 0. This is ensured by
-// LinearProgram::AddSlackVariablesWhereNecessary().
-void ComputeSlackVariablesValues(const LinearProgram& linear_program,
-                                 DenseRow* values);
 
 // This is separated from LinearProgram class because of a cyclic dependency
 // when scaling as an LP.
@@ -50,12 +40,14 @@ void Scale(LinearProgram* lp, SparseMatrixScaler* scaler);
 // sense to have a single place where all the scaling formulas are kept.
 class LpScalingHelper {
  public:
+  // Clear all scaling coefficients.
+  void Clear();
+
   // Scale the given LP.
   void Scale(LinearProgram* lp);
   void Scale(const GlopParameters& params, LinearProgram* lp);
-
-  // Clear all scaling coefficients.
-  void Clear();
+  void ConfigureFromFactors(absl::Span<const double> row_factors,
+                            absl::Span<const double> col_factors);
 
   // Transforms value from unscaled domain to the scaled one.
   Fractional ScaleVariableValue(ColIndex col, Fractional value) const;
@@ -67,6 +59,7 @@ class LpScalingHelper {
   Fractional UnscaleVariableValue(ColIndex col, Fractional value) const;
   Fractional UnscaleReducedCost(ColIndex col, Fractional value) const;
   Fractional UnscaleDualValue(RowIndex row, Fractional value) const;
+  Fractional UnscaleLeftSolveValue(RowIndex row, Fractional value) const;
   Fractional UnscaleConstraintActivity(RowIndex row, Fractional value) const;
 
   // Unscale a row vector v such that v.B = unit_row. When basis_col is the
@@ -82,18 +75,37 @@ class LpScalingHelper {
   // to be in the scaled domain.
   Fractional VariableScalingFactor(ColIndex col) const;
 
-  // Visible for testing. All objective coefficients of the original LP where
-  // multiplied by this factor. Nothing else changed.
-  Fractional BoundsScalingFactor() const { return bound_scaling_factor_; }
+  // Same as VariableScalingFactor() except that ColIndex greater than the
+  // number of columns will be interpreted as "slack" variable whose scaling
+  // factor depends on the row.
+  Fractional VariableScalingFactorWithSlack(ColIndex col) const;
+
+  // Extra scaling function, to scale objective/bounds.
+  void AverageCostScaling(DenseRow* objective);
+  void ContainOneBoundScaling(DenseRow* upper_bounds, DenseRow* lower_bounds);
 
   // Visible for testing. All variable/constraint bounds of the original LP
   // where multiplied by this factor. Nothing else changed.
+  Fractional BoundsScalingFactor() const { return bound_scaling_factor_; }
+
+  // Visible for testing. All objective coefficients of the original LP where
+  // multiplied by this factor. Nothing else changed.
   Fractional ObjectiveScalingFactor() const {
     return objective_scaling_factor_;
   }
 
  private:
-  SparseMatrixScaler scaler_;
+  Fractional RowUnscalingFactor(RowIndex row) const {
+    return matrix_is_scaled_ ? row_unscaling_factors_[row] : 1.0;
+  }
+  Fractional ColUnscalingFactor(ColIndex col) const {
+    return matrix_is_scaled_ ? col_unscaling_factors_[col] : 1.0;
+  }
+
+  bool matrix_is_scaled_ = false;
+  DenseColumn row_unscaling_factors_;
+  DenseRow col_unscaling_factors_;
+
   Fractional bound_scaling_factor_ = 1.0;
   Fractional objective_scaling_factor_ = 1.0;
 };
@@ -101,4 +113,4 @@ class LpScalingHelper {
 }  // namespace glop
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_LP_DATA_LP_DATA_UTILS_H_
+#endif  // ORTOOLS_LP_DATA_LP_DATA_UTILS_H_

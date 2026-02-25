@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,59 +13,64 @@
 
 #include "ortools/math_opt/cpp/objective.h"
 
-#include "ortools/base/logging.h"
-#include "absl/container/flat_hash_map.h"
-#include "ortools/math_opt/core/indexed_model.h"
-#include "ortools/math_opt/cpp/key_types.h"
+#include <optional>
+#include <ostream>
+#include <sstream>
+#include <string>
+
+#include "absl/log/check.h"
+#include "absl/strings/string_view.h"
 #include "ortools/math_opt/cpp/variable_and_expressions.h"
+#include "ortools/math_opt/storage/model_storage.h"
+#include "ortools/math_opt/storage/model_storage_types.h"
 
-namespace operations_research {
-namespace math_opt {
-
-void Objective::Maximize(const LinearExpression& objective) const {
-  SetObjective(objective, true);
-}
-
-void Objective::Minimize(const LinearExpression& objective) const {
-  SetObjective(objective, false);
-}
-
-void Objective::SetObjective(const LinearExpression& objective,
-                             bool is_maximize) const {
-  // LinearExpression that have no terms have a null model().
-  if (!objective.raw_terms().empty()) {
-    CHECK_EQ(objective.model(), model_)
-        << internal::kObjectsFromOtherIndexedModel;
-  }
-  model_->clear_objective();
-  model_->set_is_maximize(is_maximize);
-  model_->set_objective_offset(objective.offset());
-  for (auto [var, coef] : objective.raw_terms()) {
-    model_->set_linear_objective_coefficient(var, coef);
-  }
-}
-
-void Objective::Add(const LinearExpression& objective_terms) const {
-  // LinearExpression that have no terms have a null model().
-  if (!objective_terms.raw_terms().empty()) {
-    CHECK_EQ(objective_terms.model(), model_)
-        << internal::kObjectsFromOtherIndexedModel;
-  }
-  model_->set_objective_offset(objective_terms.offset() +
-                               model_->objective_offset());
-  for (auto [var, coef] : objective_terms.raw_terms()) {
-    model_->set_linear_objective_coefficient(
-        var, coef + model_->linear_objective_coefficient(var));
-  }
-}
+namespace operations_research::math_opt {
 
 LinearExpression Objective::AsLinearExpression() const {
-  LinearExpression result = model_->objective_offset();
-  for (const auto& [v, coef] : model_->linear_objective()) {
-    result += Variable(model_, v) * coef;
+  CHECK_EQ(storage()->num_quadratic_objective_terms(id_), 0)
+      << "The objective function contains quadratic terms and cannot be "
+         "represented as a LinearExpression";
+  LinearExpression objective = offset();
+  for (const auto [raw_var_id, coeff] : storage()->linear_objective(id_)) {
+    objective += coeff * Variable(storage(), raw_var_id);
+  }
+  return objective;
+}
+
+QuadraticExpression Objective::AsQuadraticExpression() const {
+  QuadraticExpression result = offset();
+  for (const auto& [v, coef] : storage()->linear_objective(id_)) {
+    result += coef * Variable(storage(), v);
+  }
+  for (const auto& [v1, v2, coef] : storage()->quadratic_objective_terms(id_)) {
+    result +=
+        QuadraticTerm(Variable(storage(), v1), Variable(storage(), v2), coef);
   }
   return result;
 }
 
-}  // namespace math_opt
-}  // namespace operations_research
+std::string Objective::ToString() const {
+  if (!is_primary() && !storage()->has_auxiliary_objective(*id_)) {
+    return std::string(kDeletedObjectiveDefaultDescription);
+  }
+  std::stringstream str;
+  str << AsQuadraticExpression();
+  return str.str();
+}
+
+std::ostream& operator<<(std::ostream& ostr, const Objective& objective) {
+  // TODO(b/170992529): handle quoting of invalid characters in the name.
+  const absl::string_view name = objective.name();
+  if (name.empty()) {
+    if (objective.is_primary()) {
+      ostr << "__primary_obj__";
+    } else {
+      ostr << "__aux_obj#" << *objective.id() << "__";
+    }
+  } else {
+    ostr << name;
+  }
+  return ostr;
+}
+
+}  // namespace operations_research::math_opt

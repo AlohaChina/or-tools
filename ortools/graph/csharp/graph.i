@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This .i file is only used in the open-source export to OR-Tools.
+// This .swig file is only used in the open-source export to OR-Tools.
 //
 // It exposes some of the C++ classes in ../, namely :
 // - SimpleMaxFlow, from ../max_flow.h
@@ -26,8 +26,6 @@
 %include "stdint.i"
 
 %include "ortools/base/base.i"
-
-%import "ortools/graph/ebert_graph.h"
 
 %{
 #include "ortools/graph/assignment.h"
@@ -46,6 +44,7 @@
 %unignore operations_research::SimpleMaxFlow::SimpleMaxFlow;
 %unignore operations_research::SimpleMaxFlow::~SimpleMaxFlow;
 %unignore operations_research::SimpleMaxFlow::AddArcWithCapacity;
+%unignore operations_research::SimpleMaxFlow::SetArcCapacity;
 %unignore operations_research::SimpleMaxFlow::Solve;
 %unignore operations_research::SimpleMaxFlow::NumNodes;
 %unignore operations_research::SimpleMaxFlow::NumArcs;
@@ -88,6 +87,7 @@
 %unignore operations_research::SimpleMinCostFlow::SimpleMinCostFlow;
 %unignore operations_research::SimpleMinCostFlow::~SimpleMinCostFlow;
 %unignore operations_research::SimpleMinCostFlow::AddArcWithCapacityAndUnitCost;
+%unignore operations_research::SimpleMinCostFlow::SetArcCapacity;
 %unignore operations_research::SimpleMinCostFlow::SetNodeSupply;
 %unignore operations_research::SimpleMinCostFlow::Solve;
 %unignore operations_research::SimpleMinCostFlow::SolveMaxFlowWithMinCost;

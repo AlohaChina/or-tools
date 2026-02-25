@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,13 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_GLOP_LP_SOLVER_H_
-#define OR_TOOLS_GLOP_LP_SOLVER_H_
+#ifndef ORTOOLS_GLOP_LP_SOLVER_H_
+#define ORTOOLS_GLOP_LP_SOLVER_H_
 
 #include <memory>
+#include <string>
 
 #include "ortools/glop/parameters.pb.h"
-#include "ortools/glop/preprocessor.h"
+#include "ortools/glop/revised_simplex.h"
 #include "ortools/lp_data/lp_data.h"
 #include "ortools/lp_data/lp_types.h"
 #include "ortools/util/logging.h"
@@ -31,11 +32,18 @@ class LPSolver {
  public:
   LPSolver();
 
+  // This type is neither copyable nor movable.
+  LPSolver(const LPSolver&) = delete;
+  LPSolver& operator=(const LPSolver&) = delete;
+
   // Sets and gets the solver parameters.
   // See the proto for an extensive documentation.
   void SetParameters(const GlopParameters& parameters);
   const GlopParameters& GetParameters() const;
   GlopParameters* GetMutableParameters();
+
+  // Returns a string that describes the version of the solver.
+  static std::string GlopVersion();
 
   // Solves the given linear program and returns the solve status. See the
   // ProblemStatus documentation for a description of the different values.
@@ -61,7 +69,7 @@ class LPSolver {
   // Puts the solver in a clean state.
   //
   // Calling Solve() for the first time, or calling Clear() then Solve() on the
-  // same problem is guaranted to be deterministic and to always give the same
+  // same problem is guaranteed to be deterministic and to always give the same
   // result, assuming that no time limit was specified.
   void Clear();
 
@@ -271,7 +279,9 @@ class LPSolver {
   int num_revised_simplex_iterations_;
 
   // The current ProblemSolution.
-  // TODO(user): use a ProblemSolution directly?
+  // TODO(user): use a ProblemSolution directly? Note, that primal_ray_,
+  // constraints_dual_ray_ and variable_bounds_dual_ray_ are not currently in
+  // ProblemSolution and are filled directly by RunRevisedSimplexIfNeeded().
   DenseRow primal_values_;
   DenseColumn dual_values_;
   VariableStatusRow variable_statuses_;
@@ -283,7 +293,7 @@ class LPSolver {
   // Quantities computed from the solution and the linear program.
   DenseRow reduced_costs_;
   DenseColumn constraint_activities_;
-  Fractional problem_objective_value_;
+  Fractional problem_objective_value_ = 0.0;
   bool may_have_multiple_solutions_;
   Fractional max_absolute_primal_infeasibility_;
   Fractional max_absolute_dual_infeasibility_;
@@ -293,11 +303,9 @@ class LPSolver {
 
   // The number of times Solve() was called. Used to number dump files.
   int num_solves_;
-
-  DISALLOW_COPY_AND_ASSIGN(LPSolver);
 };
 
 }  // namespace glop
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_GLOP_LP_SOLVER_H_
+#endif  // ORTOOLS_GLOP_LP_SOLVER_H_

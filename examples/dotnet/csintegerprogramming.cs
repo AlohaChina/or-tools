@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -103,7 +103,7 @@ public class CsIntegerProgramming
     {
         CppBridge.InitLogging("csintegerprogramming.cs");
         CppFlags flags = new CppFlags();
-        flags.logtostderr = true;
+        flags.stderrthreshold = 0;
         flags.log_prefix = false;
         CppBridge.SetFlags(flags);
 
@@ -117,6 +117,8 @@ public class CsIntegerProgramming
         RunIntegerProgrammingExample("SAT");
         Console.WriteLine("---- Linear programming example with GUROBI ----");
         RunIntegerProgrammingExample("GUROBI");
+        Console.WriteLine("---- Linear programming example with XPRESS ----");
+        RunIntegerProgrammingExample("XPRESS");
         Console.WriteLine("---- Integer programming example (Natural API) with GLPK ----");
         RunIntegerProgrammingExampleNaturalApi("GLPK");
         Console.WriteLine("---- Linear programming example (Natural API) with CBC ----");
@@ -127,5 +129,7 @@ public class CsIntegerProgramming
         RunIntegerProgrammingExampleNaturalApi("SAT");
         Console.WriteLine("---- Linear programming example (Natural API) with GUROBI ----");
         RunIntegerProgrammingExampleNaturalApi("GUROBI");
+        Console.WriteLine("---- Linear programming example (Natural API) with XPRESS ----");
+        RunIntegerProgrammingExampleNaturalApi("XPRESS");
     }
 }

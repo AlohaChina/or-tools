@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,6 +10,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package com.google.ortools.java;
 
 import com.google.ortools.Loader;
@@ -28,7 +29,7 @@ public class LinearProgramming {
       System.out.println("Could not create solver " + solverType);
       return;
     }
-    double infinity = java.lang.Double.POSITIVE_INFINITY;
+    double infinity = Double.POSITIVE_INFINITY;
     // x1, x2 and x3 are continuous non-negative variables.
     MPVariable x1 = solver.makeNumVar(0.0, infinity, "x1");
     MPVariable x2 = solver.makeNumVar(0.0, infinity, "x2");
@@ -63,7 +64,7 @@ public class LinearProgramming {
     System.out.println("Number of constraints = " + solver.numConstraints());
 
     if (printModel) {
-      String model = solver.exportModelAsLpFormat();
+      String model = solver.exportModelAsLpFormat(/* obfuscate= */ false);
       System.out.println(model);
     }
 
@@ -77,7 +78,7 @@ public class LinearProgramming {
 
     // Verify that the solution satisfies all constraints (when using solvers
     // others than GLOP_LINEAR_PROGRAMMING, this is highly recommended!).
-    if (!solver.verifySolution(/*tolerance=*/1e-7, /* log_errors= */ true)) {
+    if (!solver.verifySolution(/* tolerance= */ 1e-7, /* log_errors= */ true)) {
       System.err.println("The solution returned by the solver violated the"
           + " problem constraints by at least 1e-7");
       return;
@@ -114,5 +115,7 @@ public class LinearProgramming {
     runLinearProgrammingExample("GLOP", true);
     System.out.println("---- Linear programming example with CLP ----");
     runLinearProgrammingExample("CLP", false);
+    System.out.println("---- Linear programming example with XPRESS ----");
+    runLinearProgrammingExample("XPRESS_LP", false);
   }
 }

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 // Contains the definitions for all the GLOP algorithm parameters and their
 // default values.
 //
@@ -22,14 +21,16 @@ syntax = "proto2";
 
 package operations_research.glop;
 
-// next id = 68
+option java_package = "com.google.ortools.glop";
+option java_multiple_files = true;
+option csharp_namespace = "Google.OrTools.Glop";
+// next id = 73
 message GlopParameters {
-
   // Supported algorithms for scaling:
   // EQUILIBRATION - progressive scaling by row and column norms until the
   // marginal difference passes below a threshold.
-  // LINEAR_PROGRAM - finding optimal scale factors using
-  // a linear program in the log scale.
+  // LINEAR_PROGRAM - EXPERIMENTAL: finding optimal scale factors using a linear
+  // program in the log scale.
   enum ScalingAlgorithm {
     DEFAULT = 0;
     EQUILIBRATION = 1;
@@ -90,7 +91,6 @@ message GlopParameters {
     // Chapter 9.8.2.1
     MAROS = 3;
   }
-
 
   optional ScalingAlgorithm scaling_method = 57 [default = EQUILIBRATION];
 
@@ -372,7 +372,7 @@ message GlopParameters {
   // That is, the variable values are unchanged for the primal simplex or the
   // reduced cost are unchanged for the dual simplex. However, instead of doing
   // a step of length zero, it seems to be better on degenerate problems to do a
-  // small positive step. This is what is recommanded in the EXPAND procedure
+  // small positive step. This is what is recommended in the EXPAND procedure
   // described in:
   // P. E. Gill, W. Murray, M. A. Saunders, and M. H. Wright. "A practical anti-
   // cycling procedure for linearly constrained optimization".
@@ -403,6 +403,9 @@ message GlopParameters {
   // limit, they might of course yield different results because one will have
   // advanced farther than the other.
   optional int32 random_seed = 43 [default = 1];
+
+  // Whether to use absl::BitGen instead of MTRandom.
+  optional bool use_absl_random = 72 [default = false];
 
   // Number of threads in the OMP parallel sections. If left to 1, the code will
   // not create any OMP threads and will remain single-threaded.
@@ -472,4 +475,21 @@ message GlopParameters {
   // If presolve runs, include the pass that detects implied free variables.
   optional bool use_implied_free_preprocessor = 67 [default = true];
 
+  // Any finite values in the input LP must be below this threshold, otherwise
+  // the model will be reported invalid. This is needed to avoid floating point
+  // overflow when evaluating bounds * coeff for instance. In practice, users
+  // shouldn't use super large values in an LP. With the default threshold, even
+  // evaluating large constraint with variables at their bound shouldn't cause
+  // any overflow.
+  optional double max_valid_magnitude = 70 [default = 1e30];
+
+  // Value in the input LP lower than this will be ignored. This is similar to
+  // drop_tolerance but more aggressive as this is used before scaling. This is
+  // mainly here to avoid underflow and have simpler invariant in the code, like
+  // a * b == 0 iff a or b is zero and things like this.
+  optional double drop_magnitude = 71 [default = 1e-30];
+
+  // On some problem like stp3d or pds-100 this makes a huge difference in
+  // speed and number of iterations of the dual simplex.
+  optional bool dual_price_prioritize_norm = 69 [default = false];
 }

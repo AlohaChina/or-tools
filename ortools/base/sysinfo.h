@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,10 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_BASE_SYSINFO_H_
-#define OR_TOOLS_BASE_SYSINFO_H_
+#ifndef ORTOOLS_BASE_SYSINFO_H_
+#define ORTOOLS_BASE_SYSINFO_H_
 
-#include "ortools/base/basictypes.h"
+#include <cstdint>
 
 namespace operations_research {
 // Returns the memory usage of the process.
@@ -25,4 +25,4 @@ inline int64_t MemoryUsage(int unused) {
   return operations_research::GetProcessMemoryUsage();
 }
 
-#endif  // OR_TOOLS_BASE_SYSINFO_H_
+#endif  // ORTOOLS_BASE_SYSINFO_H_

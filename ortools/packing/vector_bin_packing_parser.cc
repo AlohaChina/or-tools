@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,17 +14,20 @@
 #include "ortools/packing/vector_bin_packing_parser.h"
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_split.h"
-#include "ortools/base/filelineiter.h"
+#include "absl/strings/string_view.h"
 #include "ortools/packing/vector_bin_packing.pb.h"
+#include "ortools/util/filelineiter.h"
 
 namespace operations_research {
 namespace packing {
 namespace vbp {
 
-bool VbpParser::ParseFile(const std::string& data_filename) {
+bool VbpParser::ParseFile(absl::string_view data_filename) {
   vbp_.Clear();
 
   load_status_ = DIMENSION_SECTION;
@@ -35,7 +38,7 @@ bool VbpParser::ParseFile(const std::string& data_filename) {
 
   // Checks status.
   if (load_status_ == ERROR_FOUND) {
-    LOG(INFO) << vbp_.DebugString();
+    LOG(INFO) << vbp_;
     return false;
   }
   return vbp_.item_size() == num_declared_items_;
@@ -104,13 +107,13 @@ void VbpParser::ProcessLine(const std::string& line) {
   }
 }
 
-int VbpParser::strtoint32(const std::string& word) {
+int VbpParser::strtoint32(absl::string_view word) {
   int result;
   CHECK(absl::SimpleAtoi(word, &result));
   return result;
 }
 
-int64_t VbpParser::strtoint64(const std::string& word) {
+int64_t VbpParser::strtoint64(absl::string_view word) {
   int64_t result;
   CHECK(absl::SimpleAtoi(word, &result));
   return result;

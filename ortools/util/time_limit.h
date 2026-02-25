@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,41 +11,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_UTIL_TIME_LIMIT_H_
-#define OR_TOOLS_UTIL_TIME_LIMIT_H_
+#ifndef ORTOOLS_UTIL_TIME_LIMIT_H_
+#define ORTOOLS_UTIL_TIME_LIMIT_H_
 
 #include <algorithm>
 #include <atomic>
-#include <cstdlib>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <string>
+#include <vector>
 
-#include "absl/base/port.h"
+#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
-#include "absl/memory/memory.h"
+#include "absl/flags/declare.h"
+#include "absl/flags/flag.h"
+#include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/clock.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
+#include "absl/time/time.h"
+#include "ortools/base/base_export.h"
 #include "ortools/base/timer.h"
+#include "ortools/base/types.h"
 #include "ortools/util/running_stat.h"
-#ifdef HAS_PERF_SUBSYSTEM
-#include "exegesis/exegesis/itineraries/perf_subsystem.h"
-#endif  // HAS_PERF_SUBSYSTEM
 
+#ifndef SWIG
 /**
  * Enables changing the behavior of the TimeLimit class to use -b usertime
  * instead of \b walltime. This is mainly useful for benchmarks.
  */
-ABSL_DECLARE_FLAG(bool, time_limit_use_usertime);
-
-/**
- * Adds support to measure the number of executed instructions in the TimeLimit
- * class.
- */
-ABSL_DECLARE_FLAG(bool, time_limit_use_instruction_count);
+OR_DLL ABSL_DECLARE_FLAG(bool, time_limit_use_usertime);
+#endif  // SWIG
 
 namespace operations_research {
 
@@ -59,12 +55,7 @@ namespace operations_research {
  * the deterministic time has to be advanced manually using the method
  * AdvanceDeterministicTime().
  *
- * The instruction counter keeps track of number of executed cpu instructions.
- * It uses Performance Monitoring Unit (PMU) counters to keep track of
- * instruction count.
- *
- * The call itself is as fast as CycleClock::Now() + a few trivial instructions,
- * unless the time_limit_use_instruction_count flag is set.
+ * The call itself is as fast as CycleClock::Now() + a few trivial instructions.
  *
  * The limit is very conservative: it returns true (i.e. the limit is reached)
  * when current_time + max(T, ε) >= limit_time, where ε is a small constant (see
@@ -103,40 +94,34 @@ namespace operations_research {
  */
 // TODO(user): The expression "deterministic time" should be replaced with
 //                 "number of operations" to avoid confusion with "real" time.
-class TimeLimit {
+class OR_DLL TimeLimit {
  public:
   static const double kSafetyBufferSeconds;  // See the .cc for the value.
   static const int kHistorySize;
 
   /**
-   * Sets the elapsed, the deterministic time and the instruction count limits.
+   * Sets the elapsed and the deterministic time.
    * The elapsed time is based on the wall time and the counter starts 'now'.
    * The deterministic time has to be manually advanced using the method
    * AdvanceDeterministicTime().
-   *
-   * Instruction count is the number of instructions executed. It is based on
-   * PMU counters and is not very acurate.
    *
    * Use an infinite limit value to ignore a limit.
    */
   explicit TimeLimit(
       double limit_in_seconds,
-      double deterministic_limit = std::numeric_limits<double>::infinity(),
-      double instruction_limit = std::numeric_limits<double>::infinity());
+      double deterministic_limit = std::numeric_limits<double>::infinity());
 
   TimeLimit() : TimeLimit(std::numeric_limits<double>::infinity()) {}
   TimeLimit(const TimeLimit&) = delete;
   TimeLimit& operator=(const TimeLimit&) = delete;
 
   /**
-   * Creates a time limit object that uses infinite time for wall time,
-   * deterministic time and instruction count limit.
+   * Creates a time limit object that uses infinite time for wall time and
+   * deterministic time.
    */
   static std::unique_ptr<TimeLimit> Infinite() {
-    return absl::make_unique<TimeLimit>(
-        std::numeric_limits<double>::infinity(),
-        std::numeric_limits<double>::infinity(),
-        std::numeric_limits<double>::infinity());
+    return std::make_unique<TimeLimit>(std::numeric_limits<double>::infinity(),
+                                       std::numeric_limits<double>::infinity());
   }
 
   /**
@@ -144,9 +129,8 @@ class TimeLimit {
    */
   static std::unique_ptr<TimeLimit> FromDeterministicTime(
       double deterministic_limit) {
-    return absl::make_unique<TimeLimit>(
-        std::numeric_limits<double>::infinity(), deterministic_limit,
-        std::numeric_limits<double>::infinity());
+    return std::make_unique<TimeLimit>(std::numeric_limits<double>::infinity(),
+                                       deterministic_limit);
   }
 
   /**
@@ -155,32 +139,12 @@ class TimeLimit {
    * is designed specifically to work with solver parameter protos, e.g.
    * \c BopParameters, \c MipParameters and \c SatParameters.
    */
-  // TODO(user): Support adding instruction count limit from parameters.
   template <typename Parameters>
   static std::unique_ptr<TimeLimit> FromParameters(
       const Parameters& parameters) {
-    return absl::make_unique<TimeLimit>(
-        parameters.max_time_in_seconds(), parameters.max_deterministic_time(),
-        std::numeric_limits<double>::infinity());
+    return std::make_unique<TimeLimit>(parameters.max_time_in_seconds(),
+                                       parameters.max_deterministic_time());
   }
-
-  /**
-   * Sets the instruction limit. We need this method since the static
-   * constructor to create time limit from parameters doesn't support setting
-   * instruction limit.
-   */
-  void SetInstructionLimit(double instruction_limit) {
-    instruction_limit_ = instruction_limit;
-  }
-
-  /**
-   * Returns the number of instructions executed since the creation of this
-   * object.
-   */
-  // TODO(user): Use an exact counter for counting instructions. The
-  // PMU counter returns the instruction count value as double since there may
-  // be sampling issues.
-  double ReadInstructionCounter();
 
   /**
    * Returns true when the external limit is true, or the deterministic time is
@@ -213,11 +177,6 @@ class TimeLimit {
   double GetDeterministicTimeLeft() const {
     return std::max(0.0, deterministic_limit_ - elapsed_deterministic_time_);
   }
-
-  /**
-   * Returns the number of instructions left to reach the limit.
-   */
-  double GetInstructionsLeft();
 
   /**
    * Advances the deterministic time. For reproducibility reasons, the
@@ -277,6 +236,19 @@ class TimeLimit {
   }
 
   /**
+   * Same as RegisterExternalBooleanAsLimit() but register a second Boolean.
+   * We have seen that in some situation two Booleans are required, but we
+   * haven't needed more than two yet.
+   *
+   * Note(user): It was also easier to just add a second one rather to refactor
+   * all clients to use a vector for instance.
+   */
+  void RegisterSecondaryExternalBooleanAsLimit(
+      std::atomic<bool>* external_boolean_as_limit) {
+    secondary_external_boolean_as_limit_ = external_boolean_as_limit;
+  }
+
+  /**
    * Returns the current external Boolean limit.
    */
   std::atomic<bool>* ExternalBooleanAsLimit() const {
@@ -289,7 +261,33 @@ class TimeLimit {
    */
   template <typename Parameters>
   void ResetLimitFromParameters(const Parameters& parameters);
-  void MergeWithGlobalTimeLimit(TimeLimit* other);
+
+  /**
+   * Sets time limits equal to the min of the current one and the passed limit.
+   * If the passed limit contain an external Boolean, replace the current one
+   * with it. Not that this does not change the secondary Boolean.
+   */
+  void MergeWithGlobalTimeLimit(const TimeLimit* other);
+
+  /**
+   * Overwrites the deterministic time limit with the new value.
+   */
+  void ChangeDeterministicLimit(double new_limit) {
+    deterministic_limit_ = new_limit;
+  }
+
+  /**
+   * Queries the deterministic time limit.
+   */
+  double GetDeterministicLimit() const { return deterministic_limit_; }
+
+  /**
+   * Clears the history of the times between calls to LimitReached(). One
+   * should call this method when the behavior of the code that checks the time
+   * limit changes in a way such that past intervals between checks are no
+   * longer representative of the future ones.
+   */
+  void ResetHistory() { running_max_.Reset(); }
 
   /**
    * Returns information about the time limit object in a human-readable form.
@@ -297,12 +295,7 @@ class TimeLimit {
   std::string DebugString() const;
 
  private:
-  void ResetTimers(double limit_in_seconds, double deterministic_limit,
-                   double instruction_limit);
-
-  std::string GetInstructionRetiredEventName() const {
-    return "inst_retired:any_p:u";
-  }
+  void ResetTimers(double limit_in_seconds, double deterministic_limit);
 
   mutable int64_t start_ns_;  // Not const! this is initialized after
                               // instruction counter initialization.
@@ -318,14 +311,8 @@ class TimeLimit {
   double deterministic_limit_;
   double elapsed_deterministic_time_;
 
-  std::atomic<bool>* external_boolean_as_limit_;
-
-#ifdef HAS_PERF_SUBSYSTEM
-  // PMU counter to help count the instructions.
-  exegesis::PerfSubsystem perf_subsystem_;
-#endif  // HAS_PERF_SUBSYSTEM
-  // Given limit in terms of number of instructions.
-  double instruction_limit_;
+  std::atomic<bool>* external_boolean_as_limit_ = nullptr;
+  std::atomic<bool>* secondary_external_boolean_as_limit_ = nullptr;
 
 #ifndef NDEBUG
   // Contains the values of the deterministic time counters.
@@ -358,33 +345,40 @@ class SharedTimeLimit {
   bool LimitReached() const {
     // Note, time_limit_->LimitReached() is not const, and changes internal
     // state of time_limit_, hence we need a writer's lock.
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
     return time_limit_->LimitReached();
   }
 
   void Stop() {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
     *stopped_ = true;
   }
 
   void UpdateLocalLimit(TimeLimit* local_limit) {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
     local_limit->MergeWithGlobalTimeLimit(time_limit_);
   }
 
   void AdvanceDeterministicTime(double deterministic_duration) {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
     time_limit_->AdvanceDeterministicTime(deterministic_duration);
   }
 
   double GetTimeLeft() const {
-    absl::ReaderMutexLock lock(&mutex_);
+    absl::ReaderMutexLock lock(mutex_);
     return time_limit_->GetTimeLeft();
   }
 
   double GetElapsedDeterministicTime() const {
-    absl::ReaderMutexLock lock(&mutex_);
+    absl::ReaderMutexLock lock(mutex_);
     return time_limit_->GetElapsedDeterministicTime();
+  }
+
+  std::atomic<bool>* ExternalBooleanAsLimit() const {
+    absl::ReaderMutexLock lock(mutex_);
+    // We can simply return the "external bool" and remain thread-safe because
+    // it's wrapped in std::atomic.
+    return time_limit_->ExternalBooleanAsLimit();
   }
 
  private:
@@ -433,6 +427,10 @@ class NestedTimeLimit {
   NestedTimeLimit(TimeLimit* base_time_limit, double limit_in_seconds,
                   double deterministic_limit);
 
+  // This type is neither copyable nor movable.
+  NestedTimeLimit(const NestedTimeLimit&) = delete;
+  NestedTimeLimit& operator=(const NestedTimeLimit&) = delete;
+
   /**
    * Updates elapsed deterministic time in the base time limit object.
    */
@@ -448,7 +446,7 @@ class NestedTimeLimit {
   template <typename Parameters>
   static std::unique_ptr<NestedTimeLimit> FromBaseTimeLimitAndParameters(
       TimeLimit* time_limit, const Parameters& parameters) {
-    return absl::make_unique<NestedTimeLimit>(
+    return std::make_unique<NestedTimeLimit>(
         time_limit, parameters.max_time_in_seconds(),
         parameters.max_deterministic_time());
   }
@@ -464,71 +462,63 @@ class NestedTimeLimit {
  private:
   TimeLimit* const base_time_limit_;
   TimeLimit time_limit_;
+};
 
-  DISALLOW_COPY_AND_ASSIGN(NestedTimeLimit);
+class TimeLimitCheckEveryNCalls {
+ public:
+  TimeLimitCheckEveryNCalls(int N, TimeLimit* time_limit)
+      : time_limit_(time_limit), frequency_(N) {}
+
+  bool LimitReached() {
+    if (count_++ == frequency_) {
+      if (time_limit_->LimitReached()) {
+        stopped_ = true;
+        return true;
+      }
+      count_ = 0;
+    }
+    return stopped_;
+  }
+
+ private:
+  TimeLimit* time_limit_;
+  bool stopped_ = false;
+  int count_ = 0;
+  const int frequency_;
 };
 
 // ################## Implementations below #####################
 
-inline TimeLimit::TimeLimit(double limit_in_seconds, double deterministic_limit,
-                            double instruction_limit)
-    : safety_buffer_ns_(static_cast<int64_t>(kSafetyBufferSeconds * 1e9)),
-      running_max_(kHistorySize),
-      external_boolean_as_limit_(nullptr) {
-  ResetTimers(limit_in_seconds, deterministic_limit, instruction_limit);
-}
-
 inline void TimeLimit::ResetTimers(double limit_in_seconds,
-                                   double deterministic_limit,
-                                   double instruction_limit) {
+                                   double deterministic_limit) {
   elapsed_deterministic_time_ = 0.0;
   deterministic_limit_ = deterministic_limit;
-  instruction_limit_ = instruction_limit;
 
   if (absl::GetFlag(FLAGS_time_limit_use_usertime)) {
     user_timer_.Start();
     limit_in_seconds_ = limit_in_seconds;
   }
-#ifdef HAS_PERF_SUBSYSTEM
-  if (absl::GetFlag(FLAGS_time_limit_use_instruction_count)) {
-    perf_subsystem_.CleanUp();
-    perf_subsystem_.AddEvent(GetInstructionRetiredEventName());
-    perf_subsystem_.StartCollecting();
-  }
-#endif  // HAS_PERF_SUBSYSTEM
   start_ns_ = absl::GetCurrentTimeNanos();
   last_ns_ = start_ns_;
-  limit_ns_ = limit_in_seconds >= 1e-9 * (kint64max - start_ns_)
-                  ? kint64max
-                  : static_cast<int64_t>(limit_in_seconds * 1e9) + start_ns_;
+  // Note that duration arithmetic is properly saturated.
+  limit_ns_ = (absl::Seconds(limit_in_seconds) + absl::Nanoseconds(start_ns_)) /
+              absl::Nanoseconds(1);
 }
 
 template <typename Parameters>
 inline void TimeLimit::ResetLimitFromParameters(const Parameters& parameters) {
   ResetTimers(parameters.max_time_in_seconds(),
-              parameters.max_deterministic_time(),
-              std::numeric_limits<double>::infinity());
+              parameters.max_deterministic_time());
 }
 
-inline void TimeLimit::MergeWithGlobalTimeLimit(TimeLimit* other) {
+inline void TimeLimit::MergeWithGlobalTimeLimit(const TimeLimit* other) {
   if (other == nullptr) return;
   ResetTimers(
       std::min(GetTimeLeft(), other->GetTimeLeft()),
-      std::min(GetDeterministicTimeLeft(), other->GetDeterministicTimeLeft()),
-      std::numeric_limits<double>::infinity());
+      std::min(GetDeterministicTimeLeft(), other->GetDeterministicTimeLeft()));
   if (other->ExternalBooleanAsLimit() != nullptr) {
     RegisterExternalBooleanAsLimit(other->ExternalBooleanAsLimit());
   }
-}
-
-inline double TimeLimit::ReadInstructionCounter() {
-#ifdef HAS_PERF_SUBSYSTEM
-  if (absl::GetFlag(FLAGS_time_limit_use_instruction_count)) {
-    return perf_subsystem_.ReadCounters().GetScaledOrDie(
-        GetInstructionRetiredEventName());
-  }
-#endif  // HAS_PERF_SUBSYSTEM
-  return 0;
 }
 
 inline bool TimeLimit::LimitReached() {
@@ -536,16 +526,14 @@ inline bool TimeLimit::LimitReached() {
       external_boolean_as_limit_->load()) {
     return true;
   }
+  if (secondary_external_boolean_as_limit_ != nullptr &&
+      secondary_external_boolean_as_limit_->load()) {
+    return true;
+  }
 
   if (GetDeterministicTimeLeft() <= 0.0) {
     return true;
   }
-
-#ifdef HAS_PERF_SUBSYSTEM
-  if (ReadInstructionCounter() >= instruction_limit_) {
-    return true;
-  }
-#endif  // HAS_PERF_SUBSYSTEM
 
   const int64_t current_ns = absl::GetCurrentTimeNanos();
   running_max_.Add(std::max(safety_buffer_ns_, current_ns - last_ns_));
@@ -580,10 +568,6 @@ inline double TimeLimit::GetTimeLeft() const {
   }
 }
 
-inline double TimeLimit::GetInstructionsLeft() {
-  return std::max(instruction_limit_ - ReadInstructionCounter(), 0.0);
-}
-
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_UTIL_TIME_LIMIT_H_
+#endif  // ORTOOLS_UTIL_TIME_LIMIT_H_

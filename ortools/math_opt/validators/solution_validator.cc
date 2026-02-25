@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,63 +17,35 @@
 #include <limits>
 #include <string>
 
-#include "ortools/base/integral_types.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "ortools/base/status_builder.h"
+#include "ortools/base/status_macros.h"
 #include "ortools/math_opt/core/math_opt_proto_utils.h"
 #include "ortools/math_opt/core/model_summary.h"
 #include "ortools/math_opt/core/sparse_vector_view.h"
 #include "ortools/math_opt/model_parameters.pb.h"
-#include "ortools/math_opt/result.pb.h"
 #include "ortools/math_opt/solution.pb.h"
 #include "ortools/math_opt/sparse_containers.pb.h"
 #include "ortools/math_opt/validators/ids_validator.h"
 #include "ortools/math_opt/validators/scalar_validator.h"
 #include "ortools/math_opt/validators/sparse_vector_validator.h"
-#include "ortools/base/status_macros.h"
 
 namespace operations_research {
 namespace math_opt {
 namespace {
 
-constexpr double kInf = std::numeric_limits<double>::infinity();
-
-}  // namespace
-
-absl::Status ValidateResult(const SolveResultProto& result,
-                            const ModelSolveParametersProto& parameters,
-                            const ModelSummary& model_summary) {
-  for (int i = 0; i < result.primal_solutions_size(); ++i) {
-    RETURN_IF_ERROR(ValidatePrimalSolution(result.primal_solutions(i),
-                                           parameters.primal_variables_filter(),
-                                           model_summary))
-        << "Invalid primal_solutions[" << i << "]";
+absl::Status ValidateSolutionStatus(const SolutionStatusProto& status) {
+  if (!SolutionStatusProto_IsValid(status)) {
+    return absl::InvalidArgumentError(absl::StrCat("status = ", status));
   }
-  for (int i = 0; i < result.primal_rays_size(); ++i) {
-    RETURN_IF_ERROR(ValidatePrimalRay(result.primal_rays(i),
-                                      parameters.primal_variables_filter(),
-                                      model_summary))
-        << "Invalid primal_rays[" << i << "]";
+  if (status == SOLUTION_STATUS_UNSPECIFIED) {
+    return absl::InvalidArgumentError("status = SOLUTION_STATUS_UNSPECIFIED");
   }
-  for (int i = 0; i < result.dual_solutions_size(); ++i) {
-    RETURN_IF_ERROR(ValidateDualSolution(result.dual_solutions(i), parameters,
-                                         model_summary))
-        << "Invalid dual_solutions[" << i << "]";
-  }
-  for (int i = 0; i < result.dual_rays_size(); ++i) {
-    RETURN_IF_ERROR(
-        ValidateDualRay(result.dual_rays(i), parameters, model_summary))
-        << "Invalid dual_rays[" << i << "]";
-  }
-  for (int i = 0; i < result.basis_size(); ++i) {
-    RETURN_IF_ERROR(ValidateBasis(result.basis(i), model_summary));
-  }
-
-  // TODO(b/174345677): validates all other contracts of the result (we have one
-  // solution when the termination_reason says so, ...)
-
   return absl::OkStatus();
 }
+
+}  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 // Solutions & Rays
@@ -142,14 +114,78 @@ absl::Status IsValidSolutionVector(const SparseDoubleVectorProto& vector,
 
 }  // namespace
 
+absl::Status ValidateSolution(const SolutionProto& solution,
+                              const ModelSolveParametersProto& parameters,
+                              const ModelSummary& model_summary) {
+  if (!solution.has_primal_solution() && !solution.has_dual_solution() &&
+      !solution.has_basis()) {
+    return absl::InvalidArgumentError("empty solution");
+  }
+  if (solution.has_primal_solution()) {
+    RETURN_IF_ERROR(ValidatePrimalSolution(solution.primal_solution(),
+                                           parameters.variable_values_filter(),
+                                           model_summary))
+        << "invalid primal_solution";
+  }
+  if (solution.has_dual_solution()) {
+    RETURN_IF_ERROR(ValidateDualSolution(solution.dual_solution(), parameters,
+                                         model_summary))
+        << "invalid dual_solution";
+  }
+  if (solution.has_basis()) {
+    RETURN_IF_ERROR(ValidateBasis(solution.basis(), model_summary))
+        << "invalid basis";
+  }
+  // TODO(b/204457524): consider checking equality of statuses for single-sided
+  // LPs.
+  if (solution.has_basis() && solution.has_dual_solution()) {
+    if (solution.basis().basic_dual_feasibility() == SOLUTION_STATUS_FEASIBLE &&
+        solution.dual_solution().feasibility_status() !=
+            SOLUTION_STATUS_FEASIBLE) {
+      return absl::InvalidArgumentError(
+          "incompatible basis and dual solution: basis is dual feasible, but "
+          "dual solution is not feasible");
+    }
+    if (solution.dual_solution().feasibility_status() ==
+            SOLUTION_STATUS_INFEASIBLE &&
+        solution.basis().basic_dual_feasibility() !=
+            SOLUTION_STATUS_INFEASIBLE) {
+      return absl::InvalidArgumentError(
+          "incompatible basis and dual solution: dual solution is infeasible, "
+          "but basis is not dual infeasible");
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ValidatePrimalSolutionVector(const SparseDoubleVectorProto& vector,
+                                          const SparseVectorFilterProto& filter,
+                                          const ModelSummary& model_summary) {
+  RETURN_IF_ERROR(
+      IsValidSolutionVector(vector, filter, model_summary.variables));
+  return absl::OkStatus();
+}
+
 absl::Status ValidatePrimalSolution(const PrimalSolutionProto& primal_solution,
                                     const SparseVectorFilterProto& filter,
                                     const ModelSummary& model_summary) {
-  RETURN_IF_ERROR(IsValidSolutionVector(primal_solution.variable_values(),
-                                        filter, model_summary.variables))
-      << "Invalid PrimalSolutionProto.variable_values";
+  RETURN_IF_ERROR(ValidateSolutionStatus(primal_solution.feasibility_status()))
+      << "invalid PrimalSolutionProto.feasibility_status";
+  RETURN_IF_ERROR(ValidatePrimalSolutionVector(
+      primal_solution.variable_values(), filter, model_summary))
+      << "invalid PrimalSolutionProto.variable_values";
   RETURN_IF_ERROR(CheckScalarNoNanNoInf(primal_solution.objective_value()))
-      << "Invalid PrimalSolutionProto.objective_value";
+      << "invalid PrimalSolutionProto.objective_value";
+  for (const auto [id, obj_value] :
+       primal_solution.auxiliary_objective_values()) {
+    if (!model_summary.auxiliary_objectives.HasId(id)) {
+      return util::InvalidArgumentErrorBuilder()
+             << "unrecognized auxiliary objective ID: " << id
+             << "; invalid PrimalSolutionProto.auxiliary_objective_values";
+    }
+    RETURN_IF_ERROR(CheckScalarNoNanNoInf(obj_value))
+        << "invalid PrimalSolutionProto.auxiliary_objective_values";
+  }
   return absl::OkStatus();
 }
 
@@ -158,37 +194,39 @@ absl::Status ValidatePrimalRay(const PrimalRayProto& primal_ray,
                                const ModelSummary& model_summary) {
   RETURN_IF_ERROR(IsValidSolutionVector(primal_ray.variable_values(), filter,
                                         model_summary.variables))
-      << "Invalid PrimalRayProto.variable_values";
+      << "invalid PrimalRayProto.variable_values";
   return absl::OkStatus();
 }
 
 absl::Status ValidateDualSolution(const DualSolutionProto& dual_solution,
                                   const ModelSolveParametersProto& parameters,
                                   const ModelSummary& model_summary) {
-  RETURN_IF_ERROR(IsValidSolutionVector(
-      dual_solution.dual_values(), parameters.dual_linear_constraints_filter(),
-      model_summary.linear_constraints))
-      << "Invalid DualSolutionProto.dual_values";
+  RETURN_IF_ERROR(ValidateSolutionStatus(dual_solution.feasibility_status()))
+      << "invalid DualSolutionProto.feasibility_status";
+  RETURN_IF_ERROR(IsValidSolutionVector(dual_solution.dual_values(),
+                                        parameters.dual_values_filter(),
+                                        model_summary.linear_constraints))
+      << "invalid DualSolutionProto.dual_values";
   RETURN_IF_ERROR(IsValidSolutionVector(dual_solution.reduced_costs(),
-                                        parameters.dual_variables_filter(),
+                                        parameters.reduced_costs_filter(),
                                         model_summary.variables))
-      << "Invalid DualSolutionProto.reduced_costs";
+      << "invalid DualSolutionProto.reduced_costs";
   RETURN_IF_ERROR(CheckScalarNoNanNoInf(dual_solution.objective_value()))
-      << "Invalid DualSolutionProto.objective_value";
+      << "invalid DualSolutionProto.objective_value";
   return absl::OkStatus();
 }
 
 absl::Status ValidateDualRay(const DualRayProto& dual_ray,
                              const ModelSolveParametersProto& parameters,
                              const ModelSummary& model_summary) {
-  RETURN_IF_ERROR(IsValidSolutionVector(
-      dual_ray.dual_values(), parameters.dual_linear_constraints_filter(),
-      model_summary.linear_constraints))
-      << "Invalid DualRayProto.dual_values";
+  RETURN_IF_ERROR(IsValidSolutionVector(dual_ray.dual_values(),
+                                        parameters.dual_values_filter(),
+                                        model_summary.linear_constraints))
+      << "invalid DualRayProto.dual_values";
   RETURN_IF_ERROR(IsValidSolutionVector(dual_ray.reduced_costs(),
-                                        parameters.dual_variables_filter(),
+                                        parameters.reduced_costs_filter(),
                                         model_summary.variables))
-      << "Invalid DualRayProto.reduced_costs";
+      << "invalid DualRayProto.reduced_costs";
   return absl::OkStatus();
 }
 
@@ -200,20 +238,25 @@ absl::Status SparseBasisStatusVectorIsValid(
     const SparseVectorView<int>& status_vector_view) {
   RETURN_IF_ERROR(CheckIdsAndValues(status_vector_view));
   for (auto [id, value] : status_vector_view) {
-    if (!BasisStatus_IsValid(value)) {
+    if (!BasisStatusProto_IsValid(value)) {
       return absl::InvalidArgumentError(
-          absl::StrCat("Invalid status: ", value, " for id ", id));
+          absl::StrCat("invalid status: ", value, " for id ", id));
     }
-    if (value == BasisStatus::INVALID) {
+    if (value == BASIS_STATUS_UNSPECIFIED) {
       return absl::InvalidArgumentError(
-          absl::StrCat("Found BasisStatus::INVALID for id ", id));
+          absl::StrCat("found BASIS_STATUS_UNSPECIFIED for id ", id));
     }
   }
   return absl::OkStatus();
 }
 
 absl::Status ValidateBasis(const BasisProto& basis,
-                           const ModelSummary& model_summary) {
+                           const ModelSummary& model_summary,
+                           const bool check_dual_feasibility) {
+  if (check_dual_feasibility) {
+    RETURN_IF_ERROR(ValidateSolutionStatus(basis.basic_dual_feasibility()))
+        << "invalid BasisProto.basic_dual_feasibility";
+  }
   const auto constraint_status_view = MakeView(basis.constraint_status());
   const auto variable_status_view = MakeView(basis.variable_status());
   RETURN_IF_ERROR(SparseBasisStatusVectorIsValid(constraint_status_view))
@@ -230,18 +273,18 @@ absl::Status ValidateBasis(const BasisProto& basis,
 
   int non_basic_variables = 0;
   for (const auto [id, value] : constraint_status_view) {
-    if (value != BasisStatus::BASIC) {
+    if (value != BASIS_STATUS_BASIC) {
       non_basic_variables++;
     }
   }
   for (auto [id, value] : variable_status_view) {
-    if (value != BasisStatus::BASIC) {
+    if (value != BASIS_STATUS_BASIC) {
       non_basic_variables++;
     }
   }
   if (non_basic_variables != model_summary.variables.Size()) {
     return absl::InvalidArgumentError(absl::StrCat(
-        "Inconsistent number of non-basic variable+constraints: ",
+        "inconsistent number of non-basic variable+constraints: ",
         non_basic_variables, ", variables: ", model_summary.variables.Size()));
   }
   return absl::OkStatus();

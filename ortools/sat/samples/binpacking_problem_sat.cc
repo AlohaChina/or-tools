@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,7 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// [START program]
+#include <stdlib.h>
+
+#include <vector>
+
+#include "absl/base/log_severity.h"
+#include "absl/log/globals.h"
+#include "ortools/base/init_google.h"
+#include "ortools/base/logging.h"
 #include "ortools/sat/cp_model.h"
+#include "ortools/sat/cp_model.pb.h"
+#include "ortools/sat/cp_model_solver.h"
 
 namespace operations_research {
 namespace sat {
@@ -70,8 +81,7 @@ void BinpackingProblemSat() {
     // slack[b] => load[b] <= safe_capacity.
     cp_model.AddLessOrEqual(load[b], safe_capacity).OnlyEnforceIf(slacks[b]);
     // not(slack[b]) => load[b] > safe_capacity.
-    cp_model.AddGreaterThan(load[b], safe_capacity)
-        .OnlyEnforceIf(Not(slacks[b]));
+    cp_model.AddGreaterThan(load[b], safe_capacity).OnlyEnforceIf(~slacks[b]);
   }
 
   // Maximize sum of slacks.
@@ -85,8 +95,10 @@ void BinpackingProblemSat() {
 }  // namespace sat
 }  // namespace operations_research
 
-int main() {
+int main(int argc, char* argv[]) {
+  InitGoogle(argv[0], &argc, &argv, true);
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
   operations_research::sat::BinpackingProblemSat();
-
   return EXIT_SUCCESS;
 }
+// [END program]

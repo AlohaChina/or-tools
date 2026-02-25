@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -68,7 +68,7 @@ public class AssignmentTaskSizesMip {
     MPVariable[][] x = new MPVariable[numWorkers][numTasks];
     for (int worker : allWorkers) {
       for (int task : allTasks) {
-        x[worker][task] = solver.makeBoolVar("x["+worker+","+task+"]");
+        x[worker][task] = solver.makeBoolVar("x[" + worker + "," + task + "]");
       }
     }
     // [END variables]
@@ -118,8 +118,8 @@ public class AssignmentTaskSizesMip {
           // Test if x[i][j] is 0 or 1 (with tolerance for floating point
           // arithmetic).
           if (x[worker][task].solutionValue() > 0.5) {
-            System.out.println(
-                "Worker " + worker + " assigned to task " + task + ".  Cost: " + costs[worker][task]);
+            System.out.println("Worker " + worker + " assigned to task " + task
+                + ".  Cost: " + costs[worker][task]);
           }
         }
       }

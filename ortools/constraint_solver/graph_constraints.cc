@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -23,8 +23,9 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
-#include "ortools/base/integral_types.h"
+#include "absl/types/span.h"
 #include "ortools/base/logging.h"
+#include "ortools/base/types.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/saturated_arithmetic.h"
@@ -48,7 +49,7 @@ namespace operations_research {
 namespace {
 class NoCycle : public Constraint {
  public:
-  NoCycle(Solver* const s, const std::vector<IntVar*>& nexts,
+  NoCycle(Solver* s, const std::vector<IntVar*>& nexts,
           const std::vector<IntVar*>& active, Solver::IndexFilter1 sink_handler,
           bool assume_paths);
   ~NoCycle() override {}
@@ -626,7 +627,8 @@ Constraint* Solver::MakeNoCycle(const std::vector<IntVar*>& nexts,
     const int64_t size = nexts.size();
     sink_handler = [size](int64_t index) { return index >= size; };
   }
-  return RevAlloc(new NoCycle(this, nexts, active, sink_handler, assume_paths));
+  return RevAlloc(
+      new NoCycle(this, nexts, active, std::move(sink_handler), assume_paths));
 }
 
 Constraint* Solver::MakeNoCycle(const std::vector<IntVar*>& nexts,
@@ -649,7 +651,7 @@ Constraint* Solver::MakeSubCircuit(const std::vector<IntVar*>& nexts) {
 namespace {
 class BasePathCumul : public Constraint {
  public:
-  BasePathCumul(Solver* const s, const std::vector<IntVar*>& nexts,
+  BasePathCumul(Solver* s, const std::vector<IntVar*>& nexts,
                 const std::vector<IntVar*>& active,
                 const std::vector<IntVar*>& cumuls);
   ~BasePathCumul() override {}
@@ -1134,7 +1136,7 @@ class DelayedPathCumul : public Constraint {
 
 class IndexEvaluator2PathCumul : public BasePathCumul {
  public:
-  IndexEvaluator2PathCumul(Solver* const s, const std::vector<IntVar*>& nexts,
+  IndexEvaluator2PathCumul(Solver* s, const std::vector<IntVar*>& nexts,
                            const std::vector<IntVar*>& active,
                            const std::vector<IntVar*>& cumuls,
                            Solver::IndexEvaluator2 transit_evaluator);
@@ -1195,8 +1197,7 @@ bool IndexEvaluator2PathCumul::AcceptLink(int i, int j) const {
 
 class IndexEvaluator2SlackPathCumul : public BasePathCumul {
  public:
-  IndexEvaluator2SlackPathCumul(Solver* const s,
-                                const std::vector<IntVar*>& nexts,
+  IndexEvaluator2SlackPathCumul(Solver* s, const std::vector<IntVar*>& nexts,
                                 const std::vector<IntVar*>& active,
                                 const std::vector<IntVar*>& cumuls,
                                 const std::vector<IntVar*>& slacks,
@@ -1340,7 +1341,7 @@ namespace {
 class PathConnectedConstraint : public Constraint {
  public:
   PathConnectedConstraint(Solver* solver, std::vector<IntVar*> nexts,
-                          const std::vector<int64_t>& sources,
+                          absl::Span<const int64_t> sources,
                           std::vector<int64_t> sinks,
                           std::vector<IntVar*> status)
       : Constraint(solver),
@@ -1405,7 +1406,7 @@ class PathConnectedConstraint : public Constraint {
     }
   }
   void EvaluatePath(int path) {
-    touched_.SparseClearAll();
+    touched_.ResetAllToFalse();
     int64_t source = sources_[path];
     const int64_t end = sinks_[path];
     while (source != end) {
@@ -1453,7 +1454,7 @@ class PathTransitPrecedenceConstraint : public Constraint {
   };
   PathTransitPrecedenceConstraint(
       Solver* solver, std::vector<IntVar*> nexts, std::vector<IntVar*> transits,
-      const std::vector<std::pair<int, int>>& precedences,
+      absl::Span<const std::pair<int, int>> precedences,
       absl::flat_hash_map<int, PrecedenceType> precedence_types)
       : Constraint(solver),
         nexts_(std::move(nexts)),
@@ -1607,7 +1608,7 @@ class PathTransitPrecedenceConstraint : public Constraint {
 
 Constraint* MakePathTransitTypedPrecedenceConstraint(
     Solver* solver, std::vector<IntVar*> nexts, std::vector<IntVar*> transits,
-    const std::vector<std::pair<int, int>>& precedences,
+    absl::Span<const std::pair<int, int>> precedences,
     absl::flat_hash_map<int, PathTransitPrecedenceConstraint::PrecedenceType>
         precedence_types) {
   if (precedences.empty()) {
@@ -1629,8 +1630,8 @@ Constraint* Solver::MakePathPrecedenceConstraint(
 Constraint* Solver::MakePathPrecedenceConstraint(
     std::vector<IntVar*> nexts,
     const std::vector<std::pair<int, int>>& precedences,
-    const std::vector<int>& lifo_path_starts,
-    const std::vector<int>& fifo_path_starts) {
+    absl::Span<const int> lifo_path_starts,
+    absl::Span<const int> fifo_path_starts) {
   absl::flat_hash_map<int, PathTransitPrecedenceConstraint::PrecedenceType>
       precedence_types;
   for (int start : lifo_path_starts) {
@@ -1649,4 +1650,141 @@ Constraint* Solver::MakePathTransitPrecedenceConstraint(
   return MakePathTransitTypedPrecedenceConstraint(
       this, std::move(nexts), std::move(transits), precedences, {{}});
 }
+
+namespace {
+
+class PathEnergyCostConstraint : public Constraint {
+ public:
+  PathEnergyCostConstraint(
+      Solver* solver,
+      Solver::PathEnergyCostConstraintSpecification specification)
+      : Constraint(solver), specification_(std::move(specification)) {
+    const int num_nexts = specification_.nexts.size();
+    DCHECK_EQ(num_nexts, specification_.distances.size());
+
+    const int num_paths = specification_.path_energy_costs.size();
+    DCHECK_EQ(num_paths, specification_.costs.size());
+    DCHECK_EQ(num_paths, specification_.path_used_when_empty.size());
+    DCHECK_EQ(num_paths, specification_.path_starts.size());
+    DCHECK_EQ(num_paths, specification_.path_ends.size());
+
+    const int num_nodes = specification_.forces.size();
+    DCHECK_EQ(num_nodes, specification_.paths.size());
+  }
+
+  void Post() override;
+  void InitialPropagate() override;
+
+ private:
+  void NodeDispatcher(int node);
+  void PropagatePath(int path);
+  Solver::PathEnergyCostConstraintSpecification specification_;
+  std::vector<Demon*> path_demons_;
+};
+
+// This constraint avoids unnecessary work by grouping per-path calls
+// after all per-node calls have triggered.
+void PathEnergyCostConstraint::Post() {
+  // path demons are delayed, to be run after all node demons.
+  const int num_paths = specification_.path_energy_costs.size();
+  path_demons_.resize(num_paths, nullptr);
+  for (int path = 0; path < num_paths; ++path) {
+    // If unit cost is 0, initial propagation takes care of setting the cost
+    // to 0, no need to register a demon.
+    const auto& cost = specification_.path_energy_costs[path];
+    if (cost.IsNull()) continue;
+    path_demons_[path] = MakeDelayedConstraintDemon1(
+        solver(), this, &PathEnergyCostConstraint::PropagatePath,
+        "PropagatePath", path);
+  }
+  // Node demons are not delayed, so they are all called before path demons.
+  const int num_nodes = specification_.forces.size();
+  const int num_nexts = specification_.nexts.size();
+  for (int node = 0; node < num_nodes; ++node) {
+    auto* demon = MakeConstraintDemon1(
+        solver(), this, &PathEnergyCostConstraint::NodeDispatcher,
+        "NodeDispatcher", node);
+    specification_.forces[node]->WhenRange(demon);
+    specification_.paths[node]->WhenBound(demon);
+    if (node < num_nexts) {
+      specification_.nexts[node]->WhenBound(demon);
+      specification_.distances[node]->WhenRange(demon);
+    }
+  }
+}
+
+void PathEnergyCostConstraint::InitialPropagate() {
+  const int num_paths = specification_.path_energy_costs.size();
+  for (int path = 0; path < num_paths; ++path) {
+    const auto& cost = specification_.path_energy_costs[path];
+    if (cost.IsNull()) {
+      specification_.costs[path]->SetValue(0);
+    } else {
+      PropagatePath(path);
+    }
+  }
+}
+
+// When a node has its path decided, schedule path propagation.
+void PathEnergyCostConstraint::NodeDispatcher(int node) {
+  if (!specification_.paths[node]->Bound()) return;
+  const int path = specification_.paths[node]->Min();
+  if (path < 0) return;
+  if (path_demons_[path] == nullptr) return;
+  EnqueueDelayedDemon(path_demons_[path]);
+}
+
+// Propagate only forces, distance -> energy.
+void PathEnergyCostConstraint::PropagatePath(int path) {
+  // Compute energy along mandatory path.
+  const auto& [threshold, cost_per_unit_below, cost_per_unit_above] =
+      specification_.path_energy_costs[path];
+  int64_t energy_below_min = 0;
+  int64_t energy_below_max = 0;
+  int64_t energy_above_min = 0;
+  int64_t energy_above_max = 0;
+  int current = specification_.path_starts[path];
+  const int num_nodes = specification_.nexts.size();
+  int num_nonend_nodes = 0;
+  while (current < num_nodes) {
+    ++num_nonend_nodes;
+    if (!specification_.nexts[current]->Bound()) break;
+    const int next = specification_.nexts[current]->Min();
+    // Energy += force * distance.
+    const int64_t distance_min = specification_.distances[current]->Min();
+    const int64_t distance_max = specification_.distances[current]->Max();
+    DCHECK_GE(distance_min, 0);  // Bounds are correct when distance is >= 0.
+    const IntVar* force = specification_.forces[next];
+    CapAddTo(CapProd(std::min(threshold, force->Min()), distance_min),
+             &energy_below_min);
+    CapAddTo(CapProd(std::min(threshold, force->Max()), distance_max),
+             &energy_below_max);
+    CapAddTo(CapProd(std::max<int64_t>(0, CapSub(force->Min(), threshold)),
+                     distance_min),
+             &energy_above_min);
+    CapAddTo(CapProd(std::max<int64_t>(0, CapSub(force->Max(), threshold)),
+                     distance_max),
+             &energy_above_max);
+    current = next;
+  }
+  if (current == specification_.path_ends[path]) {
+    if (num_nonend_nodes == 1 && !specification_.path_used_when_empty[path]) {
+      specification_.costs[path]->SetValue(0);
+    } else {
+      specification_.costs[path]->SetRange(
+          CapAdd(CapProd(energy_below_min, cost_per_unit_below),
+                 CapProd(energy_above_min, cost_per_unit_above)),
+          CapAdd(CapProd(energy_below_max, cost_per_unit_below),
+                 CapProd(energy_above_max, cost_per_unit_above)));
+    }
+  }
+}
+
+}  // namespace
+
+Constraint* Solver::MakePathEnergyCostConstraint(
+    PathEnergyCostConstraintSpecification specification) {
+  return RevAlloc(new PathEnergyCostConstraint(this, std::move(specification)));
+}
+
 }  // namespace operations_research

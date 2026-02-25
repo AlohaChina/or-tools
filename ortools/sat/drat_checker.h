@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,24 +11,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_DRAT_CHECKER_H_
-#define OR_TOOLS_SAT_DRAT_CHECKER_H_
+#ifndef ORTOOLS_SAT_DRAT_CHECKER_H_
+#define ORTOOLS_SAT_DRAT_CHECKER_H_
 
+#include <stddef.h>
+
+#include <cstddef>
 #include <cstdint>
-#include <memory>
+#include <limits>
+#include <string>
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/types/span.h"
-#include "ortools/base/int_type.h"
 #include "ortools/base/strong_vector.h"
 #include "ortools/sat/sat_base.h"
+#include "ortools/util/strong_integers.h"
 
 namespace operations_research {
 namespace sat {
 
 // Index of a clause (>= 0).
-DEFINE_INT_TYPE(ClauseIndex, int);
+DEFINE_STRONG_INDEX_TYPE(ClauseIndex);
 const ClauseIndex kNoClauseIndex(-1);
 
 // DRAT is a SAT proof format that allows a simple program to check that a
@@ -41,39 +45,38 @@ const ClauseIndex kNoClauseIndex(-1);
 class DratChecker {
  public:
   DratChecker();
-  ~DratChecker() {}
+  ~DratChecker() = default;
 
-  // Returns the number of Boolean variables used in the problem and infered
+  // Returns the number of Boolean variables used in the problem and inferred
   // clauses.
   int num_variables() const { return num_variables_; }
 
   // Adds a clause of the problem that must be checked. The problem clauses must
-  // be added first, before any infered clause. The given clause must not
-  // contain a literal and its negation. Must not be called after Check().
+  // be added first, before any inferred clause. Must not be called after
+  // Check().
   void AddProblemClause(absl::Span<const Literal> clause);
 
-  // Adds a clause which is infered from the problem clauses and the previously
-  // infered clauses (that are have not been deleted). Infered clauses must be
-  // added after the problem clauses. Clauses with the Reverse Asymetric
+  // Adds a clause which is inferred from the problem clauses and the previously
+  // inferred clauses (that are have not been deleted). Inferred clauses must be
+  // added after the problem clauses. Clauses with the Reverse Asymmetric
   // Tautology (RAT) property for literal l must start with this literal. The
   // given clause must not contain a literal and its negation. Must not be
   // called after Check().
-  void AddInferedClause(absl::Span<const Literal> clause);
+  void AddInferredClause(absl::Span<const Literal> clause);
 
-  // Deletes a problem or infered clause. The order of the literals does not
+  // Deletes a problem or inferred clause. The order of the literals does not
   // matter. In particular, it can be different from the order that was used
   // when the clause was added. Must not be called after Check().
   void DeleteClause(absl::Span<const Literal> clause);
 
-  // Checks that the infered clauses form a DRAT proof that the problem clauses
-  // are UNSAT. For this the last added infered clause must be the empty clause
-  // and each infered clause must have either the Reverse Unit Propagation (RUP)
-  // or the Reverse Asymetric Tautology (RAT) property with respect to the
-  // problem clauses and the previously infered clauses which are not deleted.
-  // Returns VALID if the proof is valid, INVALID if it is not, and UNKNOWN if
-  // the check timed out.
-  // WARNING: no new clause must be added or deleted after this method has been
-  // called.
+  // Checks that the inferred clauses form a DRAT proof that the problem clauses
+  // are UNSAT. For this the last added inferred clause must be the empty clause
+  // and each inferred clause must have either the Reverse Unit Propagation
+  // (RUP) or the Reverse Asymmetric Tautology (RAT) property with respect to
+  // the problem clauses and the previously inferred clauses which are not
+  // deleted. Returns VALID if the proof is valid, INVALID if it is not, and
+  // UNKNOWN if the check timed out. WARNING: no new clause must be added or
+  // deleted after this method has been called.
   enum Status {
     UNKNOWN,
     VALID,
@@ -91,18 +94,18 @@ class DratChecker {
   std::vector<std::vector<Literal>> GetOptimizedProof() const;
 
  private:
-  // A problem or infered clause. The literals are specified as a subrange of
+  // A problem or inferred clause. The literals are specified as a subrange of
   // 'literals_' (namely the subrange from 'first_literal_index' to
   // 'first_literal_index' + 'num_literals' - 1), and are sorted in increasing
   // order *before Check() is called*.
   struct Clause {
     // The index of the first literal of this clause in 'literals_'.
-    int first_literal_index;
+    size_t first_literal_index;
     // The number of literals of this clause.
     int num_literals;
 
     // The clause literal to use to check the RAT property, or kNoLiteralIndex
-    // for problem clauses and empty infered clauses.
+    // for problem clauses and empty inferred clauses.
     LiteralIndex rat_literal_index = kNoLiteralIndex;
 
     // The *current* number of copies of this clause. This number is incremented
@@ -128,11 +131,11 @@ class DratChecker {
     // Whether this clause is actually needed to check the DRAT proof.
     bool is_needed_for_proof = false;
     // Whether this clause is actually needed to check the current step (i.e. an
-    // infered clause) of the DRAT proof. This bool is always false, except in
+    // inferred clause) of the DRAT proof. This bool is always false, except in
     // MarkAsNeededForProof() that uses it temporarily.
     bool tmp_is_needed_for_proof_step = false;
 
-    Clause(int first_literal_index, int num_literals);
+    Clause(size_t first_literal_index, int num_literals);
 
     // Returns true if this clause is deleted before the given clause.
     bool IsDeleted(ClauseIndex clause_index) const;
@@ -159,19 +162,20 @@ class DratChecker {
   struct ClauseHash {
     DratChecker* checker;
     explicit ClauseHash(DratChecker* checker) : checker(checker) {}
-    std::size_t operator()(const ClauseIndex clause_index) const;
+    std::size_t operator()(ClauseIndex clause_index) const;
   };
 
   // Equality function for clauses.
   struct ClauseEquiv {
     DratChecker* checker;
     explicit ClauseEquiv(DratChecker* checker) : checker(checker) {}
-    bool operator()(const ClauseIndex clause_index1,
-                    const ClauseIndex clause_index2) const;
+    bool operator()(ClauseIndex clause_index1, ClauseIndex clause_index2) const;
   };
 
-  // Adds a clause and returns its index.
-  ClauseIndex AddClause(absl::Span<const Literal> clause);
+  // Adds a clause and returns its index. If the clause is always true (because
+  // it contains a literal and its negation), it is not added and kNoClauseIndex
+  // is returned.
+  ClauseIndex MaybeAddClause(absl::Span<const Literal> clause);
 
   // Removes the last clause added to 'clauses_'.
   void RemoveLastClause();
@@ -219,12 +223,12 @@ class DratChecker {
 
   void LogStatistics(int64_t duration_nanos) const;
 
-  // The index of the first infered clause in 'clauses_', or kNoClauseIndex if
-  // there is no infered clause.
-  ClauseIndex first_infered_clause_index_;
+  // The index of the first inferred clause in 'clauses_', or kNoClauseIndex if
+  // there is no inferred clause.
+  ClauseIndex first_inferred_clause_index_;
 
-  // The problem clauses, followed by the infered clauses.
-  absl::StrongVector<ClauseIndex, Clause> clauses_;
+  // The problem clauses, followed by the inferred clauses.
+  util_intops::StrongVector<ClauseIndex, Clause> clauses_;
 
   // A content addressable set of the non-deleted clauses in clauses_. After
   // adding a clause to clauses_, this set can be used to find if the same
@@ -251,7 +255,7 @@ class DratChecker {
   // For each variable, the index of the unit clause that caused its assignment,
   // or kNoClauseIndex if the variable is not assigned, or was assigned to
   // falsify the clause that is currently being checked.
-  absl::StrongVector<BooleanVariable, ClauseIndex> assignment_source_;
+  util_intops::StrongVector<BooleanVariable, ClauseIndex> assignment_source_;
 
   // The stack of literals that remain to be assigned to true during boolean
   // constraint propagation, with high priority (unit clauses which are already
@@ -274,7 +278,8 @@ class DratChecker {
   // satisfied (in more details: if a clause c is contained in
   // 'watched_literals_[l]' for literal l, then either c is satisfied with
   // 'assignment_', or l is unassigned or assigned to true).
-  absl::StrongVector<LiteralIndex, std::vector<ClauseIndex>> watched_literals_;
+  util_intops::StrongVector<LiteralIndex, std::vector<ClauseIndex>>
+      watched_literals_;
 
   // The list of clauses with only one literal. This is needed for boolean
   // constraint propagation, in addition to watched literals, because watched
@@ -291,7 +296,7 @@ class DratChecker {
   // ---------------------------------------------------------------------------
   // Statistics
 
-  // The number of infered clauses having the RAT property (but not the RUP
+  // The number of inferred clauses having the RAT property (but not the RUP
   // property).
   int num_rat_checks_;
 };
@@ -317,11 +322,11 @@ bool Resolve(absl::Span<const Literal> clause,
 // successfully parsed.
 bool AddProblemClauses(const std::string& file_path, DratChecker* drat_checker);
 
-// Adds to the given drat checker the infered and deleted clauses from the file
+// Adds to the given drat checker the inferred and deleted clauses from the file
 // at the given path, which must be in DRAT format. Returns true iff the file
 // was successfully parsed.
-bool AddInferedAndDeletedClauses(const std::string& file_path,
-                                 DratChecker* drat_checker);
+bool AddInferredAndDeletedClauses(const std::string& file_path,
+                                  DratChecker* drat_checker);
 
 // The file formats that can be used to save a list of clauses.
 enum SatFormat {
@@ -332,10 +337,10 @@ enum SatFormat {
 // Prints the given clauses in the file at the given path, using the given file
 // format. Returns true iff the file was successfully written.
 bool PrintClauses(const std::string& file_path, SatFormat format,
-                  const std::vector<std::vector<Literal>>& clauses,
+                  absl::Span<const std::vector<Literal>> clauses,
                   int num_variables);
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_DRAT_CHECKER_H_
+#endif  // ORTOOLS_SAT_DRAT_CHECKER_H_

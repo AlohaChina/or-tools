@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,10 +13,22 @@
 
 #include "ortools/glop/preprocessor.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <deque>
+#include <iomanip>
+#include <ios>
 #include <limits>
+#include <memory>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
 #include "ortools/base/iterator_adaptors.h"
 #include "ortools/base/strong_vector.h"
 #include "ortools/glop/revised_simplex.h"
@@ -32,11 +44,6 @@ namespace glop {
 using ::util::Reverse;
 
 namespace {
-// Returns an interval as an human readable string for debugging.
-std::string IntervalString(Fractional lb, Fractional ub) {
-  return absl::StrFormat("[%g, %g]", lb, ub);
-}
-
 #if defined(_MSC_VER)
 double trunc(double d) { return d > 0 ? floor(d) : ceil(d); }
 #endif
@@ -135,7 +142,7 @@ bool MainLpPreprocessor::Run(LinearProgram* lp) {
 #undef RUN_PREPROCESSOR
 
 void MainLpPreprocessor::RunAndPushIfRelevant(
-    std::unique_ptr<Preprocessor> preprocessor, const std::string& name,
+    std::unique_ptr<Preprocessor> preprocessor, absl::string_view name,
     TimeLimit* time_limit, LinearProgram* lp) {
   RETURN_IF_NULL(preprocessor);
   RETURN_IF_NULL(time_limit);
@@ -1364,20 +1371,6 @@ void ForcingAndImpliedFreeConstraintPreprocessor::RecoverSolution(
 // ImpliedFreePreprocessor
 // --------------------------------------------------------
 
-namespace {
-struct ColWithDegree {
-  ColIndex col;
-  EntryIndex num_entries;
-  ColWithDegree(ColIndex c, EntryIndex n) : col(c), num_entries(n) {}
-  bool operator<(const ColWithDegree& other) const {
-    if (num_entries == other.num_entries) {
-      return col < other.col;
-    }
-    return num_entries < other.num_entries;
-  }
-};
-}  // namespace
-
 bool ImpliedFreePreprocessor::Run(LinearProgram* lp) {
   SCOPED_INSTRUCTION_COUNT(time_limit_);
   RETURN_VALUE_IF_NULL(lp, false);
@@ -1392,10 +1385,10 @@ bool ImpliedFreePreprocessor::Run(LinearProgram* lp) {
   const int size = num_rows.value();
   // TODO(user) : Replace SumWithNegativeInfiniteAndOneMissing and
   // SumWithPositiveInfiniteAndOneMissing with IntervalSumWithOneMissing.
-  absl::StrongVector<RowIndex, SumWithNegativeInfiniteAndOneMissing> lb_sums(
-      size);
-  absl::StrongVector<RowIndex, SumWithPositiveInfiniteAndOneMissing> ub_sums(
-      size);
+  util_intops::StrongVector<RowIndex, SumWithNegativeInfiniteAndOneMissing>
+      lb_sums(size);
+  util_intops::StrongVector<RowIndex, SumWithPositiveInfiniteAndOneMissing>
+      ub_sums(size);
 
   // Initialize the sums by adding all the bounds of the variables.
   for (ColIndex col(0); col < num_cols; ++col) {
@@ -1442,10 +1435,10 @@ bool ImpliedFreePreprocessor::Run(LinearProgram* lp) {
   // column. For instance if we have 3 doubleton columns that use the rows (1,2)
   // (2,3) and (3,4) then it is better not to make (2,3) free so the two other
   // two can be made free.
-  std::vector<ColWithDegree> col_by_degree;
+  std::vector<std::pair<EntryIndex, ColIndex>> col_by_degree;
+  col_by_degree.reserve(num_cols.value());
   for (ColIndex col(0); col < num_cols; ++col) {
-    col_by_degree.push_back(
-        ColWithDegree(col, lp->GetSparseColumn(col).num_entries()));
+    col_by_degree.push_back({lp->GetSparseColumn(col).num_entries(), col});
   }
   std::sort(col_by_degree.begin(), col_by_degree.end());
 
@@ -1453,9 +1446,7 @@ bool ImpliedFreePreprocessor::Run(LinearProgram* lp) {
   int num_already_free_variables = 0;
   int num_implied_free_variables = 0;
   int num_fixed_variables = 0;
-  for (ColWithDegree col_with_degree : col_by_degree) {
-    const ColIndex col = col_with_degree.col;
-
+  for (const auto [_, col] : col_by_degree) {
     // If the variable is already free or fixed, we do nothing.
     const Fractional lower_bound = lp->variable_lower_bounds()[col];
     const Fractional upper_bound = lp->variable_upper_bounds()[col];
@@ -2344,8 +2335,7 @@ void SingletonUndo::SingletonRowUndo(const SparseColumn& saved_column,
   DCHECK_EQ(0, solution->dual_values[e_.row]);
 
   // If the variable is basic or free, we can just keep the constraint
-  // VariableStatus::BASIC and
-  // 0.0 as the dual value.
+  // VariableStatus::BASIC and 0.0 as the dual value.
   const VariableStatus status = solution->variable_statuses[e_.col];
   if (status == VariableStatus::BASIC || status == VariableStatus::FREE) return;
 
@@ -2386,6 +2376,13 @@ void SingletonUndo::SingletonRowUndo(const SparseColumn& saved_column,
   // variable becomes a basic variable. This is what the line below do, since
   // the new reduced cost of the variable will be equal to:
   //     old_reduced_cost - coeff * solution->dual_values[row]
+  //
+  // TODO(user): This code is broken for integer variable.
+  // Say our singleton row is 2 * y <= 5, and y was at its implied bound y = 2
+  // at postsolve. The problem is that we can end up with an AT_UPPER_BOUND
+  // status for the constraint 2 * y <= 5 which is not correct since the
+  // activity is 4, and that break later preconditions. Maybe there is a way to
+  // fix everything, but it seems tough to be sure.
   solution->dual_values[e_.row] = reduced_cost / e_.coeff;
   ConstraintStatus new_constraint_status = VariableToConstraintStatus(status);
   if (status == VariableStatus::FIXED_VALUE &&
@@ -2433,7 +2430,8 @@ bool SingletonPreprocessor::IntegerSingletonColumnIsRemovable(
     const Fractional coefficient_ratio = coefficient / matrix_entry.coeff;
     // Check if coefficient_ratio is integer.
     if (!IsIntegerWithinTolerance(
-            coefficient_ratio, parameters_.solution_feasibility_tolerance())) {
+            coefficient_ratio,
+            Fractional(parameters_.solution_feasibility_tolerance()))) {
       return false;
     }
   }
@@ -2442,7 +2440,8 @@ bool SingletonPreprocessor::IntegerSingletonColumnIsRemovable(
   if (IsFinite(constraint_lb)) {
     const Fractional lower_bound_ratio = constraint_lb / matrix_entry.coeff;
     if (!IsIntegerWithinTolerance(
-            lower_bound_ratio, parameters_.solution_feasibility_tolerance())) {
+            lower_bound_ratio,
+            Fractional(parameters_.solution_feasibility_tolerance()))) {
       return false;
     }
   }
@@ -2451,7 +2450,8 @@ bool SingletonPreprocessor::IntegerSingletonColumnIsRemovable(
   if (IsFinite(constraint_ub)) {
     const Fractional upper_bound_ratio = constraint_ub / matrix_entry.coeff;
     if (!IsIntegerWithinTolerance(
-            upper_bound_ratio, parameters_.solution_feasibility_tolerance())) {
+            upper_bound_ratio,
+            Fractional(parameters_.solution_feasibility_tolerance()))) {
       return false;
     }
   }
@@ -2667,6 +2667,12 @@ bool SingletonPreprocessor::MakeConstraintAnEqualityIfPossible(
   const Fractional cst_lower_bound = lp->constraint_lower_bounds()[e.row];
   const Fractional cst_upper_bound = lp->constraint_upper_bounds()[e.row];
   if (cst_lower_bound == cst_upper_bound) return true;
+  if (cst_lower_bound == -kInfinity && cst_upper_bound == kInfinity) {
+    return false;
+  }
+
+  // The code below do not work as is for integer variable.
+  if (in_mip_context_ && lp->IsVariableInteger(e.col)) return false;
 
   // To be efficient, we only process a row once and cache the domain that an
   // "artificial" extra variable x with coefficient 1.0 could take while still
@@ -2747,11 +2753,11 @@ bool SingletonPreprocessor::MakeConstraintAnEqualityIfPossible(
     }
 
     if (status_ == ProblemStatus::INFEASIBLE_OR_UNBOUNDED) {
-      DCHECK_EQ(ub, kInfinity);
       VLOG(1) << "Problem ProblemStatus::INFEASIBLE_OR_UNBOUNDED, singleton "
                  "variable "
               << e.col << " has a cost (for minimization) of " << cost
               << " and is unbounded towards kInfinity.";
+      DCHECK_EQ(ub, kInfinity);
       return false;
     }
 
@@ -2856,10 +2862,17 @@ bool SingletonPreprocessor::Run(LinearProgram* lp) {
       // a cost of zero first.
       if (lp->objective_coefficients()[col] == 0.0) {
         DeleteZeroCostSingletonColumn(transpose, e, lp);
-      } else if (MakeConstraintAnEqualityIfPossible(transpose, e, lp)) {
-        DeleteSingletonColumnInEquality(transpose, e, lp);
       } else {
-        continue;
+        // We don't want to do a substitution if the entry is too small and
+        // should be probably set to zero.
+        if (std::abs(e.coeff) < parameters_.preprocessor_zero_tolerance()) {
+          continue;
+        }
+        if (MakeConstraintAnEqualityIfPossible(transpose, e, lp)) {
+          DeleteSingletonColumnInEquality(transpose, e, lp);
+        } else {
+          continue;
+        }
       }
       --row_degree[e.row];
       if (row_degree[e.row] == 1) {
@@ -2871,6 +2884,14 @@ bool SingletonPreprocessor::Run(LinearProgram* lp) {
       row_to_process.pop_back();
       if (row_degree[row] <= 0) continue;
       const MatrixEntry e = GetSingletonRowMatrixEntry(row, transpose);
+
+      // TODO(user): We should be able to restrict the variable bounds with the
+      // ones of the constraint all the time. However, some situation currently
+      // break the presolve, and it seems hard to fix in a 100% safe way.
+      if (in_mip_context_ && lp->IsVariableInteger(e.col) &&
+          !IntegerSingletonColumnIsRemovable(e, *lp)) {
+        continue;
+      }
 
       DeleteSingletonRow(e, lp);
       --column_degree[e.col];
@@ -2918,10 +2939,12 @@ MatrixEntry SingletonPreprocessor::GetSingletonColumnMatrixEntry(
       return MatrixEntry(e.row(), col, e.coefficient());
     }
   }
+  // COV_NF_START
   // This shouldn't happen.
   LOG(DFATAL) << "No unmarked entry in a column that is supposed to have one.";
   status_ = ProblemStatus::ABNORMAL;
   return MatrixEntry(RowIndex(0), ColIndex(0), 0.0);
+  // COV_NF_END
 }
 
 MatrixEntry SingletonPreprocessor::GetSingletonRowMatrixEntry(
@@ -2933,85 +2956,13 @@ MatrixEntry SingletonPreprocessor::GetSingletonRowMatrixEntry(
       return MatrixEntry(row, col, e.coefficient());
     }
   }
+  // COV_NF_START
   // This shouldn't happen.
   LOG(DFATAL) << "No unmarked entry in a row that is supposed to have one.";
   status_ = ProblemStatus::ABNORMAL;
   return MatrixEntry(RowIndex(0), ColIndex(0), 0.0);
+  // COV_NF_END
 }
-
-// --------------------------------------------------------
-// RemoveNearZeroEntriesPreprocessor
-// --------------------------------------------------------
-
-bool RemoveNearZeroEntriesPreprocessor::Run(LinearProgram* lp) {
-  SCOPED_INSTRUCTION_COUNT(time_limit_);
-  RETURN_VALUE_IF_NULL(lp, false);
-  const ColIndex num_cols = lp->num_variables();
-  if (num_cols == 0) return false;
-
-  // We will use a different threshold for each row depending on its degree.
-  // We use Fractionals for convenience since they will be used as such below.
-  const RowIndex num_rows = lp->num_constraints();
-  DenseColumn row_degree(num_rows, 0.0);
-  Fractional num_non_zero_objective_coefficients = 0.0;
-  for (ColIndex col(0); col < num_cols; ++col) {
-    for (const SparseColumn::Entry e : lp->GetSparseColumn(col)) {
-      row_degree[e.row()] += 1.0;
-    }
-    if (lp->objective_coefficients()[col] != 0.0) {
-      num_non_zero_objective_coefficients += 1.0;
-    }
-  }
-
-  // To not have too many parameters, we use the preprocessor_zero_tolerance.
-  const Fractional allowed_impact = parameters_.preprocessor_zero_tolerance();
-
-  // TODO(user): Our criteria ensure that during presolve a primal feasible
-  // solution will stay primal feasible. However, we have no guarantee on the
-  // dual-feasibility (because the dual variable values range is not taken into
-  // account). Fix that? or find a better criteria since it seems that on all
-  // our current problems, this preprocessor helps and doesn't introduce errors.
-  const EntryIndex initial_num_entries = lp->num_entries();
-  int num_zeroed_objective_coefficients = 0;
-  for (ColIndex col(0); col < num_cols; ++col) {
-    const Fractional lower_bound = lp->variable_lower_bounds()[col];
-    const Fractional upper_bound = lp->variable_upper_bounds()[col];
-
-    // TODO(user): Write a small class that takes a matrix, its transpose, row
-    // and column bounds, and "propagate" the bounds as much as possible so we
-    // can use this better estimate here and remove more near-zero entries.
-    const Fractional max_magnitude =
-        std::max(std::abs(lower_bound), std::abs(upper_bound));
-    if (max_magnitude == kInfinity || max_magnitude == 0) continue;
-    const Fractional threshold = allowed_impact / max_magnitude;
-    lp->GetMutableSparseColumn(col)->RemoveNearZeroEntriesWithWeights(
-        threshold, row_degree);
-
-    if (lp->objective_coefficients()[col] != 0.0 &&
-        num_non_zero_objective_coefficients *
-                std::abs(lp->objective_coefficients()[col]) <
-            threshold) {
-      lp->SetObjectiveCoefficient(col, 0.0);
-      ++num_zeroed_objective_coefficients;
-    }
-  }
-
-  const EntryIndex num_entries = lp->num_entries();
-  if (num_entries != initial_num_entries) {
-    VLOG(1) << "Removed " << initial_num_entries - num_entries
-            << " near-zero entries.";
-  }
-  if (num_zeroed_objective_coefficients > 0) {
-    VLOG(1) << "Removed " << num_zeroed_objective_coefficients
-            << " near-zero objective coefficients.";
-  }
-
-  // No post-solve is required.
-  return false;
-}
-
-void RemoveNearZeroEntriesPreprocessor::RecoverSolution(
-    ProblemSolution* solution) const {}
 
 // --------------------------------------------------------
 // SingletonColumnSignPreprocessor
@@ -3356,7 +3307,7 @@ void DoubletonEqualityRowPreprocessor::RecoverSolution(
   // There is always an order that make this matrix triangular. We start with a
   // singleton column which fix its corresponding row and then work on the
   // square submatrix left. We can always start and continue, because if we take
-  // the first substitued row of the current submatrix, if its deleted column
+  // the first substituted row of the current submatrix, if its deleted column
   // was in the submatrix we have a singleton column. If it is outside, we have
   // 2 n - 1 entries for a matrix with n columns, so one must be singleton.
   //
@@ -3726,7 +3677,7 @@ bool ShiftVariableBoundsPreprocessor::Run(LinearProgram* lp) {
   int num_bound_shifts = 0;
   const RowIndex num_rows = lp->num_constraints();
   KahanSum objective_offset;
-  absl::StrongVector<RowIndex, KahanSum> row_offsets(num_rows.value());
+  util_intops::StrongVector<RowIndex, KahanSum> row_offsets(num_rows.value());
   offsets_.assign(num_cols, 0.0);
   for (ColIndex col(0); col < num_cols; ++col) {
     if (0.0 < variable_initial_lbs_[col] || 0.0 > variable_initial_ubs_[col]) {

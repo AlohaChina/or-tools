@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,8 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_GLOP_INITIAL_BASIS_H_
-#define OR_TOOLS_GLOP_INITIAL_BASIS_H_
+#ifndef ORTOOLS_GLOP_INITIAL_BASIS_H_
+#define ORTOOLS_GLOP_INITIAL_BASIS_H_
+
+#include <vector>
 
 #include "ortools/lp_data/lp_data.h"
 #include "ortools/lp_data/lp_types.h"
@@ -48,6 +50,10 @@ class InitialBasis {
                const DenseRow& objective, const DenseRow& lower_bound,
                const DenseRow& upper_bound,
                const VariableTypeRow& variable_type);
+
+  // This type is neither copyable nor movable.
+  InitialBasis(const InitialBasis&) = delete;
+  InitialBasis& operator=(const InitialBasis&) = delete;
 
   // Completes the entries of the given basis that are equal to kInvalidCol with
   // one of the first num_cols columns of A using Bixby's algorithm.
@@ -125,11 +131,9 @@ class InitialBasis {
   const DenseRow& lower_bound_;
   const DenseRow& upper_bound_;
   const VariableTypeRow& variable_type_;
-
-  DISALLOW_COPY_AND_ASSIGN(InitialBasis);
 };
 
 }  // namespace glop
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_GLOP_INITIAL_BASIS_H_
+#endif  // ORTOOLS_GLOP_INITIAL_BASIS_H_

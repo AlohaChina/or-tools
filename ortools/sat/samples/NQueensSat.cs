@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -70,6 +70,9 @@ public class NQueensSat
 
         // [START variables]
         int BoardSize = 8;
+        // There are `BoardSize` number of variables, one for a queen in each
+        // column of the board. The value of each variable is the row that the
+        // queen is in.
         IntVar[] queens = new IntVar[BoardSize];
         for (int i = 0; i < BoardSize; ++i)
         {
@@ -82,7 +85,6 @@ public class NQueensSat
         // All rows must be different.
         model.AddAllDifferent(queens);
 
-        // All columns must be different because the indices of queens are all different.
         // No two queens can be on the same diagonal.
         LinearExpr[] diag1 = new LinearExpr[BoardSize];
         LinearExpr[] diag2 = new LinearExpr[BoardSize];

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//
 // N-queens problem
 //
 //  unique solutions: http://www.research.att.com/~njas/sequences/A000170
@@ -20,15 +19,16 @@
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
-#include "absl/flags/parse.h"
-#include "absl/flags/usage.h"
 #include "absl/strings/str_format.h"
 #include "ortools/base/commandlineflags.h"
-#include "ortools/base/integral_types.h"
+#include "ortools/base/init_google.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/map_util.h"
+#include "ortools/base/types.h"
+#include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 
 ABSL_FLAG(bool, print, false, "If true, print one of the solution.");
@@ -39,7 +39,6 @@ ABSL_FLAG(
     int, size, 0,
     "Size of the problem. If equal to 0, will test several increasing sizes.");
 ABSL_FLAG(bool, use_symmetry, false, "Use Symmetry Breaking methods");
-ABSL_DECLARE_FLAG(bool, cp_disable_solve);
 
 static const int kNumSolutions[] = {
     1, 0, 0, 2, 10, 4, 40, 92, 352, 724, 2680, 14200, 73712, 365596, 2279184};
@@ -60,7 +59,7 @@ class NQueenSymmetry : public SymmetryBreaker {
       indices_[vars[i]] = i;
     }
   }
-  ~NQueenSymmetry() override {}
+  ~NQueenSymmetry() override = default;
 
  protected:
   int Index(IntVar* const var) const {
@@ -73,7 +72,7 @@ class NQueenSymmetry : public SymmetryBreaker {
   }
   int size() const { return size_; }
   int symmetric(int index) const { return size_ - 1 - index; }
-  Solver* const solver() const { return solver_; }
+  Solver* solver() const { return solver_; }
 
  private:
   Solver* const solver_;
@@ -87,7 +86,7 @@ class SX : public NQueenSymmetry {
  public:
   SX(Solver* const s, const std::vector<IntVar*>& vars)
       : NQueenSymmetry(s, vars) {}
-  ~SX() override {}
+  ~SX() override = default;
 
   void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     const int index = Index(var);
@@ -101,7 +100,7 @@ class SY : public NQueenSymmetry {
  public:
   SY(Solver* const s, const std::vector<IntVar*>& vars)
       : NQueenSymmetry(s, vars) {}
-  ~SY() override {}
+  ~SY() override = default;
 
   void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     AddIntegerVariableEqualValueClause(var, symmetric(value));
@@ -113,7 +112,7 @@ class SD1 : public NQueenSymmetry {
  public:
   SD1(Solver* const s, const std::vector<IntVar*>& vars)
       : NQueenSymmetry(s, vars) {}
-  ~SD1() override {}
+  ~SD1() override = default;
 
   void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     const int index = Index(var);
@@ -127,7 +126,7 @@ class SD2 : public NQueenSymmetry {
  public:
   SD2(Solver* const s, const std::vector<IntVar*>& vars)
       : NQueenSymmetry(s, vars) {}
-  ~SD2() override {}
+  ~SD2() override = default;
 
   void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     const int index = Index(var);
@@ -141,7 +140,7 @@ class R90 : public NQueenSymmetry {
  public:
   R90(Solver* const s, const std::vector<IntVar*>& vars)
       : NQueenSymmetry(s, vars) {}
-  ~R90() override {}
+  ~R90() override = default;
 
   void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     const int index = Index(var);
@@ -155,7 +154,7 @@ class R180 : public NQueenSymmetry {
  public:
   R180(Solver* const s, const std::vector<IntVar*>& vars)
       : NQueenSymmetry(s, vars) {}
-  ~R180() override {}
+  ~R180() override = default;
 
   void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     const int index = Index(var);
@@ -169,7 +168,7 @@ class R270 : public NQueenSymmetry {
  public:
   R270(Solver* const s, const std::vector<IntVar*>& vars)
       : NQueenSymmetry(s, vars) {}
-  ~R270() override {}
+  ~R270() override = default;
 
   void VisitSetVariableValue(IntVar* const var, int64_t value) override {
     const int index = Index(var);
@@ -272,8 +271,7 @@ void NQueens(int size) {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  google::InitGoogleLogging(argv[0]);
-  absl::ParseCommandLine(argc, argv);
+  InitGoogle(argv[0], &argc, &argv, true);
   if (absl::GetFlag(FLAGS_size) != 0) {
     operations_research::NQueens(absl::GetFlag(FLAGS_size));
   } else {
@@ -281,5 +279,5 @@ int main(int argc, char** argv) {
       operations_research::NQueens(n);
     }
   }
-  return EXIT_SUCCESS;
+  return 0;
 }

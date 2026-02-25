@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -20,16 +20,11 @@ using System.Collections;
 using System.Collections.Generic;
 %}
 
-%include "enumsimple.swg"
-
-%include "exception.i"
-%include "std_vector.i"
-%include "std_common.i"
-%include "std_string.i"
-
 %include "ortools/base/base.i"
-%include "ortools/util/csharp/vector.i"
-%include "ortools/util/csharp/proto.i"
+%include "enumsimple.swg"
+%import "ortools/util/csharp/absl_string_view.i"
+%import "ortools/util/csharp/vector.i"
+%import "ortools/util/csharp/proto.i"
 
 // We need to forward-declare the proto here, so that PROTO_INPUT involving it
 // works correctly. The order matters very much: this declaration needs to be
@@ -45,11 +40,11 @@ class RegularLimitParameters;
 %{
 #include <setjmp.h>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <functional>
 
-#include "ortools/base/integral_types.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/constraint_solver/search_limit.pb.h"
@@ -70,6 +65,16 @@ struct FailureProtect {
   }
 };
 %}
+
+%template(IntVector) std::vector<int>;
+%template(IntVectorVector) std::vector<std::vector<int> >;
+VECTOR_AS_CSHARP_ARRAY(int, int, int, IntVector);
+JAGGED_MATRIX_AS_CSHARP_ARRAY(int, int, int, IntVectorVector);
+
+%template(Int64Vector) std::vector<int64_t>;
+%template(Int64VectorVector) std::vector<std::vector<int64_t> >;
+VECTOR_AS_CSHARP_ARRAY(int64_t, int64_t, long, Int64Vector);
+JAGGED_MATRIX_AS_CSHARP_ARRAY(int64_t, int64_t, long, Int64VectorVector);
 
 /* allow partial c# classes */
 %typemap(csclassmodifiers) SWIGTYPE "public partial class"
@@ -118,22 +123,16 @@ PROTECT_FROM_FAILURE(IntervalVar::SetEndMax(int64_t m), arg1->solver());
 PROTECT_FROM_FAILURE(IntervalVar::SetEndRange(int64_t mi, int64_t ma),
                      arg1->solver());
 PROTECT_FROM_FAILURE(IntervalVar::SetPerformed(bool val), arg1->solver());
-PROTECT_FROM_FAILURE(Solver::AddConstraint(Constraint* const c), arg1);
+PROTECT_FROM_FAILURE(Solver::AddConstraint(Constraint* c), arg1);
 PROTECT_FROM_FAILURE(Solver::Fail(), arg1);
 #undef PROTECT_FROM_FAILURE
 }  // namespace operations_research
 
 // ############ END DUPLICATED CODE BLOCK ############
 
-%apply int64_t * INOUT { int64_t *const marker };
+%apply int64_t * INOUT { int64_t * marker };
 %apply int64_t * OUTPUT { int64_t *l, int64_t *u, int64_t *value };
 
-// Since knapsack_solver.i and constraint_solver.i both need to
-// instantiate the vector template, but their csharp_wrap.cc
-// files end up being compiled into the same .dll, we must name the
-// vector template differently.
-
-// TupleSet depends on the previous typemaps
 %include "ortools/util/csharp/tuple_set.i"
 
 // Types in Proxy class:
@@ -288,6 +287,9 @@ namespace operations_research {
 %ignore SequenceVarElement::LoadFromProto;
 %ignore SequenceVarElement::WriteToProto;
 
+// ModelVisitor
+%unignore ModelVisitor;
+
 // SolutionCollector
 %feature("director") SolutionCollector;
 %unignore SolutionCollector;
@@ -405,7 +407,7 @@ namespace operations_research {
 // Methods:
 %rename (Add) Solver::AddConstraint;
 // Rename NewSearch and EndSearch to add pinning. See the overrides of
-// NewSearch in ../../open_source/csharp/constraint_solver/SolverHelper.cs
+// NewSearch in ../../csharp/constraint_solver/SolverHelper.cs
 %rename (NewSearchAux) Solver::NewSearch;
 %rename (EndSearchAux) Solver::EndSearch;
 
@@ -462,22 +464,22 @@ namespace operations_research {
   Constraint* Member(const std::vector<int>& values) {
     return $self->solver()->MakeMemberCt($self->Var(), values);
   }
-  IntVar* IsEqual(IntExpr* const other) {
+  IntVar* IsEqual(IntExpr* other) {
     return $self->solver()->MakeIsEqualVar($self->Var(), other->Var());
   }
-  IntVar* IsDifferent(IntExpr* const other) {
+  IntVar* IsDifferent(IntExpr* other) {
     return $self->solver()->MakeIsDifferentVar($self->Var(), other->Var());
   }
-  IntVar* IsGreater(IntExpr* const other) {
+  IntVar* IsGreater(IntExpr* other) {
     return $self->solver()->MakeIsGreaterVar($self->Var(), other->Var());
   }
-  IntVar* IsGreaterOrEqual(IntExpr* const other) {
+  IntVar* IsGreaterOrEqual(IntExpr* other) {
     return $self->solver()->MakeIsGreaterOrEqualVar($self->Var(), other->Var());
   }
-  IntVar* IsLess(IntExpr* const other) {
+  IntVar* IsLess(IntExpr* other) {
     return $self->solver()->MakeIsLessVar($self->Var(), other->Var());
   }
-  IntVar* IsLessOrEqual(IntExpr* const other) {
+  IntVar* IsLessOrEqual(IntExpr* other) {
     return $self->solver()->MakeIsLessOrEqualVar($self->Var(), other->Var());
   }
   OptimizeVar* Minimize(int64_t step) {
@@ -652,6 +654,12 @@ namespace operations_research {
 // Methods:
 %rename (SequenceVar) DisjunctiveConstraint::MakeSequenceVar;
 
+// ModelCache
+%unignore ModelCache;
+
+// ObjectiveMonitor
+%unignore ObjectiveMonitor;
+
 // Pack
 %unignore Pack;
 %typemap(cscode) Pack %{
@@ -681,6 +689,12 @@ namespace operations_research {
 %ignore PropagationBaseObject::EnqueueAll;
 %ignore PropagationBaseObject::set_action_on_fail;
 
+// PropagationMonitor
+%unignore PropagationMonitor;
+
+// RevPartialSequence
+%unignore RevPartialSequence;
+
 // SearchMonitor
 %feature("director") SearchMonitor;
 %unignore SearchMonitor;
@@ -690,6 +704,9 @@ namespace operations_research {
 %unignore SearchLimit;
 // Methods:
 %rename (IsCrossed) SearchLimit::crossed;
+
+// ImprovementSearchLimit
+%unignore ImprovementSearchLimit;
 
 // RegularLimit
 %feature("director") RegularLimit;
@@ -702,19 +719,13 @@ namespace operations_research {
 // Ignored:
 // No custom wrapping for this method, we simply ignore it.
 %ignore SearchLog::SearchLog(
-    Solver* const s, OptimizeVar* const obj, IntVar* const var,
-    double scaling_factor, double offset,
+    Solver* solver, std::vector<IntVar*> vars, std::string vars_name,
+    std::vector<double> scaling_factors, std::vector<double> offsets,
     std::function<std::string()> display_callback,
     bool display_on_new_solutions_only, int period);
 // Methods:
 %unignore SearchLog::Maintain;
 %unignore SearchLog::OutputDecision;
-
-// IntVarLocalSearchHandler
-%ignore IntVarLocalSearchHandler;
-
-// SequenceVarLocalSearchHandler
-%ignore SequenceVarLocalSearchHandler;
 
 // LocalSearchOperator
 %feature("director") LocalSearchOperator;
@@ -724,25 +735,8 @@ namespace operations_research {
 %unignore LocalSearchOperator::Reset;
 %unignore LocalSearchOperator::Start;
 
-// VarLocalSearchOperator<>
-%unignore VarLocalSearchOperator;
-// Ignored:
-%ignore VarLocalSearchOperator::Start;
-%ignore VarLocalSearchOperator::ApplyChanges;
-%ignore VarLocalSearchOperator::RevertChanges;
-%ignore VarLocalSearchOperator::SkipUnchanged;
-// Methods:
-%unignore VarLocalSearchOperator::Size;
-%unignore VarLocalSearchOperator::Value;
-%unignore VarLocalSearchOperator::IsIncremental;
-%unignore VarLocalSearchOperator::OnStart;
-%unignore VarLocalSearchOperator::OldValue;
-%unignore VarLocalSearchOperator::SetValue;
-%unignore VarLocalSearchOperator::Var;
-%unignore VarLocalSearchOperator::Activated;
-%unignore VarLocalSearchOperator::Activate;
-%unignore VarLocalSearchOperator::Deactivate;
-%unignore VarLocalSearchOperator::AddVars;
+// LocalSearchOperatorState
+%unignore LocalSearchOperatorState;
 
 // IntVarLocalSearchOperator
 %feature("director") IntVarLocalSearchOperator;
@@ -781,17 +775,6 @@ namespace operations_research {
 %unignore ChangeValue;
 // Methods:
 %unignore ChangeValue::ModifyValue;
-
-// SequenceVarLocalSearchOperator
-%feature("director") SequenceVarLocalSearchOperator;
-%unignore SequenceVarLocalSearchOperator;
-// Ignored:
-%ignore SequenceVarLocalSearchOperator::SetBackwardSequence;
-%ignore SequenceVarLocalSearchOperator::SetForwardSequence;
-// Methods:
-%unignore SequenceVarLocalSearchOperator::OldSequence;
-%unignore SequenceVarLocalSearchOperator::Sequence;
-%unignore SequenceVarLocalSearchOperator::Start;
 
 // PathOperator
 %feature("director") PathOperator;
@@ -863,7 +846,7 @@ namespace operations_research {
 %unignore IntVarLocalSearchFilter::Var;  // Inherited.
 // Extend IntVarLocalSearchFilter with an intuitive API.
 %extend IntVarLocalSearchFilter {
-  int Index(IntVar* const var) {
+  int Index(IntVar* var) {
     int64_t index = -1;
     $self->FindIndex(var, &index);
     return index;
@@ -964,9 +947,13 @@ PROTO_INPUT(operations_research::CpModel,
 PROTO2_RETURN(operations_research::CpModel,
               Google.OrTools.ConstraintSolver.CpModel)
 
+// Add needed import to operations_research_constraint_solver.cs
+%pragma(csharp) moduleimports=%{
+%}
+
 namespace operations_research {
 // Globals
-// IMPORTANT(corentinl): Global will be placed in operations_research_constraint_solver.cs
+// IMPORTANT(user): Global will be placed in operations_research_constraint_solver.cs
 // Ignored:
 %ignore FillValues;
 }  // namespace operations_research

@@ -1,4 +1,4 @@
-// Copyright 2018 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,11 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "ortools/graph/max_flow.h"
+#include <cstdlib>
+#include <utility>
+#include <vector>
 
-#include "ortools/base/logging.h"
+#include "absl/base/log_severity.h"
+#include "absl/log/globals.h"
+#include "absl/log/log.h"
+#include "ortools/base/init_google.h"
+#include "ortools/graph/generic_max_flow.h"
+#include "ortools/graph/graph.h"
 
 namespace operations_research {
+
+using Graph = ::util::ReverseArcListGraph<>;
+using NodeIndex = Graph::NodeIndex;
+using ArcIndex = Graph::ArcIndex;
+using MaxFlowT = GenericMaxFlow<Graph>;
+using FlowQuantity = MaxFlowT::FlowSumType;
+
 void SolveMaxFlow() {
   const int num_nodes = 5;
   // Add each arc
@@ -25,8 +39,8 @@ void SolveMaxFlow() {
   std::vector<std::pair<std::pair<NodeIndex, NodeIndex>, FlowQuantity> > arcs =
       {{{0, 1}, 20}, {{0, 2}, 30}, {{0, 3}, 10}, {{1, 2}, 40}, {{1, 4}, 30},
        {{2, 3}, 10}, {{2, 4}, 20}, {{3, 2}, 5},  {{3, 4}, 20}};
-  StarGraph graph(num_nodes, arcs.size());
-  MaxFlow max_flow(&graph, 0, num_nodes - 1);
+  Graph graph(num_nodes, arcs.size());
+  MaxFlowT max_flow(&graph, 0, num_nodes - 1);
   for (const auto& it : arcs) {
     ArcIndex arc = graph.AddArc(it.first.first, it.first.second);
     max_flow.SetArcCapacity(arc, it.second);
@@ -37,7 +51,7 @@ void SolveMaxFlow() {
 
   // Find the maximum flow between node 0 and node 4.
   max_flow.Solve();
-  if (MaxFlow::OPTIMAL != max_flow.status()) {
+  if (MaxFlowStatusClass::OPTIMAL != max_flow.status()) {
     LOG(FATAL) << "Solving the max flow is not optimal!";
   }
   FlowQuantity total_flow = max_flow.GetOptimalFlow();
@@ -52,8 +66,8 @@ void SolveMaxFlow() {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  google::InitGoogleLogging(argv[0]);
-  absl::SetFlag(&FLAGS_logtostderr, 1);
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
+  InitGoogle(argv[0], &argc, &argv, true);
   operations_research::SolveMaxFlow();
   return EXIT_SUCCESS;
 }

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,26 +11,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_CP_MODEL_MAPPING_H_
-#define OR_TOOLS_SAT_CP_MODEL_MAPPING_H_
+#ifndef ORTOOLS_SAT_CP_MODEL_MAPPING_H_
+#define ORTOOLS_SAT_CP_MODEL_MAPPING_H_
 
 #include <cstdint>
-#include <functional>
+#include <utility>
 #include <vector>
 
-#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
-#include "ortools/base/int_type.h"
-#include "ortools/base/integral_types.h"
+#include "absl/log/check.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/strong_vector.h"
 #include "ortools/sat/cp_model.pb.h"
 #include "ortools/sat/cp_model_utils.h"
-#include "ortools/sat/integer.h"
-#include "ortools/sat/intervals.h"
+#include "ortools/sat/integer_base.h"
 #include "ortools/sat/linear_constraint.h"
 #include "ortools/sat/model.h"
 #include "ortools/sat/sat_base.h"
+#include "ortools/util/strong_integers.h"
 
 namespace operations_research {
 namespace sat {
@@ -56,6 +54,10 @@ struct ObjectiveDefinition {
 
   double ScaleIntegerObjective(IntegerValue value) const {
     return (ToDouble(value) + offset) * scaling_factor;
+  }
+
+  double ScaleObjective(double value) const {
+    return (value + offset) * scaling_factor;
   }
 };
 
@@ -110,6 +112,7 @@ class CpModelMapping {
   template <typename List>
   std::vector<IntegerVariable> Integers(const List& list) const {
     std::vector<IntegerVariable> result;
+    result.reserve(list.size());
     for (const auto i : list) result.push_back(Integer(i));
     return result;
   }
@@ -117,6 +120,7 @@ class CpModelMapping {
   template <typename ProtoIndices>
   std::vector<sat::Literal> Literals(const ProtoIndices& indices) const {
     std::vector<sat::Literal> result;
+    result.reserve(indices.size());
     for (const int i : indices) result.push_back(CpModelMapping::Literal(i));
     return result;
   }
@@ -124,6 +128,7 @@ class CpModelMapping {
   template <typename List>
   std::vector<AffineExpression> Affines(const List& list) const {
     std::vector<AffineExpression> result;
+    result.reserve(list.size());
     for (const auto& i : list) result.push_back(Affine(i));
     return result;
   }
@@ -131,6 +136,7 @@ class CpModelMapping {
   template <typename ProtoIndices>
   std::vector<IntervalVariable> Intervals(const ProtoIndices& indices) const {
     std::vector<IntervalVariable> result;
+    result.reserve(indices.size());
     for (const int i : indices) result.push_back(Interval(i));
     return result;
   }
@@ -158,8 +164,17 @@ class CpModelMapping {
     return reverse_boolean_map_[var];
   }
   int GetProtoVariableFromIntegerVariable(IntegerVariable var) const {
-    if (var.value() >= reverse_integer_map_.size()) return -1;
-    return reverse_integer_map_[var];
+    DCHECK(VariableIsPositive(var));
+    const PositiveOnlyIndex index = GetPositiveOnlyIndex(var);
+    if (index >= reverse_integer_map_.end_index()) return -1;
+    return reverse_integer_map_[index];
+  }
+
+  // This one should only be used when we have a mapping.
+  int GetProtoLiteralFromLiteral(sat::Literal lit) const {
+    const int proto_var = GetProtoVariableFromBooleanVariable(lit.Variable());
+    DCHECK_NE(proto_var, -1);
+    return lit.IsPositive() ? proto_var : NegatedRef(proto_var);
   }
 
   const std::vector<IntegerVariable>& GetVariableMapping() const {
@@ -177,6 +192,29 @@ class CpModelMapping {
     return CanonicalizeExpr(expr);
   }
 
+  // Returns the min/max activity of the linear constraint under the current
+  // integer_trail bounds.
+  std::pair<int64_t, int64_t> ComputeMinMaxActivity(
+      const LinearConstraintProto& proto, IntegerTrail* integer_trail) {
+    int64_t sum_min = 0;
+    int64_t sum_max = 0;
+
+    for (int i = 0; i < proto.vars_size(); ++i) {
+      const int64_t coeff = proto.coeffs(i);
+      const IntegerVariable var = this->Integer(proto.vars(i));
+      const int64_t lb = integer_trail->LowerBound(var).value();
+      const int64_t ub = integer_trail->UpperBound(var).value();
+      if (coeff >= 0) {
+        sum_min += coeff * lb;
+        sum_max += coeff * ub;
+      } else {
+        sum_min += coeff * ub;
+        sum_max += coeff * lb;
+      }
+    }
+    return {sum_min, sum_max};
+  }
+
   // For logging only, these are not super efficient.
   int NumIntegerVariables() const {
     int result = 0;
@@ -191,18 +229,6 @@ class CpModelMapping {
       if (var != kNoBooleanVariable) result++;
     }
     return result;
-  }
-
-  // Returns a heuristic set of values that could be created for the given
-  // variable when the constraints will be loaded.
-  // Note that the pointer is not stable across calls.
-  // It returns nullptr if the set is empty.
-  const absl::flat_hash_set<int64_t>& PotentialEncodedValues(int var) {
-    const auto& it = variables_to_encoded_values_.find(var);
-    if (it != variables_to_encoded_values_.end()) {
-      return it->second;
-    }
-    return empty_set_;
   }
 
   // Returns the number of variables in the loaded proto.
@@ -222,20 +248,16 @@ class CpModelMapping {
   // Recover from a IntervalVariable/BooleanVariable its associated CpModelProto
   // index. The value of -1 is used to indicate that there is no correspondence
   // (i.e. this variable is only used internally).
-  absl::StrongVector<BooleanVariable, int> reverse_boolean_map_;
-  absl::StrongVector<IntegerVariable, int> reverse_integer_map_;
+  util_intops::StrongVector<BooleanVariable, int> reverse_boolean_map_;
+  util_intops::StrongVector<PositiveOnlyIndex, int> reverse_integer_map_;
 
   // Set of constraints to ignore because they were already dealt with by
   // ExtractEncoding().
   absl::flat_hash_set<const ConstraintProto*> already_loaded_ct_;
   absl::flat_hash_set<const ConstraintProto*> is_half_encoding_ct_;
-
-  absl::flat_hash_map<int, absl::flat_hash_set<int64_t>>
-      variables_to_encoded_values_;
-  const absl::flat_hash_set<int64_t> empty_set_;
 };
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_CP_MODEL_MAPPING_H_
+#endif  // ORTOOLS_SAT_CP_MODEL_MAPPING_H_

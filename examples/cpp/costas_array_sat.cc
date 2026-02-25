@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//
 // Costas Array Problem
 //
 // Finds an NxN matrix of 0s and 1s, with only one 1 per row,
@@ -25,15 +24,19 @@
 #include <cstdint>
 #include <ctime>
 #include <set>
+#include <string>
 #include <utility>
+#include <vector>
 
+#include "absl/base/log_severity.h"
 #include "absl/flags/flag.h"
-#include "absl/flags/parse.h"
-#include "absl/flags/usage.h"
+#include "absl/log/globals.h"
+#include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/base/logging.h"
+#include "absl/types/span.h"
+#include "ortools/base/init_google.h"
+#include "ortools/base/types.h"
 #include "ortools/sat/cp_model.h"
 #include "ortools/sat/model.h"
 
@@ -48,7 +51,7 @@ namespace operations_research {
 namespace sat {
 
 // Checks that all pairwise distances are unique and returns all violators
-void CheckConstraintViolators(const std::vector<int64_t>& vars,
+void CheckConstraintViolators(absl::Span<const int64_t> vars,
                               std::vector<int>* const violators) {
   int dim = vars.size();
 
@@ -80,7 +83,7 @@ void CheckConstraintViolators(const std::vector<int64_t>& vars,
 }
 
 // Check that all pairwise differences are unique
-bool CheckCostas(const std::vector<int64_t>& vars) {
+bool CheckCostas(absl::Span<const int64_t> vars) {
   std::vector<int> violators;
 
   CheckConstraintViolators(vars, &violators);
@@ -95,6 +98,7 @@ void CostasHard(const int dim) {
   // create the variables
   std::vector<IntVar> vars;
   Domain domain(1, dim);
+  vars.reserve(dim);
   for (int i = 0; i < dim; ++i) {
     vars.push_back(
         cp_model.NewIntVar(domain).WithName(absl::StrCat("var_", i)));
@@ -172,10 +176,10 @@ void CostasBool(const int dim) {
           const BoolVar neg = cp_model.NewBoolVar();
           positive_diffs.push_back(pos);
           negative_diffs.push_back(neg);
-          cp_model.AddBoolOr({Not(vars[var][value]),
-                              Not(vars[var + step][value + diff]), pos});
-          cp_model.AddBoolOr({Not(vars[var][value + diff]),
-                              Not(vars[var + step][value]), neg});
+          cp_model.AddBoolOr(
+              {~vars[var][value], ~vars[var + step][value + diff], pos});
+          cp_model.AddBoolOr(
+              {~vars[var][value + diff], ~vars[var + step][value], neg});
         }
       }
       cp_model.AddLessOrEqual(LinearExpr::Sum(positive_diffs), 1);
@@ -244,10 +248,10 @@ void CostasBoolSoft(const int dim) {
           const BoolVar neg = cp_model.NewBoolVar();
           positive_diffs.push_back(pos);
           negative_diffs.push_back(neg);
-          cp_model.AddBoolOr({Not(vars[var][value]),
-                              Not(vars[var + step][value + diff]), pos});
-          cp_model.AddBoolOr({Not(vars[var][value + diff]),
-                              Not(vars[var + step][value]), neg});
+          cp_model.AddBoolOr(
+              {~vars[var][value], ~vars[var + step][value + diff], pos});
+          cp_model.AddBoolOr(
+              {~vars[var][value + diff], ~vars[var + step][value], neg});
         }
       }
       const IntVar pos_var =
@@ -296,9 +300,8 @@ void CostasBoolSoft(const int dim) {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  absl::SetFlag(&FLAGS_logtostderr, true);
-  google::InitGoogleLogging(argv[0]);
-  absl::ParseCommandLine(argc, argv);
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
+  InitGoogle(argv[0], &argc, &argv, true);
 
   int min = 1;
   int max = 10;

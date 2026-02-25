@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -30,19 +30,17 @@
 // This class is thread hostile as the copy and reference counter are
 // not protected by a mutex.
 
-#ifndef OR_TOOLS_UTIL_TUPLE_SET_H_
-#define OR_TOOLS_UTIL_TUPLE_SET_H_
+#ifndef ORTOOLS_UTIL_TUPLE_SET_H_
+#define ORTOOLS_UTIL_TUPLE_SET_H_
 
 #include <algorithm>
+#include <cstdint>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "ortools/base/hash.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
-#include "ortools/base/map_util.h"
 
 namespace operations_research {
 // ----- Main IntTupleSet class -----
@@ -200,8 +198,7 @@ bool IntTupleSet::Data::Contains(const std::vector<T>& candidate) const {
   }
   const int64_t fingerprint = Fingerprint(candidate);
   if (tuple_fprint_to_index_.contains(fingerprint)) {
-    const std::vector<int>& indices =
-        gtl::FindOrDie(tuple_fprint_to_index_, fingerprint);
+    const std::vector<int>& indices = tuple_fprint_to_index_.at(fingerprint);
     for (int i = 0; i < indices.size(); ++i) {
       const int tuple_index = indices[i];
       for (int j = 0; j < arity_; ++j) {
@@ -422,4 +419,4 @@ inline IntTupleSet IntTupleSet::SortedLexicographically() const {
 }
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_UTIL_TUPLE_SET_H_
+#endif  // ORTOOLS_UTIL_TUPLE_SET_H_

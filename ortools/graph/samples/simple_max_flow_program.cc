@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,8 +14,15 @@
 // [START program]
 // From Taha 'Introduction to Operations Research', example 6.4-2."""
 // [START import]
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <vector>
 
+#include "absl/base/log_severity.h"
+#include "absl/log/globals.h"
+#include "absl/log/log.h"
+#include "ortools/base/init_google.h"
 #include "ortools/graph/max_flow.h"
 // [END import]
 
@@ -49,7 +56,7 @@ void SimpleMaxFlowProgram() {
   // [END solve]
 
   // [START print_solution]
-  if (status == MaxFlow::OPTIMAL) {
+  if (status == SimpleMaxFlow::OPTIMAL) {
     LOG(INFO) << "Max flow: " << max_flow.OptimalFlow();
     LOG(INFO) << "";
     LOG(INFO) << "  Arc    Flow / Capacity";
@@ -66,7 +73,9 @@ void SimpleMaxFlowProgram() {
 
 }  // namespace operations_research
 
-int main() {
+int main(int argc, char* argv[]) {
+  InitGoogle(argv[0], &argc, &argv, true);
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
   operations_research::SimpleMaxFlowProgram();
   return EXIT_SUCCESS;
 }

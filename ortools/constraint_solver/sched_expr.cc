@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,9 +16,6 @@
 #include <vector>
 
 #include "absl/strings/str_format.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 
@@ -32,6 +29,10 @@ class IntervalVarStartExpr : public BaseIntExpr {
  public:
   explicit IntervalVarStartExpr(IntervalVar* const i)
       : BaseIntExpr(i->solver()), interval_(i) {}
+
+  // This type is neither copyable nor movable.
+  IntervalVarStartExpr(const IntervalVarStartExpr&) = delete;
+  IntervalVarStartExpr& operator=(const IntervalVarStartExpr&) = delete;
   ~IntervalVarStartExpr() override {}
 
   int64_t Min() const override { return interval_->StartMin(); }
@@ -66,13 +67,16 @@ class IntervalVarStartExpr : public BaseIntExpr {
 
  private:
   IntervalVar* interval_;
-  DISALLOW_COPY_AND_ASSIGN(IntervalVarStartExpr);
 };
 
 class IntervalVarEndExpr : public BaseIntExpr {
  public:
   explicit IntervalVarEndExpr(IntervalVar* const i)
       : BaseIntExpr(i->solver()), interval_(i) {}
+
+  // This type is neither copyable nor movable.
+  IntervalVarEndExpr(const IntervalVarEndExpr&) = delete;
+  IntervalVarEndExpr& operator=(const IntervalVarEndExpr&) = delete;
   ~IntervalVarEndExpr() override {}
 
   int64_t Min() const override { return interval_->EndMin(); }
@@ -105,13 +109,16 @@ class IntervalVarEndExpr : public BaseIntExpr {
 
  private:
   IntervalVar* interval_;
-  DISALLOW_COPY_AND_ASSIGN(IntervalVarEndExpr);
 };
 
 class IntervalVarDurationExpr : public BaseIntExpr {
  public:
   explicit IntervalVarDurationExpr(IntervalVar* const i)
       : BaseIntExpr(i->solver()), interval_(i) {}
+
+  // This type is neither copyable nor movable.
+  IntervalVarDurationExpr(const IntervalVarDurationExpr&) = delete;
+  IntervalVarDurationExpr& operator=(const IntervalVarDurationExpr&) = delete;
   ~IntervalVarDurationExpr() override {}
 
   int64_t Min() const override { return interval_->DurationMin(); }
@@ -146,7 +153,6 @@ class IntervalVarDurationExpr : public BaseIntExpr {
 
  private:
   IntervalVar* interval_;
-  DISALLOW_COPY_AND_ASSIGN(IntervalVarDurationExpr);
 };
 }  // namespace
 

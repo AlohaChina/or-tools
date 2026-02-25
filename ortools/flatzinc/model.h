@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,19 +11,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_FLATZINC_MODEL_H_
-#define OR_TOOLS_FLATZINC_MODEL_H_
+#ifndef ORTOOLS_FLATZINC_MODEL_H_
+#define ORTOOLS_FLATZINC_MODEL_H_
 
 #include <cstdint>
 #include <map>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/base/logging.h"
-#include "ortools/graph/iterators.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "ortools/util/logging.h"
-#include "ortools/util/string_array.h"
 
 namespace operations_research {
 namespace fz {
@@ -91,7 +91,7 @@ struct Domain {
   bool IntersectWithSingleton(int64_t value);
   bool IntersectWithDomain(const Domain& domain);
   bool IntersectWithInterval(int64_t interval_min, int64_t interval_max);
-  bool IntersectWithListOfIntegers(const std::vector<int64_t>& integers);
+  bool IntersectWithListOfIntegers(absl::Span<const int64_t> integers);
   bool IntersectWithFloatDomain(const Domain& domain);
 
   // Returns true iff the value did belong to the domain, and was removed.
@@ -108,13 +108,14 @@ struct Domain {
   bool display_as_boolean = false;
   // Indicates if the domain was created as a set domain.
   bool is_a_set = false;
+  bool is_fixed_set = false;
   // Float domain.
   bool is_float = false;
   std::vector<double> float_values;
 };
 
 // An int var is a name with a domain of possible values, along with
-// some tags. Typically, an Variable is on the heap, and owned by the
+// some tags. Typically, a Variable is on the heap, and owned by the
 // global Model object.
 struct Variable {
   // This method tries to unify two variables. This can happen during the
@@ -127,7 +128,7 @@ struct Variable {
   //   - if one variable is temporary, the name is the name of the other
   //     variable. If both variables are temporary or both variables are not
   //     temporary, the name is chosen arbitrarily between the two names.
-  bool Merge(const std::string& other_name, const Domain& other_domain,
+  bool Merge(absl::string_view other_name, const Domain& other_domain,
              bool other_temporary);
 
   std::string DebugString() const;
@@ -146,7 +147,7 @@ struct Variable {
  private:
   friend class Model;
 
-  Variable(const std::string& name_, const Domain& domain_, bool temporary_);
+  Variable(absl::string_view name_, const Domain& domain_, bool temporary_);
 };
 
 // An argument is either an integer value, an integer domain, a
@@ -172,7 +173,7 @@ struct Argument {
   static Argument FloatValue(double value);
   static Argument FloatInterval(double lb, double ub);
   static Argument FloatList(std::vector<double> floats);
-  static Argument VarRef(Variable* const var);
+  static Argument VarRef(Variable* var);
   static Argument VarRefArray(std::vector<Variable*> vars);
   static Argument VoidArgument();
   static Argument FromDomain(const Domain& domain);
@@ -216,13 +217,14 @@ struct Argument {
 // A constraint has a type, some arguments, and a few tags. Typically, a
 // Constraint is on the heap, and owned by the global Model object.
 struct Constraint {
-  Constraint(const std::string& t, std::vector<Argument> args,
-             bool strong_propag)
+  Constraint(absl::string_view t, std::vector<Argument> args,
+             bool strong_propag, bool sym, bool redundant)
       : type(t),
         arguments(std::move(args)),
         strong_propagation(strong_propag),
         active(true),
-        presolve_propagation_done(false) {}
+        is_symmetric_breaking(sym),
+        is_redundant(redundant) {}
 
   std::string DebugString() const;
 
@@ -249,8 +251,11 @@ struct Constraint {
   // presolve.
   bool active : 1;
 
-  // Indicates if presolve has finished propagating this constraint.
-  bool presolve_propagation_done : 1;
+  // Indicates if the constraint is a symmetric breaking constraint.
+  bool is_symmetric_breaking : 1;
+
+  // Indicates if the constraint is a redundant constraint.
+  bool is_redundant : 1;
 };
 
 // An annotation is a set of information. It has two use cases. One during
@@ -263,6 +268,7 @@ struct Annotation {
     IDENTIFIER,
     FUNCTION_CALL,
     INT_VALUE,
+    INT_LIST,
     INTERVAL,
     VAR_REF,
     VAR_REF_ARRAY,
@@ -271,18 +277,19 @@ struct Annotation {
 
   static Annotation Empty();
   static Annotation AnnotationList(std::vector<Annotation> list);
-  static Annotation Identifier(const std::string& id);
-  static Annotation FunctionCallWithArguments(const std::string& id,
+  static Annotation Identifier(absl::string_view id);
+  static Annotation FunctionCallWithArguments(absl::string_view id,
                                               std::vector<Annotation> args);
-  static Annotation FunctionCall(const std::string& id);
+  static Annotation FunctionCall(absl::string_view id);
   static Annotation Interval(int64_t interval_min, int64_t interval_max);
   static Annotation IntegerValue(int64_t value);
-  static Annotation VarRef(Variable* const var);
+  static Annotation IntegerList(const std::vector<int64_t>& values);
+  static Annotation VarRef(Variable* var);
   static Annotation VarRefArray(std::vector<Variable*> variables);
-  static Annotation String(const std::string& str);
+  static Annotation String(absl::string_view str);
 
   std::string DebugString() const;
-  bool IsFunctionCallWithIdentifier(const std::string& identifier) const {
+  bool IsFunctionCallWithIdentifier(absl::string_view identifier) const {
     return type == FUNCTION_CALL && id == identifier;
   }
   // Copy all the variable references contained in this annotation (and its
@@ -296,6 +303,7 @@ struct Annotation {
   std::string id;
   std::vector<Annotation> annotations;
   std::vector<Variable*> variables;
+  std::vector<int64_t> values;
   std::string string_value;
 };
 
@@ -311,14 +319,14 @@ struct SolutionOutputSpecs {
   };
 
   // Will output: name = <variable value>.
-  static SolutionOutputSpecs SingleVariable(const std::string& name,
+  static SolutionOutputSpecs SingleVariable(absl::string_view name,
                                             Variable* variable,
                                             bool display_as_boolean);
   // Will output (for example):
   //     name = array2d(min1..max1, min2..max2, [list of variable values])
   // for a 2d array (bounds.size() == 2).
   static SolutionOutputSpecs MultiDimensionalArray(
-      const std::string& name, std::vector<Bounds> bounds,
+      absl::string_view name, std::vector<Bounds> bounds,
       std::vector<Variable*> flat_variables, bool display_as_boolean);
   // Empty output.
   static SolutionOutputSpecs VoidOutput();
@@ -336,7 +344,7 @@ struct SolutionOutputSpecs {
 
 class Model {
  public:
-  explicit Model(const std::string& name)
+  explicit Model(absl::string_view name)
       : name_(name), objective_(nullptr), maximize_(true) {}
   ~Model();
 
@@ -344,14 +352,14 @@ class Model {
 
   // The objects returned by AddVariable(), AddConstant(),  and AddConstraint()
   // are owned by the model and will remain live for its lifetime.
-  Variable* AddVariable(const std::string& name, const Domain& domain,
-                        bool defined);
+  Variable* AddVariable(absl::string_view name, const Domain& domain,
+                        bool defined, bool set_is_fixed = false);
   Variable* AddConstant(int64_t value);
   Variable* AddFloatConstant(double value);
   // Creates and add a constraint to the model.
-  void AddConstraint(const std::string& id, std::vector<Argument> arguments,
-                     bool is_domain);
-  void AddConstraint(const std::string& id, std::vector<Argument> arguments);
+  void AddConstraint(absl::string_view id, std::vector<Argument> arguments,
+                     bool is_domain, bool symmetry, bool redundant);
+  void AddConstraint(absl::string_view id, std::vector<Argument> arguments);
   void AddOutput(SolutionOutputSpecs output);
 
   // Set the search annotations and the objective: either simply satisfy the
@@ -370,20 +378,25 @@ class Model {
   const std::vector<Annotation>& search_annotations() const {
     return search_annotations_;
   }
-#if !defined(SWIG)
-  util::MutableVectorIteration<Annotation> mutable_search_annotations() {
-    return util::MutableVectorIteration<Annotation>(&search_annotations_);
-  }
-#endif
   const std::vector<SolutionOutputSpecs>& output() const { return output_; }
-#if !defined(SWIG)
-  util::MutableVectorIteration<SolutionOutputSpecs> mutable_output() {
-    return util::MutableVectorIteration<SolutionOutputSpecs>(&output_);
-  }
-#endif
   bool maximize() const { return maximize_; }
   Variable* objective() const { return objective_; }
+  const std::vector<Variable*>& float_objective_variables() const {
+    return float_objective_variables_;
+  }
+  const std::vector<double>& float_objective_coefficients() const {
+    return float_objective_coefficients_;
+  }
+  double float_objective_offset() const { return float_objective_offset_; }
   void SetObjective(Variable* obj) { objective_ = obj; }
+  void ClearObjective() { objective_ = nullptr; }
+  void AddFloatingPointObjectiveTerm(Variable* var, double coeff) {
+    float_objective_variables_.push_back(var);
+    float_objective_coefficients_.push_back(coeff);
+  }
+  void SetFloatingPointObjectiveOffset(double offset) {
+    float_objective_offset_ = offset;
+  }
 
   // Services.
   std::string DebugString() const;
@@ -401,6 +414,9 @@ class Model {
   // The objective variable (it belongs to variables_).
   Variable* objective_;
   bool maximize_;
+  std::vector<Variable*> float_objective_variables_;
+  std::vector<double> float_objective_coefficients_;
+  double float_objective_offset_ = 0.0;
   // All search annotations are stored as a vector of Annotation.
   std::vector<Annotation> search_annotations_;
   std::vector<SolutionOutputSpecs> output_;
@@ -432,4 +448,4 @@ void FlattenAnnotations(const Annotation& ann, std::vector<Annotation>* out);
 }  // namespace fz
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_FLATZINC_MODEL_H_
+#endif  // ORTOOLS_FLATZINC_MODEL_H_

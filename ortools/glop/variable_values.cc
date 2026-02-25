@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,8 +13,24 @@
 
 #include "ortools/glop/variable_values.h"
 
-#include "ortools/graph/iterators.h"
+#include <algorithm>
+#include <cstdlib>
+#include <vector>
+
+#include "absl/base/attributes.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/types/span.h"
+#include "ortools/glop/basis_representation.h"
+#include "ortools/glop/dual_edge_norms.h"
+#include "ortools/glop/parameters.pb.h"
+#include "ortools/glop/pricing.h"
+#include "ortools/glop/variables_info.h"
+#include "ortools/lp_data/lp_types.h"
 #include "ortools/lp_data/lp_utils.h"
+#include "ortools/lp_data/scattered_vector.h"
+#include "ortools/lp_data/sparse.h"
+#include "ortools/util/stats.h"
 
 namespace operations_research {
 namespace glop {
@@ -129,10 +145,15 @@ Fractional VariableValues::ComputeMaximumPrimalInfeasibility() const {
   SCOPED_TIME_STAT(&stats_);
   Fractional primal_infeasibility = 0.0;
   const ColIndex num_cols = matrix_.num_cols();
+  const DenseRow::ConstView values = variable_values_.const_view();
+  const DenseRow::ConstView lower_bounds =
+      variables_info_.GetVariableLowerBounds().const_view();
+  const DenseRow::ConstView upper_bounds =
+      variables_info_.GetVariableUpperBounds().const_view();
   for (ColIndex col(0); col < num_cols; ++col) {
-    const Fractional col_infeasibility = std::max(
-        GetUpperBoundInfeasibility(col), GetLowerBoundInfeasibility(col));
-    primal_infeasibility = std::max(primal_infeasibility, col_infeasibility);
+    const Fractional infeasibility =
+        GetColInfeasibility(col, values, lower_bounds, upper_bounds);
+    primal_infeasibility = std::max(primal_infeasibility, infeasibility);
   }
   return primal_infeasibility;
 }
@@ -141,10 +162,15 @@ Fractional VariableValues::ComputeSumOfPrimalInfeasibilities() const {
   SCOPED_TIME_STAT(&stats_);
   Fractional sum = 0.0;
   const ColIndex num_cols = matrix_.num_cols();
+  const DenseRow::ConstView values = variable_values_.const_view();
+  const DenseRow::ConstView lower_bounds =
+      variables_info_.GetVariableLowerBounds().const_view();
+  const DenseRow::ConstView upper_bounds =
+      variables_info_.GetVariableUpperBounds().const_view();
   for (ColIndex col(0); col < num_cols; ++col) {
-    const Fractional col_infeasibility = std::max(
-        GetUpperBoundInfeasibility(col), GetLowerBoundInfeasibility(col));
-    sum += std::max(0.0, col_infeasibility);
+    const Fractional infeasibility =
+        GetColInfeasibility(col, values, lower_bounds, upper_bounds);
+    sum += std::max(Fractional{0.0}, infeasibility);
   }
   return sum;
 }
@@ -165,15 +191,17 @@ void VariableValues::UpdateOnPivoting(const ScatteredColumn& direction,
   // Note that there is no need to call variables_info_.Update() on basic
   // variables when they change values. Note also that the status of
   // entering_col will be updated later.
+  auto basis = basis_.const_view();
+  auto values = variable_values_.view();
   for (const auto e : direction) {
-    const ColIndex col = basis_[e.row()];
-    variable_values_[col] -= e.coefficient() * step;
+    const ColIndex col = basis[e.row()];
+    values[col] -= e.coefficient() * step;
   }
-  variable_values_[entering_col] += step;
+  values[entering_col] += step;
 }
 
 void VariableValues::UpdateGivenNonBasicVariables(
-    const std::vector<ColIndex>& cols_to_update, bool update_basic_variables) {
+    absl::Span<const ColIndex> cols_to_update, bool update_basic_variables) {
   SCOPED_TIME_STAT(&stats_);
   if (!update_basic_variables) {
     for (ColIndex col : cols_to_update) {
@@ -222,45 +250,86 @@ void VariableValues::UpdateGivenNonBasicVariables(
   initially_all_zero_scratchpad_.non_zeros.clear();
 }
 
-void VariableValues::RecomputeDualPrices() {
+void VariableValues::RecomputeDualPrices(bool put_more_importance_on_norm) {
   SCOPED_TIME_STAT(&stats_);
   const RowIndex num_rows = matrix_.num_rows();
   dual_prices_->ClearAndResize(num_rows);
   dual_prices_->StartDenseUpdates();
 
+  put_more_importance_on_norm_ = put_more_importance_on_norm;
   const Fractional tolerance = parameters_.primal_feasibility_tolerance();
-  const DenseColumn& squared_norms = dual_edge_norms_->GetEdgeSquaredNorms();
-  for (RowIndex row(0); row < num_rows; ++row) {
-    const ColIndex col = basis_[row];
-    const Fractional infeasibility = std::max(GetUpperBoundInfeasibility(col),
-                                              GetLowerBoundInfeasibility(col));
-    if (infeasibility > tolerance) {
-      dual_prices_->DenseAddOrUpdate(
-          row, Square(infeasibility) / squared_norms[row]);
+  const DenseColumn::ConstView squared_norms =
+      dual_edge_norms_->GetEdgeSquaredNorms();
+  const RowToColMapping::ConstView basis = basis_.const_view();
+  const DenseRow::ConstView values = variable_values_.const_view();
+  const DenseRow::ConstView lower_bounds =
+      variables_info_.GetVariableLowerBounds().const_view();
+  const DenseRow::ConstView upper_bounds =
+      variables_info_.GetVariableUpperBounds().const_view();
+  if (put_more_importance_on_norm) {
+    for (RowIndex row(0); row < num_rows; ++row) {
+      const ColIndex col = basis[row];
+      const Fractional infeasibility =
+          GetColInfeasibility(col, values, lower_bounds, upper_bounds);
+      if (infeasibility > tolerance) {
+        dual_prices_->DenseAddOrUpdate(
+            row, std::abs(infeasibility) / squared_norms[row]);
+      }
+    }
+  } else {
+    for (RowIndex row(0); row < num_rows; ++row) {
+      const ColIndex col = basis[row];
+      const Fractional infeasibility =
+          GetColInfeasibility(col, values, lower_bounds, upper_bounds);
+      if (infeasibility > tolerance) {
+        dual_prices_->DenseAddOrUpdate(
+            row, Square(infeasibility) / squared_norms[row]);
+      }
     }
   }
 }
 
-void VariableValues::UpdateDualPrices(const std::vector<RowIndex>& rows) {
+void VariableValues::UpdateDualPrices(absl::Span<const RowIndex> rows) {
   if (dual_prices_->Size() != matrix_.num_rows()) {
-    RecomputeDualPrices();
+    RecomputeDualPrices(put_more_importance_on_norm_);
     return;
   }
 
-  // Note(user): this is the same as the code in
-  // RecomputePrimalInfeasibilityInformation(), but we do need the clear part.
+  // Note(user): this is the same as the code in RecomputeDualPrices(), but we
+  // do need the clear part.
   SCOPED_TIME_STAT(&stats_);
   const Fractional tolerance = parameters_.primal_feasibility_tolerance();
-  const DenseColumn& squared_norms = dual_edge_norms_->GetEdgeSquaredNorms();
-  for (const RowIndex row : rows) {
-    const ColIndex col = basis_[row];
-    const Fractional infeasibility = std::max(GetUpperBoundInfeasibility(col),
-                                              GetLowerBoundInfeasibility(col));
-    if (infeasibility > tolerance) {
-      dual_prices_->AddOrUpdate(row,
-                                Square(infeasibility) / squared_norms[row]);
-    } else {
-      dual_prices_->Remove(row);
+  const RowToColMapping::ConstView basis = basis_.const_view();
+  const DenseColumn::ConstView squared_norms =
+      dual_edge_norms_->GetEdgeSquaredNorms();
+  const DenseRow::ConstView values = variable_values_.const_view();
+  const DenseRow::ConstView lower_bounds =
+      variables_info_.GetVariableLowerBounds().const_view();
+  const DenseRow::ConstView upper_bounds =
+      variables_info_.GetVariableUpperBounds().const_view();
+  if (put_more_importance_on_norm_) {
+    for (const RowIndex row : rows) {
+      const ColIndex col = basis[row];
+      const Fractional infeasibility =
+          GetColInfeasibility(col, values, lower_bounds, upper_bounds);
+      if (infeasibility > tolerance) {
+        dual_prices_->AddOrUpdate(row,
+                                  std::abs(infeasibility) / squared_norms[row]);
+      } else {
+        dual_prices_->Remove(row);
+      }
+    }
+  } else {
+    for (const RowIndex row : rows) {
+      const ColIndex col = basis[row];
+      const Fractional infeasibility =
+          GetColInfeasibility(col, values, lower_bounds, upper_bounds);
+      if (infeasibility > tolerance) {
+        dual_prices_->AddOrUpdate(row,
+                                  Square(infeasibility) / squared_norms[row]);
+      } else {
+        dual_prices_->Remove(row);
+      }
     }
   }
 }

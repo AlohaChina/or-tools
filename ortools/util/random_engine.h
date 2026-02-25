@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,15 +13,15 @@
 
 // Defines the random engine type to use within operations_research code.
 
-#ifndef OR_TOOLS_UTIL_RANDOM_ENGINE_H_
-#define OR_TOOLS_UTIL_RANDOM_ENGINE_H_
+#ifndef ORTOOLS_UTIL_RANDOM_ENGINE_H_
+#define ORTOOLS_UTIL_RANDOM_ENGINE_H_
 
 #include <random>
 
 namespace operations_research {
 
-using random_engine_t = std::mt19937;
+using random_engine_t = std::mt19937_64;
 
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_UTIL_RANDOM_ENGINE_H_
+#endif  // ORTOOLS_UTIL_RANDOM_ENGINE_H_

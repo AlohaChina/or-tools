@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -19,28 +19,29 @@
 // IMPORTANT NOTICE: you need to compile your binary with -frounding-math if
 // you want to use rounding modes.
 
-#ifndef OR_TOOLS_UTIL_FP_UTILS_H_
-#define OR_TOOLS_UTIL_FP_UTILS_H_
+#ifndef ORTOOLS_UTIL_FP_UTILS_H_
+#define ORTOOLS_UTIL_FP_UTILS_H_
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <limits>
+// Needed before fenv_access. See https://github.com/microsoft/STL/issues/2613.
+#include <numeric>  // IWYU pragma:keep.
+
+#include "absl/log/check.h"
+#include "absl/types/span.h"
 
 #if defined(_MSC_VER)
 #pragma fenv_access(on)  // NOLINT
 #else
-#include <fenv.h>  // NOLINT
+#include <cfenv>  // NOLINT
 #endif
 
 #ifdef __SSE__
 #include <xmmintrin.h>
 #endif
-
-#include <stdlib.h>
-
-#include <algorithm>
-#include <cmath>
-#include <limits>
-#include <vector>
-
-#include "ortools/base/integral_types.h"
-#include "ortools/base/logging.h"
 
 #if defined(_MSC_VER)
 static inline double isnan(double value) { return _isnan(value); }
@@ -88,12 +89,18 @@ class ScopedFloatingPointEnv {
     excepts &= FE_ALL_EXCEPT;
 #if defined(__APPLE__)
     fenv_.__control &= ~excepts;
-#elif defined(__FreeBSD__)
+#elif (defined(__FreeBSD__) || defined(__OpenBSD__))
     fenv_.__x87.__control &= ~excepts;
+#elif defined(__NetBSD__)
+    fenv_.x87.control &= ~excepts;
 #else  // Linux
     fenv_.__control_word &= ~excepts;
 #endif
+#if defined(__NetBSD__)
+    fenv_.mxcsr &= ~(excepts << 7);
+#else
     fenv_.__mxcsr &= ~(excepts << 7);
+#endif
     CHECK_EQ(0, fesetenv(&fenv_));
 #endif
   }
@@ -156,7 +163,8 @@ bool AreWithinAbsoluteTolerance(FloatType x, FloatType y,
 template <typename FloatType>
 bool IsSmallerWithinTolerance(FloatType x, FloatType y, FloatType tolerance) {
   if (IsPositiveOrNegativeInfinity(y)) return x <= y;
-  return x <= y + tolerance * std::max(1.0, std::min(std::abs(x), std::abs(y)));
+  return x <= y + tolerance * std::max(FloatType(1.0),
+                                       std::min(std::abs(x), std::abs(y)));
 }
 
 // Returns true if x is within tolerance of any integer.  Always returns
@@ -170,7 +178,6 @@ inline bool IsIntegerWithinTolerance(FloatType x, FloatType tolerance) {
 
 // Handy alternatives to EXPECT_NEAR(), using relative and absolute tolerance
 // instead of relative tolerance only, and with a proper support for infinity.
-// TODO(user): investigate moving this to ortools/base/ or some other place.
 #define EXPECT_COMPARABLE(expected, obtained, epsilon)                    \
   EXPECT_TRUE(operations_research::AreWithinAbsoluteOrRelativeTolerances( \
       expected, obtained, epsilon, epsilon))                              \
@@ -206,7 +213,7 @@ inline bool IsIntegerWithinTolerance(FloatType x, FloatType tolerance) {
 //
 // TODO(user): incorporate the gcd computation here? The issue is that I am
 // not sure if I just do factor /= gcd that round(x * factor) will be the same.
-void GetBestScalingOfDoublesToInt64(const std::vector<double>& input,
+void GetBestScalingOfDoublesToInt64(absl::Span<const double> input,
                                     int64_t max_absolute_sum,
                                     double* scaling_factor,
                                     double* max_relative_coeff_error);
@@ -215,9 +222,9 @@ void GetBestScalingOfDoublesToInt64(const std::vector<double>& input,
 //  -  The sum over i of min(0, round(factor * x[i])) >= -max_sum.
 //  -  The sum over i of max(0, round(factor * x[i])) <= max_sum.
 // For any possible values of the x[i] such that x[i] is in [lb[i], ub[i]].
-double GetBestScalingOfDoublesToInt64(const std::vector<double>& input,
-                                      const std::vector<double>& lb,
-                                      const std::vector<double>& ub,
+double GetBestScalingOfDoublesToInt64(absl::Span<const double> input,
+                                      absl::Span<const double> lb,
+                                      absl::Span<const double> ub,
                                       int64_t max_absolute_sum);
 // This computes:
 //
@@ -227,10 +234,9 @@ double GetBestScalingOfDoublesToInt64(const std::vector<double>& input,
 // The max_scaled_sum_error which is a bound on the maximum difference between
 // the exact scaled sum and the rounded one. One needs to divide this by
 // scaling_factor to have the maximum absolute error on the original sum.
-void ComputeScalingErrors(const std::vector<double>& input,
-                          const std::vector<double>& lb,
-                          const std::vector<double>& ub,
-                          const double scaling_factor,
+void ComputeScalingErrors(absl::Span<const double> input,
+                          absl::Span<const double> lb,
+                          absl::Span<const double> ub, double scaling_factor,
                           double* max_relative_coeff_error,
                           double* max_scaled_sum_error);
 
@@ -238,7 +244,7 @@ void ComputeScalingErrors(const std::vector<double>& input,
 // round(fabs(x[i] * scaling_factor)). The numbers 0 are ignored and if they are
 // all zero then the result is 1. Note that round(fabs()) is the same as
 // fabs(round()) since the numbers are rounded away from zero.
-int64_t ComputeGcdOfRoundedDoubles(const std::vector<double>& x,
+int64_t ComputeGcdOfRoundedDoubles(absl::Span<const double> x,
                                    double scaling_factor);
 
 // Returns alpha * x + (1 - alpha) * y.
@@ -247,19 +253,11 @@ inline FloatType Interpolate(FloatType x, FloatType y, FloatType alpha) {
   return alpha * x + (1 - alpha) * y;
 }
 
-// This is a fast implementation of the C99 function ilogb for normalized
-// doubles with the caveat that it returns -1023 for zero, and 1024 for infinity
-// an NaNs.
-int fast_ilogb(const double value);
-
-// This is a fast implementation of the C99 function scalbn, with the caveat
-// that it works on normalized numbers and if the result underflows, overflows,
-// or is applied to a NaN or an +-infinity, the result is undefined behavior.
-// Note that the version of the function that takes a reference, modifies the
-// given value.
-double fast_scalbn(const double value, const int exponent);
-void fast_scalbn_inplace(double& mutable_value, const int exponent);
+inline int fast_ilogb(double value) { return ilogb(value); }
+inline double fast_scalbn(double value, int exponent) {
+  return scalbn(value, exponent);
+}
 
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_UTIL_FP_UTILS_H_
+#endif  // ORTOOLS_UTIL_FP_UTILS_H_

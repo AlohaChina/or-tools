@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,13 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_ZERO_HALF_CUTS_H_
-#define OR_TOOLS_SAT_ZERO_HALF_CUTS_H_
+#ifndef ORTOOLS_SAT_ZERO_HALF_CUTS_H_
+#define ORTOOLS_SAT_ZERO_HALF_CUTS_H_
 
+#include <utility>
 #include <vector>
 
+#include "absl/types/span.h"
 #include "ortools/lp_data/lp_types.h"
-#include "ortools/sat/integer.h"
+#include "ortools/sat/integer_base.h"
 #include "ortools/sat/util.h"
 
 namespace operations_research {
@@ -44,12 +46,11 @@ class ZeroHalfCutHelper {
   // TODO(user): This is a first implementation, both the heuristic and the
   // code performance can probably be improved uppon.
   void ProcessVariables(const std::vector<double>& lp_values,
-                        const std::vector<IntegerValue>& lower_bounds,
-                        const std::vector<IntegerValue>& upper_bounds);
-  void AddOneConstraint(
-      glop::RowIndex,
-      const std::vector<std::pair<glop::ColIndex, IntegerValue>>& terms,
-      IntegerValue lb, IntegerValue ub);
+                        absl::Span<const IntegerValue> lower_bounds,
+                        absl::Span<const IntegerValue> upper_bounds);
+  void AddOneConstraint(glop::RowIndex, absl::Span<const glop::ColIndex> cols,
+                        absl::Span<const IntegerValue> coeffs, IntegerValue lb,
+                        IntegerValue ub);
   std::vector<std::vector<std::pair<glop::RowIndex, IntegerValue>>>
   InterestingCandidates(ModelRandomGenerator* random);
 
@@ -89,14 +90,10 @@ class ZeroHalfCutHelper {
   //
   // Like std::set_symmetric_difference, but use a vector<bool> instead of sort.
   // This assumes tmp_marked_ to be all false. We don't DCHECK it here for
-  // speed, but it DCHECKed on each EliminateVarUsingRow() call. In addition,
-  // the result is filtered using the extra_condition function.
-  void SymmetricDifference(std::function<bool(int)> extra_condition,
-                           const std::vector<int>& a, std::vector<int>* b);
+  // speed, but it DCHECKed on each EliminateVarUsingRow() call.
+  void SymmetricDifference(absl::Span<const int> a, std::vector<int>* b);
 
  private:
-  void ProcessSingletonColumns();
-
   // As we combine rows, when the activity of a combination get too far away
   // from its bound, we just discard it. Note that the row will still be there
   // but its index will not appear in the col-wise representation of the matrix.
@@ -129,4 +126,4 @@ class ZeroHalfCutHelper {
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_ZERO_HALF_CUTS_H_
+#endif  // ORTOOLS_SAT_ZERO_HALF_CUTS_H_

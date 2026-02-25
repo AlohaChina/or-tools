@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,22 +14,29 @@
 // Algorithms to encode constraints into their SAT representation. Currently,
 // this contains one possible encoding of a cardinality constraint as used by
 // the core-based optimization algorithm in optimization.h.
+//
+// This is also known as the incremental totalizer encoding in the literature.
 
-#ifndef OR_TOOLS_SAT_ENCODING_H_
-#define OR_TOOLS_SAT_ENCODING_H_
+#ifndef ORTOOLS_SAT_ENCODING_H_
+#define ORTOOLS_SAT_ENCODING_H_
 
-#include <cstdint>
 #include <deque>
+#include <functional>
+#include <string>
+#include <utility>
 #include <vector>
 
-#include "ortools/base/int_type.h"
-#include "ortools/base/integral_types.h"
+#include "absl/log/check.h"
+#include "absl/types/span.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
 #include "ortools/sat/boolean_problem.pb.h"
+#include "ortools/sat/clause.h"
+#include "ortools/sat/model.h"
 #include "ortools/sat/pb_constraint.h"
 #include "ortools/sat/sat_base.h"
 #include "ortools/sat/sat_solver.h"
+#include "ortools/sat/util.h"
+#include "ortools/util/strong_integers.h"
 
 namespace operations_research {
 namespace sat {
@@ -53,10 +60,17 @@ namespace sat {
 // Constraints", In Proc. of CP 2003, pages 108-122, 2003.
 class EncodingNode {
  public:
-  EncodingNode() {}
+  EncodingNode() = default;
 
-  // Constructs a EncodingNode of size one, just formed by the given literal.
-  explicit EncodingNode(Literal l);
+  // Static creation functions.
+  //
+  // The generic version constructs a node with value in [lb, ub].
+  // New literal "<=x" will be constructed using create_lit(x).
+  static EncodingNode ConstantNode(Coefficient weight);
+  static EncodingNode LiteralNode(Literal l, Coefficient weight);
+  static EncodingNode GenericNode(int lb, int ub,
+                                  std::function<Literal(int x)> create_lit,
+                                  Coefficient weight);
 
   // Creates a "full" encoding node on n new variables, the represented number
   // beeing in [lb, ub = lb + n). The variables are added to the given solver
@@ -69,6 +83,14 @@ class EncodingNode {
   // Only one literals will be created by this operation. Note that no clauses
   // linking it with a or b are added by this function.
   void InitializeLazyNode(EncodingNode* a, EncodingNode* b, SatSolver* solver);
+  void InitializeLazyCoreNode(Coefficient weight, EncodingNode* a,
+                              EncodingNode* b);
+
+  // If we know that all the literals[0] of the given nodes are in "at most one"
+  // relationship, we can create a node that is the sum of them with a simple
+  // encoding. This does create linking implications.
+  void InitializeAmoNode(absl::Span<EncodingNode* const> nodes,
+                         SatSolver* solver);
 
   // Returns a literal with the meaning 'this node number is > i'.
   // The given i must be in [lb_, current_ub).
@@ -93,53 +115,66 @@ class EncodingNode {
   // Returns false if we were already at the upper bound for this node.
   bool IncreaseCurrentUB(SatSolver* solver);
 
-  // Removes the left-side literals fixed to 1 and returns the number of
-  // literals removed this way. Note that this increases lb_ and reduces the
-  // number of active literals. It also removes any right-side literals fixed to
-  // 0. If such a literal exists, ub is updated accordingly.
-  int Reduce(const SatSolver& solver);
+  // Indicate that the node cannot grow further than its current assumption.
+  void TransformToBoolean(SatSolver* solver);
 
-  // Fix the right-side variables with indices >= to the given upper_bound to
-  // false.
-  void ApplyUpperBound(int64_t upper_bound, SatSolver* solver);
+  // Removes the left-side literals fixed to 1. Note that this increases lb_ and
+  // reduces the number of active literals. It also removes any right-side
+  // literals fixed to 0. If such a literal exists, ub is updated accordingly.
+  //
+  // Return the overall weight increase.
+  Coefficient Reduce(const SatSolver& solver);
 
-  void set_weight(Coefficient w) { weight_ = w; }
+  // GetAssumption() might need to create new literals.
+  bool AssumptionIs(Literal other) const;
+  Literal GetAssumption(SatSolver* solver);
+  bool HasNoWeight() const;
+  void IncreaseWeightLb();
+
+  // Fix any literal that would cause the weight of this node to go over the
+  // gap.
+  void ApplyWeightUpperBound(Coefficient gap, SatSolver* solver);
+
+  void set_weight(Coefficient w) {
+    weight_lb_ = lb_;
+    weight_ = w;
+  }
   Coefficient weight() const { return weight_; }
 
+  // The depth is mainly used as an heuristic to decide which nodes to merge
+  // first. See the < operator.
+  void set_depth(int depth) { depth_ = depth; }
   int depth() const { return depth_; }
+
   int lb() const { return lb_; }
+  int weight_lb() const { return weight_lb_; }
   int current_ub() const { return lb_ + literals_.size(); }
   int ub() const { return ub_; }
   EncodingNode* child_a() const { return child_a_; }
   EncodingNode* child_b() const { return child_b_; }
 
+  // We use the solver to display the current values of the literals.
+  std::string DebugString(const VariablesAssignment& assignment) const;
+
  private:
-  int depth_;
-  int lb_;
-  int ub_;
+  int depth_ = 0;
+  int lb_ = 0;
+  int ub_ = 1;
   BooleanVariable for_sorting_;
 
+  // The weight is only applied for literal >= this lb.
+  int weight_lb_ = 0;
+
   Coefficient weight_;
-  EncodingNode* child_a_;
-  EncodingNode* child_b_;
+  EncodingNode* child_a_ = nullptr;
+  EncodingNode* child_b_ = nullptr;
+
+  // If not null, will be used instead of creating new variable directly.
+  std::function<Literal(int x)> create_lit_ = nullptr;
 
   // The literals of this node in order.
   std::vector<Literal> literals_;
 };
-
-// Note that we use <= because on 32 bits architecture, the size will actually
-// be smaller than 64 bytes. One exception is with visual studio on windows, in
-// debug mode, where the struct is bigger.
-#if defined(_M_X64) && defined(_DEBUG)
-// In debug, with msvc, std::Vector<T> is 32
-static_assert(sizeof(EncodingNode) == 72,
-              "ERROR_EncodingNode_is_not_well_compacted");
-#else
-// Note that we use <= because on 32 bits architecture, the size will actually
-// be smaller than 64 bytes.
-static_assert(sizeof(EncodingNode) <= 64,
-              "ERROR_EncodingNode_is_not_well_compacted");
-#endif
 
 // Merges the two given EncodingNodes by creating a new node that corresponds to
 // the sum of the two given ones. Only the left-most binary variable is created
@@ -166,35 +201,25 @@ EncodingNode* MergeAllNodesWithDeque(Coefficient upper_bound,
                                      std::deque<EncodingNode>* repository);
 
 // Same as MergeAllNodesWithDeque() but use a priority queue to merge in
-// priority nodes with smaller sizes.
-EncodingNode* LazyMergeAllNodeWithPQ(const std::vector<EncodingNode*>& nodes,
-                                     SatSolver* solver,
-                                     std::deque<EncodingNode>* repository);
-
-// Returns a vector with one new EncodingNode by variable in the given
-// objective. Sets the offset to the negated sum of the negative coefficient,
-// because in this case we negate the literals to have only positive
-// coefficients.
-std::vector<EncodingNode*> CreateInitialEncodingNodes(
-    const std::vector<Literal>& literals,
-    const std::vector<Coefficient>& coeffs, Coefficient* offset,
-    std::deque<EncodingNode>* repository);
-std::vector<EncodingNode*> CreateInitialEncodingNodes(
-    const LinearObjective& objective_proto, Coefficient* offset,
-    std::deque<EncodingNode>* repository);
+// priority nodes with smaller sizes. This also enforce that the sum of nodes
+// is greater than its lower bound.
+EncodingNode* LazyMergeAllNodeWithPQAndIncreaseLb(
+    Coefficient weight, const std::vector<EncodingNode*>& nodes,
+    SatSolver* solver, std::deque<EncodingNode>* repository);
 
 // Reduces the nodes using the now fixed literals, update the lower-bound, and
 // returns the set of assumptions for the next round of the core-based
 // algorithm. Returns an empty set of assumptions if everything is fixed.
-std::vector<Literal> ReduceNodesAndExtractAssumptions(
-    Coefficient upper_bound, Coefficient stratified_lower_bound,
-    Coefficient* lower_bound, std::vector<EncodingNode*>* nodes,
-    SatSolver* solver);
+void ReduceNodes(Coefficient upper_bound, Coefficient* lower_bound,
+                 std::vector<EncodingNode*>* nodes, SatSolver* solver);
+std::vector<Literal> ExtractAssumptions(Coefficient stratified_lower_bound,
+                                        const std::vector<EncodingNode*>& nodes,
+                                        SatSolver* solver);
 
 // Returns the minimum weight of the nodes in the core. Note that the literal in
 // the core must appear in the same order as the one in nodes.
 Coefficient ComputeCoreMinWeight(const std::vector<EncodingNode*>& nodes,
-                                 const std::vector<Literal>& core);
+                                 absl::Span<const Literal> core);
 
 // Returns the maximum node weight under the given upper_bound. Returns zero if
 // no such weight exist (note that a node weight is strictly positive, so this
@@ -202,13 +227,56 @@ Coefficient ComputeCoreMinWeight(const std::vector<EncodingNode*>& nodes,
 Coefficient MaxNodeWeightSmallerThan(const std::vector<EncodingNode*>& nodes,
                                      Coefficient upper_bound);
 
-// Updates the encoding using the given core. The literals in the core must
-// match the order in nodes.
-void ProcessCore(const std::vector<Literal>& core, Coefficient min_weight,
-                 std::deque<EncodingNode>* repository,
-                 std::vector<EncodingNode*>* nodes, SatSolver* solver);
+// The class reponsible for processing cores and maintaining a Boolean encoding
+// of the linear objective.
+class ObjectiveEncoder {
+ public:
+  explicit ObjectiveEncoder(Model* model)
+      : params_(*model->GetOrCreate<SatParameters>()),
+        sat_solver_(model->GetOrCreate<SatSolver>()),
+        implications_(model->GetOrCreate<BinaryImplicationGraph>()),
+        random_(model->GetOrCreate<ModelRandomGenerator>()) {}
+
+  // Updates the encoding using the given core. The literals in the core must
+  // match the order in nodes. Returns false if the model become infeasible.
+  bool ProcessCore(absl::Span<const Literal> core, Coefficient min_weight,
+                   Coefficient gap, std::string* info);
+
+  void AddBaseNode(EncodingNode node) {
+    repository_.push_back(std::move(node));
+    nodes_.push_back(&repository_.back());
+  }
+
+  // TODO(user): Remove mutable version once refactoring is done.
+  const std::vector<EncodingNode*>& nodes() const { return nodes_; }
+  std::vector<EncodingNode*>* mutable_nodes() { return &nodes_; }
+
+ private:
+  // There is more than one way to create new assumptions and encode the
+  // information from this core. This is slightly different from ProcessCore()
+  // and follow the algorithm used by many of the top max-SAT solver under the
+  // name incremental OLL. This is described in: António Morgado, Carmine
+  // Dodaro, Joao Marques-Silva. "Core-Guided MaxSAT with Soft Cardinality
+  // Constraints". CP 2014. pp. 564-573. António Morgado, Alexey Ignatiev, Joao
+  // Marques-Silva. "MSCG: Robust Core-Guided MaxSAT Solving." JSAT 9. 2014. pp.
+  // 129-134.
+  //
+  // TODO(user): The last time this was tested, it was however not as good as
+  // the ProcessCore() version. That might change as we code/change more
+  // heuristic, so we keep it around.
+  const bool alternative_encoding_ = false;
+
+  // Nodes point into repository_.
+  std::vector<EncodingNode*> nodes_;
+  std::deque<EncodingNode> repository_;
+
+  const SatParameters& params_;
+  SatSolver* sat_solver_;
+  BinaryImplicationGraph* implications_;
+  ModelRandomGenerator* random_;
+};
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_ENCODING_H_
+#endif  // ORTOOLS_SAT_ENCODING_H_

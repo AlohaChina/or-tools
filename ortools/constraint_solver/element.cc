@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -22,8 +23,8 @@
 
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
+#include "ortools/base/types.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/range_minimum_query.h"
@@ -35,7 +36,7 @@ ABSL_FLAG(bool, cp_disable_element_cache, true,
 namespace operations_research {
 
 // ----- IntExprElement -----
-void LinkVarExpr(Solver* const s, IntExpr* const expr, IntVar* const var);
+void LinkVarExpr(Solver* s, IntExpr* expr, IntVar* var);
 
 namespace {
 
@@ -67,7 +68,7 @@ class VectorGreater {
 
 class BaseIntExprElement : public BaseIntExpr {
  public:
-  BaseIntExprElement(Solver* const s, IntVar* const e);
+  BaseIntExprElement(Solver* s, IntVar* e);
   ~BaseIntExprElement() override {}
   int64_t Min() const override;
   int64_t Max() const override;
@@ -88,6 +89,27 @@ class BaseIntExprElement : public BaseIntExpr {
 
  private:
   void UpdateSupports() const;
+  template <typename T>
+  void UpdateElementIndexBounds(T check_value) {
+    const int64_t emin = ExprMin();
+    const int64_t emax = ExprMax();
+    int64_t nmin = emin;
+    int64_t value = ElementValue(nmin);
+    while (nmin < emax && check_value(value)) {
+      nmin++;
+      value = ElementValue(nmin);
+    }
+    if (nmin == emax && check_value(value)) {
+      solver()->Fail();
+    }
+    int64_t nmax = emax;
+    value = ElementValue(nmax);
+    while (nmax >= nmin && check_value(value)) {
+      nmax--;
+      value = ElementValue(nmax);
+    }
+    expr_->SetRange(nmin, nmax);
+  }
 
   mutable int64_t min_;
   mutable int min_support_;
@@ -126,42 +148,21 @@ void BaseIntExprElement::Range(int64_t* mi, int64_t* ma) {
   *ma = max_;
 }
 
-#define UPDATE_BASE_ELEMENT_INDEX_BOUNDS(test) \
-  const int64_t emin = ExprMin();              \
-  const int64_t emax = ExprMax();              \
-  int64_t nmin = emin;                         \
-  int64_t value = ElementValue(nmin);          \
-  while (nmin < emax && test) {                \
-    nmin++;                                    \
-    value = ElementValue(nmin);                \
-  }                                            \
-  if (nmin == emax && test) {                  \
-    solver()->Fail();                          \
-  }                                            \
-  int64_t nmax = emax;                         \
-  value = ElementValue(nmax);                  \
-  while (nmax >= nmin && test) {               \
-    nmax--;                                    \
-    value = ElementValue(nmax);                \
-  }                                            \
-  expr_->SetRange(nmin, nmax);
-
 void BaseIntExprElement::SetMin(int64_t m) {
-  UPDATE_BASE_ELEMENT_INDEX_BOUNDS(value < m);
+  UpdateElementIndexBounds([m](int64_t value) { return value < m; });
 }
 
 void BaseIntExprElement::SetMax(int64_t m) {
-  UPDATE_BASE_ELEMENT_INDEX_BOUNDS(value > m);
+  UpdateElementIndexBounds([m](int64_t value) { return value > m; });
 }
 
 void BaseIntExprElement::SetRange(int64_t mi, int64_t ma) {
   if (mi > ma) {
     solver()->Fail();
   }
-  UPDATE_BASE_ELEMENT_INDEX_BOUNDS((value < mi || value > ma));
+  UpdateElementIndexBounds(
+      [mi, ma](int64_t value) { return value < mi || value > ma; });
 }
-
-#undef UPDATE_BASE_ELEMENT_INDEX_BOUNDS
 
 void BaseIntExprElement::UpdateSupports() const {
   if (initial_update_ || !expr_->Contains(min_support_) ||
@@ -284,7 +285,7 @@ class IntElementConstraint : public CastConstraint {
 
 // ----- IntExprElement
 
-IntVar* BuildDomainIntVar(Solver* const solver, std::vector<int64_t>* values);
+IntVar* BuildDomainIntVar(Solver* solver, std::vector<int64_t>* values);
 
 class IntExprElement : public BaseIntExprElement {
  public:
@@ -406,18 +407,18 @@ RangeMinimumQueryExprElement::RangeMinimumQueryExprElement(
 }
 
 int64_t RangeMinimumQueryExprElement::Min() const {
-  return min_rmq_.GetMinimumFromRange(IndexMin(), IndexMax() + 1);
+  return min_rmq_.RangeMinimum(IndexMin(), IndexMax() + 1);
 }
 
 int64_t RangeMinimumQueryExprElement::Max() const {
-  return max_rmq_.GetMinimumFromRange(IndexMin(), IndexMax() + 1);
+  return max_rmq_.RangeMinimum(IndexMin(), IndexMax() + 1);
 }
 
 void RangeMinimumQueryExprElement::Range(int64_t* mi, int64_t* ma) {
   const int64_t range_min = IndexMin();
   const int64_t range_max = IndexMax() + 1;
-  *mi = min_rmq_.GetMinimumFromRange(range_min, range_max);
-  *ma = max_rmq_.GetMinimumFromRange(range_min, range_max);
+  *mi = min_rmq_.RangeMinimum(range_min, range_max);
+  *ma = max_rmq_.RangeMinimum(range_min, range_max);
 }
 
 #define UPDATE_RMQ_BASE_ELEMENT_INDEX_BOUNDS(test)       \
@@ -460,8 +461,8 @@ void RangeMinimumQueryExprElement::SetRange(int64_t mi, int64_t ma) {
 
 class IncreasingIntExprElement : public BaseIntExpr {
  public:
-  IncreasingIntExprElement(Solver* const s, const std::vector<int64_t>& values,
-                           IntVar* const index);
+  IncreasingIntExprElement(Solver* s, const std::vector<int64_t>& values,
+                           IntVar* index);
   ~IncreasingIntExprElement() override {}
 
   int64_t Min() const override;
@@ -679,8 +680,7 @@ IntExpr* Solver::MakeElement(const std::vector<int>& values,
 namespace {
 class IntExprFunctionElement : public BaseIntExprElement {
  public:
-  IntExprFunctionElement(Solver* const s, Solver::IndexEvaluator1 values,
-                         IntVar* const e);
+  IntExprFunctionElement(Solver* s, Solver::IndexEvaluator1 values, IntVar* e);
   ~IntExprFunctionElement() override;
 
   std::string name() const override {
@@ -870,16 +870,14 @@ IntExpr* Solver::MakeMonotonicElement(Solver::IndexEvaluator1 values,
                                       bool increasing, IntVar* const index) {
   CHECK_EQ(this, index->solver());
   if (increasing) {
-    return RegisterIntExpr(
-        RevAlloc(new IncreasingIntExprFunctionElement(this, values, index)));
+    return RegisterIntExpr(RevAlloc(
+        new IncreasingIntExprFunctionElement(this, std::move(values), index)));
   } else {
-    // You need to pass by copy such that opposite_value does not include a
-    // dandling reference when leaving this scope.
-    Solver::IndexEvaluator1 opposite_values = [values](int64_t i) {
-      return -values(i);
-    };
-    return RegisterIntExpr(MakeOpposite(RevAlloc(
-        new IncreasingIntExprFunctionElement(this, opposite_values, index))));
+    return RegisterIntExpr(
+        MakeOpposite(RevAlloc(new IncreasingIntExprFunctionElement(
+            this,
+            [values = std::move(values)](int64_t i) { return -values(i); },
+            index))));
   }
 }
 
@@ -888,8 +886,8 @@ IntExpr* Solver::MakeMonotonicElement(Solver::IndexEvaluator1 values,
 namespace {
 class IntIntExprFunctionElement : public BaseIntExpr {
  public:
-  IntIntExprFunctionElement(Solver* const s, Solver::IndexEvaluator2 values,
-                            IntVar* const expr1, IntVar* const expr2);
+  IntIntExprFunctionElement(Solver* s, Solver::IndexEvaluator2 values,
+                            IntVar* expr1, IntVar* expr2);
   ~IntIntExprFunctionElement() override;
   std::string DebugString() const override {
     return absl::StrFormat("IntIntFunctionElement(%s,%s)",
@@ -1200,9 +1198,9 @@ class IfThenElseCt : public CastConstraint {
 namespace {
 class IntExprEvaluatorElementCt : public CastConstraint {
  public:
-  IntExprEvaluatorElementCt(Solver* const s, Solver::Int64ToIntVar evaluator,
+  IntExprEvaluatorElementCt(Solver* s, Solver::Int64ToIntVar evaluator,
                             int64_t range_start, int64_t range_end,
-                            IntVar* const index, IntVar* const target_var);
+                            IntVar* index, IntVar* target_var);
   ~IntExprEvaluatorElementCt() override {}
 
   void Post() override;
@@ -1213,7 +1211,7 @@ class IntExprEvaluatorElementCt : public CastConstraint {
   void UpdateExpr();
 
   std::string DebugString() const override;
-  void Accept(ModelVisitor* const visitor) const override;
+  void Accept(ModelVisitor* visitor) const override;
 
  protected:
   IntVar* const index_;
@@ -1376,11 +1374,11 @@ void IntExprEvaluatorElementCt::Accept(ModelVisitor* const visitor) const {
 
 class IntExprArrayElementCt : public IntExprEvaluatorElementCt {
  public:
-  IntExprArrayElementCt(Solver* const s, std::vector<IntVar*> vars,
-                        IntVar* const index, IntVar* const target_var);
+  IntExprArrayElementCt(Solver* s, std::vector<IntVar*> vars, IntVar* index,
+                        IntVar* target_var);
 
   std::string DebugString() const override;
-  void Accept(ModelVisitor* const visitor) const override;
+  void Accept(ModelVisitor* visitor) const override;
 
  private:
   const std::vector<IntVar*> vars_;

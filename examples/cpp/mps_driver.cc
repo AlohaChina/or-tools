@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,22 +16,27 @@
 
 #include <stdio.h>
 
+#include <cstdlib>
 #include <string>
+#include <vector>
 
-#include "absl/flags/parse.h"
-#include "absl/flags/usage.h"
+#include "absl/base/log_severity.h"
+#include "absl/flags/flag.h"
+#include "absl/log/check.h"
+#include "absl/log/globals.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/strings/match.h"
-#include "google/protobuf/descriptor.h"
-#include "google/protobuf/message.h"
+#include "absl/strings/str_format.h"
 #include "google/protobuf/text_format.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/file.h"
-#include "ortools/base/logging.h"
+#include "ortools/base/helpers.h"
+#include "ortools/base/init_google.h"
+#include "ortools/base/options.h"
 #include "ortools/base/timer.h"
 #include "ortools/glop/lp_solver.h"
 #include "ortools/glop/parameters.pb.h"
-#include "ortools/lp_data/lp_print_utils.h"
+#include "ortools/lp_data/lp_data.h"
+#include "ortools/lp_data/lp_types.h"
 #include "ortools/lp_data/mps_reader.h"
 #include "ortools/lp_data/proto_utils.h"
 #include "ortools/util/file_util.h"
@@ -69,6 +74,8 @@ using operations_research::glop::ToDouble;
 void ReadGlopParameters(GlopParameters* parameters) {
   if (!absl::GetFlag(FLAGS_params_file).empty()) {
     std::string params;
+    CHECK_OK(file::GetContents(absl::GetFlag(FLAGS_params_file), &params,
+                               file::Defaults()));
     CHECK(TextFormat::ParseFromString(params, parameters)) << params;
   }
   if (!absl::GetFlag(FLAGS_params).empty()) {
@@ -82,7 +89,12 @@ void ReadGlopParameters(GlopParameters* parameters) {
 }
 
 int main(int argc, char* argv[]) {
-  absl::ParseCommandLine(argc, argv);
+  InitGoogle(
+      "Runs Glop on a given pattern of files given by --input. "
+      "The files must be in Mps or linear_solver.proto format and can be "
+      "compressed with gzip.",
+      &argc, &argv, true);
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
 
   GlopParameters parameters;
   ReadGlopParameters(&parameters);
@@ -104,7 +116,11 @@ int main(int argc, char* argv[]) {
         continue;
       }
     } else {
-      ReadFileToProto(file_name, &model_proto);
+      const absl::Status status = ReadFileToProto(file_name, &model_proto);
+      if (!status.ok()) {
+        LOG(INFO) << status;
+        continue;
+      }
       MPModelProtoToLinearProgram(model_proto, &linear_program);
     }
     if (absl::GetFlag(FLAGS_mps_dump_problem)) {

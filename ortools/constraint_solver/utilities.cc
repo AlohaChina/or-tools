@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,18 +13,19 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
-#include "ortools/base/hash.h"
-#include "ortools/base/integral_types.h"
+#include "absl/strings/string_view.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/map_util.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/bitset.h"
+#include "ortools/util/tuple_set.h"
 
 namespace operations_research {
 
@@ -64,13 +65,8 @@ RevBitSet::RevBitSet(int64_t size)
       bits_(new uint64_t[length_]),
       stamps_(new uint64_t[length_]) {
   DCHECK_GE(size, 1);
-  memset(bits_, 0, sizeof(*bits_) * length_);
-  memset(stamps_, 0, sizeof(*stamps_) * length_);
-}
-
-RevBitSet::~RevBitSet() {
-  delete[] bits_;
-  delete[] stamps_;
+  memset(bits_.get(), 0, sizeof(bits_[0]) * length_);
+  memset(stamps_.get(), 0, sizeof(stamps_[0]) * length_);
 }
 
 void RevBitSet::Save(Solver* const solver, int offset) {
@@ -106,7 +102,7 @@ void RevBitSet::SetToZero(Solver* const solver, int64_t index) {
 bool RevBitSet::IsSet(int64_t index) const {
   DCHECK_GE(index, 0);
   DCHECK_LT(index, size_);
-  return IsBitSet64(bits_, index);
+  return IsBitSet64(bits_.get(), index);
 }
 
 int64_t RevBitSet::Cardinality() const {
@@ -145,7 +141,7 @@ bool RevBitSet::IsCardinalityOne() const {
 }
 
 int64_t RevBitSet::GetFirstBit(int start) const {
-  return LeastSignificantBitPosition64(bits_, start, size_ - 1);
+  return LeastSignificantBitPosition64(bits_.get(), start, size_ - 1);
 }
 
 void RevBitSet::ClearAll(Solver* const solver) {
@@ -188,7 +184,7 @@ int64_t RevBitMatrix::Cardinality(int row) const {
   DCHECK_GE(row, 0);
   DCHECK_LT(row, rows_);
   const int start = row * columns_;
-  return BitCountRange64(bits_, start, start + columns_ - 1);
+  return BitCountRange64(bits_.get(), start, start + columns_ - 1);
 }
 
 bool RevBitMatrix::IsCardinalityOne(int row) const {
@@ -198,7 +194,7 @@ bool RevBitMatrix::IsCardinalityOne(int row) const {
 
 bool RevBitMatrix::IsCardinalityZero(int row) const {
   const int start = row * columns_;
-  return IsEmptyRange64(bits_, start, start + columns_ - 1);
+  return IsEmptyRange64(bits_.get(), start, start + columns_ - 1);
 }
 
 int64_t RevBitMatrix::GetFirstBit(int row, int start) const {
@@ -209,7 +205,7 @@ int64_t RevBitMatrix::GetFirstBit(int row, int start) const {
   const int beginning = row * columns_;
   const int end = beginning + columns_ - 1;
   int64_t position =
-      LeastSignificantBitPosition64(bits_, beginning + start, end);
+      LeastSignificantBitPosition64(bits_.get(), beginning + start, end);
   if (position == -1) {
     return -1;
   } else {
@@ -282,7 +278,7 @@ bool UnsortedNullableRevBitset::RevAnd(Solver* const solver,
         }
       }
     } else {
-      // Zero the word as the mask is implicitely null.
+      // Zero the word as the mask is implicitly null.
       changed = true;
       bits_.SetValue(solver, index, 0);
       to_remove_.push_back(index);
@@ -512,7 +508,7 @@ class PrintModelVisitor : public ModelVisitor {
     return result;
   }
 
-  void set_prefix(const std::string& prefix) { prefix_ = prefix; }
+  void set_prefix(absl::string_view prefix) { prefix_ = prefix; }
 
   int indent_;
   std::string prefix_;
@@ -672,7 +668,7 @@ class ModelStatisticsVisitor : public ModelVisitor {
   }
 
   bool AlreadyVisited(const BaseObject* const object) {
-    return gtl::ContainsKey(already_visited_, object);
+    return already_visited_.contains(object);
   }
 
   // T should derive from BaseObject
@@ -684,15 +680,15 @@ class ModelStatisticsVisitor : public ModelVisitor {
     }
   }
 
-  void AddConstraintType(const std::string& constraint_type) {
+  void AddConstraintType(absl::string_view constraint_type) {
     constraint_types_[constraint_type]++;
   }
 
-  void AddExpressionType(const std::string& expression_type) {
+  void AddExpressionType(absl::string_view expression_type) {
     expression_types_[expression_type]++;
   }
 
-  void AddExtensionType(const std::string& extension_type) {
+  void AddExtensionType(absl::string_view extension_type) {
     extension_types_[extension_type]++;
   }
 
@@ -723,7 +719,7 @@ class VariableDegreeVisitor : public ModelVisitor {
   void VisitIntegerVariable(const IntVar* const variable,
                             IntExpr* const delegate) override {
     IntVar* const var = const_cast<IntVar*>(variable);
-    if (gtl::ContainsKey(*map_, var)) {
+    if (map_->contains(var)) {
       (*map_)[var]++;
     }
     if (delegate) {
@@ -735,7 +731,7 @@ class VariableDegreeVisitor : public ModelVisitor {
                             const std::string& operation, int64_t value,
                             IntVar* const delegate) override {
     IntVar* const var = const_cast<IntVar*>(variable);
-    if (gtl::ContainsKey(*map_, var)) {
+    if (map_->contains(var)) {
       (*map_)[var]++;
     }
     VisitSubArgument(delegate);

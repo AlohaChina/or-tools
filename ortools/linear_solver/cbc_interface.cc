@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//
-
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -23,14 +21,9 @@
 #include "absl/base/attributes.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_format.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/hash.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/timer.h"
 #include "ortools/linear_solver/linear_solver.h"
-
-#if defined(USE_CBC)
 
 #undef PACKAGE
 #undef VERSION
@@ -47,7 +40,7 @@ namespace operations_research {
 class CBCInterface : public MPSolverInterface {
  public:
   // Constructor that takes a name for the underlying glpk solver.
-  explicit CBCInterface(MPSolver* const solver);
+  explicit CBCInterface(MPSolver* solver);
   ~CBCInterface() override;
 
   // ----- Reset -----
@@ -82,9 +75,9 @@ class CBCInterface : public MPSolverInterface {
   void SetConstraintBounds(int row_index, double lb, double ub) override;
 
   // Add constraint incrementally.
-  void AddRowConstraint(MPConstraint* const ct) override;
+  void AddRowConstraint(MPConstraint* ct) override;
   // Add variable incrementally.
-  void AddVariable(MPVariable* const var) override;
+  void AddVariable(MPVariable* var) override;
   // Change a coefficient in a constraint.
   void SetCoefficient(MPConstraint* const constraint,
                       const MPVariable* const variable, double new_value,
@@ -398,7 +391,7 @@ MPSolver::ResultStatus CBCInterface::Solve(const MPSolverParameters& param) {
 
   VLOG(1) << "cbc result status: " << tmp_status;
   /* Final status of problem
-     (info from cbc/.../CbcSolver.cpp,
+     (info from third_party/cbc/.../CbcSolver.cpp,
       See http://cs?q="cbc+status"+file:CbcSolver.cpp)
      Some of these can be found out by is...... functions
      -1 before branchAndBound
@@ -483,7 +476,7 @@ int64_t CBCInterface::nodes() const {
 
 // The support for parameters in CBC is intentionally sparse. There is
 // a memory leak in callCbc that prevents to pass parameters through
-// it, so handling parameters would require an comprehensive rewrite
+// it, so handling parameters would require a comprehensive rewrite
 // of the code. I will improve the parameter support only if there is
 // a relevant use case.
 
@@ -532,9 +525,16 @@ void CBCInterface::SetLpAlgorithm(int value) {
   SetUnsupportedIntegerParam(MPSolverParameters::LP_ALGORITHM);
 }
 
-MPSolverInterface* BuildCBCInterface(MPSolver* const solver) {
-  return new CBCInterface(solver);
-}
+namespace {
+
+// See MpSolverInterfaceFactoryRepository for details.
+const void* const kRegisterCBC ABSL_ATTRIBUTE_UNUSED = [] {
+  MPSolverInterfaceFactoryRepository::GetInstance()->Register(
+      [](MPSolver* const solver) { return new CBCInterface(solver); },
+      MPSolver::CBC_MIXED_INTEGER_PROGRAMMING);
+  return nullptr;
+}();
+
+}  // namespace
 
 }  // namespace operations_research
-#endif  // #if defined(USE_CBC)

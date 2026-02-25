@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,23 +11,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_IMPLIED_BOUNDS_H_
-#define OR_TOOLS_SAT_IMPLIED_BOUNDS_H_
+#ifndef ORTOOLS_SAT_IMPLIED_BOUNDS_H_
+#define ORTOOLS_SAT_IMPLIED_BOUNDS_H_
 
 #include <algorithm>
+#include <array>
+#include <bitset>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
+#include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_map.h"
-#include "ortools/base/int_type.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/base/logging.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/types/span.h"
 #include "ortools/base/strong_vector.h"
+#include "ortools/lp_data/lp_types.h"
+#include "ortools/sat/clause.h"
 #include "ortools/sat/integer.h"
+#include "ortools/sat/integer_base.h"
 #include "ortools/sat/linear_constraint.h"
 #include "ortools/sat/model.h"
 #include "ortools/sat/sat_base.h"
+#include "ortools/sat/sat_parameters.pb.h"
+#include "ortools/sat/sat_solver.h"
+#include "ortools/sat/synchronization.h"
 #include "ortools/util/bitset.h"
+#include "ortools/util/strong_integers.h"
 
 namespace operations_research {
 namespace sat {
@@ -39,22 +49,21 @@ namespace sat {
 // have BoolVar => X >= bound, we can always lower bound the variable X by
 // (bound - X_lb) * BoolVar + X_lb, and that can lead to stronger cuts.
 struct ImpliedBoundEntry {
-  // An integer variable in [0, 1]. When at 1, then the IntegerVariable
+  // PositiveVariable(literal_view) is an integer variable in [0, 1].
+  // If VariableIsPositive(literal_view), when at 1, then the IntegerVariable
   // corresponding to this entry must be greater or equal to the given lower
   // bound.
+  //
+  // If !VariableIsPositive(literal_view) then it is when
+  // PositiveVariable(literal_view) is zero that the lower bound is valid.
   IntegerVariable literal_view = kNoIntegerVariable;
   IntegerValue lower_bound = IntegerValue(0);
 
-  // If false, it is when the literal_view is zero that the lower bound is
-  // valid.
-  bool is_positive = true;
-
   // These constructors are needed for OR-Tools.
-  ImpliedBoundEntry(IntegerVariable lit, IntegerValue lb, bool positive)
-      : literal_view(lit), lower_bound(lb), is_positive(positive) {}
+  ImpliedBoundEntry(IntegerVariable lit, IntegerValue lb)
+      : literal_view(lit), lower_bound(lb) {}
 
-  ImpliedBoundEntry()
-      : literal_view(kNoIntegerVariable), lower_bound(0), is_positive(true) {}
+  ImpliedBoundEntry() : literal_view(kNoIntegerVariable), lower_bound(0) {}
 };
 
 // Maintains all the implications of the form Literal => IntegerLiteral. We
@@ -82,7 +91,8 @@ class ImpliedBounds {
       : parameters_(*model->GetOrCreate<SatParameters>()),
         sat_solver_(model->GetOrCreate<SatSolver>()),
         integer_trail_(model->GetOrCreate<IntegerTrail>()),
-        integer_encoder_(model->GetOrCreate<IntegerEncoder>()) {}
+        integer_encoder_(model->GetOrCreate<IntegerEncoder>()),
+        shared_stats_(model->GetOrCreate<SharedStatistics>()) {}
   ~ImpliedBounds();
 
   // Adds literal => integer_literal to the repository.
@@ -90,7 +100,7 @@ class ImpliedBounds {
   // Not that it checks right aways if there is another bound on the same
   // variable involving literal.Negated(), in which case we can improve the
   // level zero lower bound of the variable.
-  void Add(Literal literal, IntegerLiteral integer_literal);
+  bool Add(Literal literal, IntegerLiteral integer_literal);
 
   // Adds literal => var == value.
   void AddLiteralImpliesVarEqValue(Literal literal, IntegerVariable var,
@@ -101,7 +111,7 @@ class ImpliedBounds {
   //
   // Preconditions: The decision level must be one (CHECKed). And the decision
   // must be equal to first decision (we currently do not CHECK that).
-  void ProcessIntegerTrail(Literal first_decision);
+  bool ProcessIntegerTrail(Literal first_decision);
 
   // Returns all the implied bounds stored for the given variable.
   // Note that only literal with an IntegerView are considered here.
@@ -122,38 +132,40 @@ class ImpliedBounds {
                                                 : empty_var_to_value_;
   }
 
-  // Register the fact that var = sum literal * value with sum literal == 1.
-  // Note that we call this an "element" encoding because a value can appear
-  // more than once.
-  void AddElementEncoding(IntegerVariable var,
-                          const std::vector<ValueLiteralPair>& encoding,
-                          int exactly_one_index);
+  // Returns [lb, ub] for a given variable implied by a literal.
+  // Returns [kMinIntegerValue, kMaxIntegerValue] if no such bounds exist.
+  std::pair<IntegerValue, IntegerValue> GetImpliedBounds(
+      Literal literal, IntegerVariable var) const {
+    std::pair<IntegerValue, IntegerValue> result = {kMinIntegerValue,
+                                                    kMaxIntegerValue};
+    const auto it = bounds_.find({literal.Index(), var});
+    if (it != bounds_.end()) {
+      result.first = it->second;
+    }
+    const auto it2 = bounds_.find({literal.Index(), NegationOf(var)});
+    if (it2 != bounds_.end()) {
+      result.second = -it2->second;
+    }
+    return result;
+  }
 
-  // Returns an empty map if there is no such encoding.
-  const absl::flat_hash_map<int, std::vector<ValueLiteralPair>>&
-  GetElementEncodings(IntegerVariable var);
-
-  // Get an unsorted set of variables appearing in element encodings.
-  const std::vector<IntegerVariable>& GetElementEncodedVariables() const;
+  const absl::flat_hash_map<std::pair<LiteralIndex, IntegerVariable>,
+                            IntegerValue>&
+  GetModelImpliedBounds() const {
+    return bounds_;
+  }
 
   // Adds to the integer trail all the new level-zero deduction made here.
   // This can only be called at decision level zero. Returns false iff the model
   // is infeasible.
   bool EnqueueNewDeductions();
 
-  // When a literal does not have an integer view, we do not add any
-  // ImpliedBoundEntry. This allows to create missing entries for a literal for
-  // which a view was just created.
-  //
-  // TODO(user): Implement and call when we create new views in the linear
-  // relaxation.
-  void NotifyNewIntegerView(Literal literal) {}
-
  private:
   const SatParameters& parameters_;
   SatSolver* sat_solver_;
   IntegerTrail* integer_trail_;
   IntegerEncoder* integer_encoder_;
+  SharedStatistics* shared_stats_;
 
   // TODO(user): Remove the need for this.
   std::vector<IntegerLiteral> tmp_integer_literals_;
@@ -167,16 +179,16 @@ class ImpliedBounds {
   absl::flat_hash_map<std::pair<LiteralIndex, IntegerVariable>, IntegerValue>
       bounds_;
 
-  // Note(user): The plan is to use these during cut generation, so only the
+  // Note(user): This is currently only used during cut generation, so only the
   // Literal with an IntegerView that can be used in the LP relaxation need to
   // be kept here.
   //
-  // TODO(user): Use inlined vectors.
+  // TODO(user): Use inlined vectors. Even better, we actually only process
+  // all variables at once, so no need to organize it by IntegerVariable even
+  // if that might be more friendly cache-wise.
   std::vector<ImpliedBoundEntry> empty_implied_bounds_;
-  absl::StrongVector<IntegerVariable, std::vector<ImpliedBoundEntry>>
+  util_intops::StrongVector<IntegerVariable, std::vector<ImpliedBoundEntry>>
       var_to_bounds_;
-
-  // Track the list of variables with some implied bounds.
   SparseBitset<IntegerVariable> has_implied_bounds_;
 
   // Stores implied values per variable.
@@ -185,48 +197,232 @@ class ImpliedBounds {
       literal_to_var_to_value_;
   const absl::flat_hash_map<IntegerVariable, IntegerValue> empty_var_to_value_;
 
-  absl::flat_hash_map<IntegerVariable,
-                      absl::flat_hash_map<int, std::vector<ValueLiteralPair>>>
-      var_to_index_to_element_encodings_;
-  const absl::flat_hash_map<int, std::vector<ValueLiteralPair>>
-      empty_element_encoding_;
-  std::vector<IntegerVariable> element_encoded_variables_;
-
-  // TODO(user): Ideally, this should go away if we manage to push level-zero
-  // fact at a positive level directly.
-  absl::StrongVector<IntegerVariable, IntegerValue> level_zero_lower_bounds_;
-  SparseBitset<IntegerVariable> new_level_zero_bounds_;
-
   // Stats.
   int64_t num_deductions_ = 0;
   int64_t num_enqueued_in_var_to_bounds_ = 0;
+  int64_t num_promoted_to_equivalence_ = 0;
+  int max_changed_domain_complexity_ = 0;
 };
 
-// Looks at value encodings and detects if the product of two variables can be
-// linearized.
-//
-// In the returned encoding, note that all the literals will be unique and in
-// exactly one relation, and that the values can be duplicated. This is what we
-// call an "element" encoding.
-//
-// The expressions will also be canonical.
-bool DetectLinearEncodingOfProducts(const AffineExpression& left,
-                                    const AffineExpression& right, Model* model,
-                                    LinearConstraintBuilder* builder);
+class ElementEncodings {
+ public:
+  ElementEncodings() = default;
 
-// Try to linearize each term of the inner product of left and right.
-// If the linearization not possible at position i, then
-// ProductIsLinearized(energies[i]) will return false.
-void LinearizeInnerProduct(const std::vector<AffineExpression>& left,
-                           const std::vector<AffineExpression>& right,
-                           Model* model,
-                           std::vector<LinearExpression>* energies);
+  // Register the fact that var = sum literal * value with sum literal == 1.
+  // Note that we call this an "element" encoding because a value can appear
+  // more than once.
+  void Add(IntegerVariable var, const std::vector<ValueLiteralPair>& encoding,
+           int exactly_one_index);
 
-// Returns whether the corresponding expression is a valid linearization of
-// the product of two affine expressions.
-bool ProductIsLinearized(const LinearExpression& expr);
+  // Returns an empty map if there is no such encoding.
+  const absl::btree_map<int, std::vector<ValueLiteralPair>>& Get(
+      IntegerVariable var);
+
+  // Get an unsorted set of variables appearing in element encodings.
+  const std::vector<IntegerVariable>& GetElementEncodedVariables() const;
+
+ private:
+  absl::btree_map<IntegerVariable,
+                  absl::btree_map<int, std::vector<ValueLiteralPair>>>
+      var_to_index_to_element_encodings_;
+  const absl::btree_map<int, std::vector<ValueLiteralPair>>
+      empty_element_encoding_;
+  std::vector<IntegerVariable> element_encoded_variables_;
+};
+
+// Helper class to express a product as a linear constraint.
+class ProductDecomposer {
+ public:
+  explicit ProductDecomposer(Model* model)
+      : integer_trail_(model->GetOrCreate<IntegerTrail>()),
+        element_encodings_(model->GetOrCreate<ElementEncodings>()),
+        integer_encoder_(model->GetOrCreate<IntegerEncoder>()) {}
+
+  // Tries to decompose a product left * right in a list of constant alternative
+  // left_value * right_value controlled by literals in an exactly one
+  // relationship. We construct this by using literals from the full encoding or
+  // element encodings of the variables of the two affine expressions.
+  // If it fails, it returns an empty vector.
+  std::vector<LiteralValueValue> TryToDecompose(const AffineExpression& left,
+                                                const AffineExpression& right);
+
+  // Looks at value encodings and detects if the product of two variables can be
+  // linearized.
+  //
+  // On true, the builder will be cleared to contain the linearization. On
+  // false, it might be in an undefined state.
+  //
+  // In the returned encoding, note that all the literals will be unique and in
+  // exactly one relation, and that the values can be duplicated. This is what
+  // we call an "element" encoding. The expressions will also be canonical.
+  bool TryToLinearize(const AffineExpression& left,
+                      const AffineExpression& right,
+                      LinearConstraintBuilder* builder);
+
+ private:
+  IntegerTrail* integer_trail_;
+  ElementEncodings* element_encodings_;
+  IntegerEncoder* integer_encoder_;
+};
+
+// Class used to detect and hold all the information about a variable beeing the
+// product of two others. This class is meant to be used by LP relaxation and
+// cuts.
+class ProductDetector {
+ public:
+  explicit ProductDetector(Model* model);
+  ~ProductDetector();
+
+  // Internally, a Boolean product is encoded in a linear fashion:
+  // p = a * b become:
+  // 1/ a and b => p, i.e.  a clause (not(a), not(b), p).
+  // 2/ p => a and p => b, which is a clause (not(p), a) and (not(p), b).
+  //
+  // In particular if we have a+b+c==1 then we have a=b*c, b=a*c, and c=a*b !!
+  //
+  // For the detection to work, we must load all ternary clause first, then the
+  // implication.
+  void ProcessTernaryClause(absl::Span<const Literal> ternary_clause);
+  void ProcessTernaryExactlyOne(absl::Span<const Literal> ternary_exo);
+  void ProcessBinaryClause(absl::Span<const Literal> binary_clause);
+
+  // Utility function to process a bunch of implication all at once.
+  void ProcessImplicationGraph(BinaryImplicationGraph* graph);
+  void ProcessTrailAtLevelOne();
+
+  // We also detect product of Boolean with IntegerVariable.
+  // After presolve, a product P = l * X should be encoded with:
+  //      l => P = X
+  // not(l) => P = 0
+  //
+  // TODO(user): Generalize to a * X + b = l * (Y + c) since these are also
+  // easy to linearize if we see l * Y.
+  void ProcessConditionalEquality(Literal l, IntegerVariable x,
+                                  IntegerVariable y);
+  void ProcessConditionalZero(Literal l, IntegerVariable p);
+
+  // Query function mainly used for testing.
+  LiteralIndex GetProduct(Literal a, Literal b) const;
+  IntegerVariable GetProduct(Literal a, IntegerVariable b) const;
+
+  // Query Functions. LinearizeProduct() should only be called if
+  // ProductIsLinearizable() is true.
+  bool ProductIsLinearizable(IntegerVariable a, IntegerVariable b) const;
+
+  // TODO(user): Implement!
+  LinearExpression LinearizeProduct(IntegerVariable a, IntegerVariable b);
+
+  // Returns an expression that is always lower or equal to the product a * b.
+  // This use the exact LinearizeProduct() if ProductIsLinearizable() otherwise
+  // it uses the simple McCormick lower bound.
+  //
+  // TODO(user): Implement!
+  LinearExpression ProductLowerBound(IntegerVariable a, IntegerVariable b);
+
+  // Experimental. Find violated inequality of the form l1 * l2 <= l3.
+  // And set-up data structure to query this efficiently.
+  void InitializeBooleanRLTCuts(
+      absl::Span<const IntegerVariable> lp_vars,
+      const util_intops::StrongVector<IntegerVariable, double>& lp_values);
+
+  // BoolRLTCandidates()[var] contains the list of factor for which we have
+  // a violated upper bound on lit(var) * lit(factor).
+  const absl::flat_hash_map<IntegerVariable, std::vector<IntegerVariable>>&
+  BoolRLTCandidates() const {
+    return bool_rlt_candidates_;
+  }
+
+  // Returns if it exists an integer variable u such that lit(a) * lit(b) <=
+  // lit(u). All integer variable must be boolean, a positive variable means
+  // positive literal, and a negative variable means negative literal. Returns
+  // kNoIntegerVariable if there are none.
+  IntegerVariable LiteralProductUpperBound(IntegerVariable a,
+                                           IntegerVariable b) const {
+    if (b < a) std::swap(a, b);
+    const auto it = bool_rlt_ubs_.find({a, b});
+    if (it == bool_rlt_ubs_.end()) return kNoIntegerVariable;
+    return it->second;
+  }
+
+ private:
+  std::array<LiteralIndex, 2> GetKey(LiteralIndex a, LiteralIndex b) const;
+  void ProcessNewProduct(LiteralIndex p, LiteralIndex a, LiteralIndex b);
+  void ProcessNewProduct(IntegerVariable p, Literal l, IntegerVariable x);
+  void ProcessTernaryClauseForRLT(absl::Span<const Literal> clause);
+
+  // Process a relation lit(var1) * lit(var2) <= lit(bound_var).
+  void UpdateRLTMaps(
+      const util_intops::StrongVector<IntegerVariable, double>& lp_values,
+      IntegerVariable var1, double lp1, IntegerVariable var2, double lp2,
+      IntegerVariable bound_var, double bound_lp);
+
+  // Fixed at creation time.
+  const bool enabled_;
+  const bool rlt_enabled_;
+  SatSolver* sat_solver_;
+  Trail* trail_;
+  IntegerTrail* integer_trail_;
+  IntegerEncoder* integer_encoder_;
+  SharedStatistics* shared_stats_;
+
+  // No need to process implication a => b if a was never seen.
+  util_intops::StrongVector<LiteralIndex, bool> seen_;
+
+  // For each clause of size 3 (l0, l1, l2) and a permutation of index (i, j, k)
+  // we bitset[i] to true if lj => not(lk) and lk => not(lj).
+  //
+  // The key is sorted.
+  absl::flat_hash_map<std::array<LiteralIndex, 3>, std::bitset<3>> detector_;
+
+  // For each (l0, l1) we list all the l2 such that (l0, l1, l2) is a 3 clause.
+  absl::flat_hash_map<std::array<LiteralIndex, 2>, std::vector<LiteralIndex>>
+      candidates_;
+
+  // Products (a, b) -> p such that p == a * b. They key is sorted.
+  absl::flat_hash_map<std::array<LiteralIndex, 2>, LiteralIndex> products_;
+
+  // Same keys has in products_ but canonicalized so we capture all 4 products
+  // a * b, (1 - a) * b, a * (1 - b) and (1 - a) * (1 - b) with one query.
+  absl::flat_hash_set<std::array<LiteralIndex, 2>> has_product_;
+
+  // For bool * int detection. Note that we only use positive IntegerVariable
+  // in the key part.
+  absl::flat_hash_set<std::pair<LiteralIndex, IntegerVariable>>
+      conditional_zeros_;
+  absl::flat_hash_map<std::pair<LiteralIndex, IntegerVariable>,
+                      std::vector<IntegerVariable>>
+      conditional_equalities_;
+
+  // Stores l * X = P.
+  absl::flat_hash_map<std::pair<LiteralIndex, IntegerVariable>, IntegerVariable>
+      int_products_;
+
+  // For RLT cuts.
+  absl::flat_hash_map<IntegerVariable, std::vector<IntegerVariable>>
+      bool_rlt_candidates_;
+  absl::flat_hash_map<std::pair<IntegerVariable, IntegerVariable>,
+                      IntegerVariable>
+      bool_rlt_ubs_;
+
+  // Store ternary clause which have an IntegerVariable view.
+  // We only consider BooleanVariable == IntegerVariable, and store not(literal)
+  // as NegatedVariable(). This is a flat vector of size multiple of 3.
+  std::vector<IntegerVariable> ternary_clauses_with_view_;
+
+  Bitset64<IntegerVariable> is_in_lp_vars_;
+
+  // Stats.
+  int64_t num_products_ = 0;
+  int64_t num_int_products_ = 0;
+  int64_t num_trail_updates_ = 0;
+  int64_t num_processed_binary_ = 0;
+  int64_t num_processed_ternary_ = 0;
+  int64_t num_processed_exo_ = 0;
+  int64_t num_conditional_zeros_ = 0;
+  int64_t num_conditional_equalities_ = 0;
+};
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_IMPLIED_BOUNDS_H_
+#endif  // ORTOOLS_SAT_IMPLIED_BOUNDS_H_

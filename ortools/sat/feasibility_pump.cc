@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,17 +13,39 @@
 
 #include "ortools/sat/feasibility_pump.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
+#include <utility>
 #include <vector>
 
-#include "ortools/base/integral_types.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
+#include "absl/meta/type_traits.h"
+#include "ortools/base/logging.h"
+#include "ortools/base/strong_vector.h"
+#include "ortools/glop/parameters.pb.h"
+#include "ortools/glop/revised_simplex.h"
+#include "ortools/glop/status.h"
+#include "ortools/lp_data/lp_data.h"
+#include "ortools/lp_data/lp_data_utils.h"
 #include "ortools/lp_data/lp_types.h"
-#include "ortools/sat/cp_model.pb.h"
+#include "ortools/lp_data/sparse_column.h"
+#include "ortools/sat/cp_model_mapping.h"
 #include "ortools/sat/integer.h"
+#include "ortools/sat/integer_base.h"
+#include "ortools/sat/linear_constraint.h"
+#include "ortools/sat/model.h"
 #include "ortools/sat/sat_base.h"
+#include "ortools/sat/sat_parameters.pb.h"
 #include "ortools/sat/sat_solver.h"
+#include "ortools/sat/synchronization.h"
+#include "ortools/sat/util.h"
 #include "ortools/util/saturated_arithmetic.h"
+#include "ortools/util/sorted_interval_list.h"
+#include "ortools/util/strong_integers.h"
+#include "ortools/util/time_limit.h"
 
 namespace operations_research {
 namespace sat {
@@ -64,7 +86,7 @@ FeasibilityPump::~FeasibilityPump() {
 
 void FeasibilityPump::AddLinearConstraint(const LinearConstraint& ct) {
   // We still create the mirror variable right away though.
-  for (const IntegerVariable var : ct.vars) {
+  for (const IntegerVariable var : ct.VarsAsSpan()) {
     GetOrCreateMirrorVariable(PositiveVariable(var));
   }
 
@@ -72,9 +94,8 @@ void FeasibilityPump::AddLinearConstraint(const LinearConstraint& ct) {
   LinearConstraintInternal& new_ct = integer_lp_.back();
   new_ct.lb = ct.lb;
   new_ct.ub = ct.ub;
-  const int size = ct.vars.size();
   CHECK_LE(ct.lb, ct.ub);
-  for (int i = 0; i < size; ++i) {
+  for (int i = 0; i < ct.num_terms; ++i) {
     // We only use positive variable inside this class.
     IntegerVariable var = ct.vars[i];
     IntegerValue coeff = ct.coeffs[i];
@@ -169,7 +190,7 @@ bool FeasibilityPump::Solve() {
     if (integer_solution_is_feasible_) MaybePushToRepo();
   }
 
-  if (model_is_unsat_) return false;
+  if (sat_solver_->ModelIsUnsat()) return false;
 
   PrintStats();
   MaybePushToRepo();
@@ -178,32 +199,33 @@ bool FeasibilityPump::Solve() {
 
 void FeasibilityPump::MaybePushToRepo() {
   if (incomplete_solutions_ == nullptr) return;
+  const double kInfinity = std::numeric_limits<double>::infinity();
 
-  std::vector<double> lp_solution(model_vars_size_,
-                                  std::numeric_limits<double>::infinity());
   // TODO(user): Consider adding solutions that have low fractionality.
   if (lp_solution_is_integer_) {
     // Fill the solution using LP solution values.
+    tmp_solution_.assign(model_vars_size_, kInfinity);
     for (const IntegerVariable positive_var : integer_variables_) {
       const int model_var =
           mapping_->GetProtoVariableFromIntegerVariable(positive_var);
       if (model_var >= 0 && model_var < model_vars_size_) {
-        lp_solution[model_var] = GetLPSolutionValue(positive_var);
+        tmp_solution_[model_var] = GetLPSolutionValue(positive_var);
       }
     }
-    incomplete_solutions_->AddNewSolution(lp_solution);
+    incomplete_solutions_->AddSolution(tmp_solution_);
   }
 
   if (integer_solution_is_feasible_) {
     // Fill the solution using Integer solution values.
+    tmp_solution_.assign(model_vars_size_, kInfinity);
     for (const IntegerVariable positive_var : integer_variables_) {
       const int model_var =
           mapping_->GetProtoVariableFromIntegerVariable(positive_var);
       if (model_var >= 0 && model_var < model_vars_size_) {
-        lp_solution[model_var] = GetIntegerSolutionValue(positive_var);
+        tmp_solution_[model_var] = GetIntegerSolutionValue(positive_var);
       }
     }
-    incomplete_solutions_->AddNewSolution(lp_solution);
+    incomplete_solutions_->AddSolution(tmp_solution_);
   }
 }
 
@@ -340,14 +362,14 @@ void FeasibilityPump::L1DistanceMinimize() {
       const ColIndex norm_lhs_slack_variable =
           lp_data_.GetSlackVariable(norm_lhs_constraints_[col]);
       const double lhs_scaling_factor =
-          scaler_.VariableScalingFactor(norm_lhs_slack_variable);
+          scaler_.VariableScalingFactorWithSlack(norm_lhs_slack_variable);
       lp_data_.SetVariableBounds(
           norm_lhs_slack_variable, -glop::kInfinity,
           lhs_scaling_factor * integer_solution_[col.value()]);
       const ColIndex norm_rhs_slack_variable =
           lp_data_.GetSlackVariable(norm_rhs_constraints_[col]);
       const double rhs_scaling_factor =
-          scaler_.VariableScalingFactor(norm_rhs_slack_variable);
+          scaler_.VariableScalingFactorWithSlack(norm_rhs_slack_variable);
       lp_data_.SetVariableBounds(
           norm_rhs_slack_variable, -glop::kInfinity,
           -rhs_scaling_factor * integer_solution_[col.value()]);
@@ -415,7 +437,7 @@ void FeasibilityPump::UpdateBoundsOfLpVariables() {
 }
 
 double FeasibilityPump::GetLPSolutionValue(IntegerVariable variable) const {
-  return lp_solution_[gtl::FindOrDie(mirror_lp_variable_, variable).value()];
+  return lp_solution_[mirror_lp_variable_.at(variable).value()];
 }
 
 double FeasibilityPump::GetVariableValueAtCpScale(ColIndex var) {
@@ -428,8 +450,7 @@ double FeasibilityPump::GetVariableValueAtCpScale(ColIndex var) {
 
 int64_t FeasibilityPump::GetIntegerSolutionValue(
     IntegerVariable variable) const {
-  return integer_solution_[gtl::FindOrDie(mirror_lp_variable_, variable)
-                               .value()];
+  return integer_solution_[mirror_lp_variable_.at(variable).value()];
 }
 
 bool FeasibilityPump::Round() {
@@ -548,7 +569,7 @@ bool FeasibilityPump::ActiveLockBasedRounding() {
 
 bool FeasibilityPump::PropagationRounding() {
   if (!lp_solution_is_set_) return false;
-  sat_solver_->ResetToLevelZero();
+  if (!sat_solver_->ResetToLevelZero()) return false;
 
   // Compute an order in which we will fix variables and do the propagation.
   std::vector<int> rounding_order;
@@ -581,7 +602,8 @@ bool FeasibilityPump::PropagationRounding() {
     if (time_limit_->LimitReached()) return false;
     // Get the bounds of the variable.
     const IntegerVariable var = integer_variables_[var_index];
-    const Domain& domain = (*domains_)[var];
+    CHECK(VariableIsPositive(var));
+    const Domain& domain = (*domains_)[GetPositiveOnlyIndex(var)];
 
     const IntegerValue lb = integer_trail_->LowerBound(var);
     const IntegerValue ub = integer_trail_->UpperBound(var);
@@ -591,11 +613,11 @@ bool FeasibilityPump::PropagationRounding() {
     }
 
     const int64_t rounded_value =
-        static_cast<int64_t>(std::round(lp_solution_[var_index]));
+        SafeDoubleToInt64(std::round(lp_solution_[var_index]));
     const int64_t floor_value =
-        static_cast<int64_t>(std::floor(lp_solution_[var_index]));
+        SafeDoubleToInt64(std::floor(lp_solution_[var_index]));
     const int64_t ceil_value =
-        static_cast<int64_t>(std::ceil(lp_solution_[var_index]));
+        SafeDoubleToInt64(std::ceil(lp_solution_[var_index]));
 
     const bool floor_is_in_domain =
         (domain.Contains(floor_value) && lb.value() <= floor_value);
@@ -603,7 +625,7 @@ bool FeasibilityPump::PropagationRounding() {
         (domain.Contains(ceil_value) && ub.value() >= ceil_value);
     if (domain.IsEmpty()) {
       integer_solution_[var_index] = rounded_value;
-      model_is_unsat_ = true;
+      sat_solver_->NotifyThatModelIsUnsat();
       return false;
     }
 
@@ -658,20 +680,14 @@ bool FeasibilityPump::PropagationRounding() {
           integer_encoder_->GetOrCreateLiteralAssociatedToEquality(var, value);
     }
 
-    if (!sat_solver_->FinishPropagation()) {
-      model_is_unsat_ = true;
-      return false;
-    }
-    sat_solver_->EnqueueDecisionAndBacktrackOnConflict(to_enqueue);
-
-    if (sat_solver_->IsModelUnsat()) {
-      model_is_unsat_ = true;
-      return false;
-    }
+    if (!sat_solver_->FinishPropagation()) return false;
+    const SatSolver::Status decision_status =
+        sat_solver_->EnqueueDecisionAndBacktrackOnConflict(to_enqueue);
+    if (decision_status != SatSolver::Status::FEASIBLE) return false;
+    if (sat_solver_->ModelIsUnsat()) return false;
   }
-  sat_solver_->ResetToLevelZero();
   integer_solution_is_set_ = true;
-  return true;
+  return sat_solver_->ResetToLevelZero();
 }
 
 void FeasibilityPump::FillIntegerSolutionStats() {

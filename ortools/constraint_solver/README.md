@@ -6,14 +6,14 @@ Routing solver.
 ## CP solver
 
 [Constraint Programming](http://en.wikipedia.org/wiki/Constraint_programming) is
-a technology issued from IA and used in Operations Research.
+a technology issued from AI and used in operations research.
 
-To begin, skim
+To begin, skim:
 
-* [constraint_solver.h](../constraint_solver/constraint_solver.h):
-Declaration of the core objects for the constraint solver.
-* [constraint_solveri.h](../constraint_solver/constraint_solveri.h):
-Collection of objects used to extend the Constraint Solver library.
+*   [constraint_solver.h](../constraint_solver/constraint_solver.h):
+    Declaration of the core objects for the constraint solver.
+*   [constraint_solveri.h](../constraint_solver/constraint_solveri.h):
+    Collection of objects used to extend the Constraint Solver library.
 
 ### Parameters
 
@@ -25,23 +25,23 @@ important for performance.
 
 ### Solution
 
-* [assignment.proto](../constraint_solver/assignment.proto):
-Holds the solution of a CP problem.
-* [demon_profiler.proto](../constraint_solver/demon_profiler.proto):
-Holds the timeline and execution profile of constraints and demons (daemons).
+*   [assignment.proto](../constraint_solver/assignment.proto):
+    Holds the solution of a CP problem.
+*   [demon_profiler.proto](../constraint_solver/demon_profiler.proto):
+    Holds the timeline and execution profile of constraints and demons
+    (daemons).
 
 ## Routing solver
 
 [Vehicle Routing](http://en.wikipedia.org/wiki/Vehicle_routing) is a useful
 extension that is implemented on top of the CP solver library.
 
-To begin, skim
+To begin, skim:
 
 * [routing.h](../constraint_solver/routing.h):
 The vehicle routing library lets one model and solve generic vehicle routing
 problems ranging from the Traveling Salesman Problem to more complex problems
 such as the Capacitated Vehicle Routing Problem with Time Windows.
-* [routing_flags.h](../constraint_solver/routing_flags.h)
 
 ### Parameters
 
@@ -58,4 +58,4 @@ Holds the solution of a Routing problem.
 ## Recipes
 
 You can find a set of code recipes in
-[the documentation directory](doc/README.md).
+[the documentation directory](docs/README.md).

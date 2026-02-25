@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,10 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_SYMMETRY_UTIL_H_
-#define OR_TOOLS_SAT_SYMMETRY_UTIL_H_
+#ifndef ORTOOLS_SAT_SYMMETRY_UTIL_H_
+#define ORTOOLS_SAT_SYMMETRY_UTIL_H_
 
+#include <memory>
+#include <vector>
+
+#include "absl/types/span.h"
 #include "ortools/algorithms/sparse_permutation.h"
+#include "ortools/sat/cp_model.pb.h"
 
 namespace operations_research {
 namespace sat {
@@ -42,7 +47,7 @@ namespace sat {
 // graph20-20-1rand.mps.gz. I suspect the generators provided by the detection
 // code follow our preconditions.
 std::vector<std::vector<int>> BasicOrbitopeExtraction(
-    const std::vector<std::unique_ptr<SparsePermutation>>& generators);
+    absl::Span<const std::unique_ptr<SparsePermutation>> generators);
 
 // Returns a vector of size n such that
 // - orbits[i] == -1 iff i is never touched by the generators (singleton orbit).
@@ -50,13 +55,30 @@ std::vector<std::vector<int>> BasicOrbitopeExtraction(
 //
 // TODO(user): We could reuse the internal memory if needed.
 std::vector<int> GetOrbits(
-    int n, const std::vector<std::unique_ptr<SparsePermutation>>& generators);
+    int n, absl::Span<const std::unique_ptr<SparsePermutation>> generators);
 
 // Returns the orbits under the given orbitope action.
 // Same results format as in GetOrbits(). Note that here, the orbit index
 // is simply the row index of an element in the orbitope matrix.
-std::vector<int> GetOrbitopeOrbits(
-    int n, const std::vector<std::vector<int>>& orbitope);
+std::vector<int> GetOrbitopeOrbits(int n,
+                                   absl::Span<const std::vector<int>> orbitope);
+
+// See Chapter 7 of Butler, Gregory, ed. Fundamental algorithms for permutation
+// groups. Berlin, Heidelberg: Springer Berlin Heidelberg, 1991.
+void GetSchreierVectorAndOrbit(
+    int point, absl::Span<const std::unique_ptr<SparsePermutation>> generators,
+    std::vector<int>* schrier_vector, std::vector<int>* orbit);
+
+// Given a schreier vector for a given base point and a point in the same orbit
+// of the base point, returns a list of index of the `generators` to apply to
+// get a permutation mapping the base point to get the given point.
+std::vector<int> TracePoint(
+    int point, absl::Span<const int> schrier_vector,
+    absl::Span<const std::unique_ptr<SparsePermutation>> generators);
+
+// Creates a SparsePermutation on [0, n) from its proto representation.
+std::unique_ptr<SparsePermutation> CreateSparsePermutationFromProto(
+    int n, const SparsePermutationProto& proto);
 
 // Given the generators for a permutation group of [0, n-1], update it to
 // a set of generators of the group stabilizing the given element.
@@ -79,4 +101,4 @@ inline void TransformToGeneratorOfStabilizer(
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_SYMMETRY_UTIL_H_
+#endif  // ORTOOLS_SAT_SYMMETRY_UTIL_H_

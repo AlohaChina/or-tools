@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,18 +15,20 @@
 
 #include <zlib.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
-#include "ortools/base/logging.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "ortools/base/file.h"
 
 namespace recordio {
 const int RecordWriter::kMagicNumber = 0x3ed7230a;
 
-RecordWriter::RecordWriter(File* const file)
-    : file_(file), use_compression_(true) {}
+RecordWriter::RecordWriter(File* file) : file_(file), use_compression_(true) {}
 
-bool RecordWriter::Close() { return file_->Close(); }
+bool RecordWriter::Close() { return file_->Close(file::Defaults()).ok(); }
 
 void RecordWriter::set_use_compression(bool use_compression) {
   use_compression_ = use_compression;
@@ -51,7 +53,7 @@ std::string RecordWriter::Compress(std::string const& s) const {
 
 RecordReader::RecordReader(File* const file) : file_(file) {}
 
-bool RecordReader::Close() { return file_->Close(); }
+bool RecordReader::Close() { return file_->Close(file::Defaults()).ok(); }
 
 void RecordReader::Uncompress(const char* const source, uint64_t source_size,
                               char* const output_buffer,

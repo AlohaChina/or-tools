@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,21 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_SAT_DECISION_H_
-#define OR_TOOLS_SAT_SAT_DECISION_H_
+#ifndef ORTOOLS_SAT_SAT_DECISION_H_
+#define ORTOOLS_SAT_SAT_DECISION_H_
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
-#include "ortools/base/integral_types.h"
+#include "absl/types/span.h"
 #include "ortools/base/strong_vector.h"
 #include "ortools/sat/model.h"
-#include "ortools/sat/pb_constraint.h"
 #include "ortools/sat/sat_base.h"
 #include "ortools/sat/sat_parameters.pb.h"
+#include "ortools/sat/synchronization.h"
 #include "ortools/sat/util.h"
 #include "ortools/util/bitset.h"
 #include "ortools/util/integer_pq.h"
+#include "ortools/util/strong_integers.h"
 
 namespace operations_research {
 namespace sat {
@@ -52,16 +54,11 @@ class SatDecisionPolicy {
   // variables are assigned.
   Literal NextBranch();
 
-  // Updates statistics about literal occurences in constraints.
-  // Input is a canonical linear constraint of the form (terms <= rhs).
-  void UpdateWeightedSign(const std::vector<LiteralWithCoeff>& terms,
-                          Coefficient rhs);
-
   // Bumps the activity of all variables appearing in the conflict. All literals
   // must be currently assigned. See VSIDS decision heuristic: Chaff:
   // Engineering an Efficient SAT Solver. M.W. Moskewicz et al. ANNUAL ACM IEEE
   // DESIGN AUTOMATION CONFERENCE 2001.
-  void BumpVariableActivities(const std::vector<Literal>& literals);
+  void BumpVariableActivities(absl::Span<const Literal> literals);
 
   // Updates the increment used for activity bumps. This is basically the same
   // as decaying all the variable activities, but it is a lot more efficient.
@@ -98,10 +95,43 @@ class SatDecisionPolicy {
   //
   // Note(user): Having a lot of different weights may slow down the priority
   // queue operations if there is millions of variables.
-  void SetAssignmentPreference(Literal literal, double weight);
+  void SetAssignmentPreference(Literal literal, float weight);
 
   // Returns the vector of the current assignment preferences.
-  std::vector<std::pair<Literal, double>> AllPreferences() const;
+  std::vector<std::pair<Literal, float>> AllPreferences() const;
+
+  // Returns the current activity of a BooleanVariable.
+  double Activity(Literal l) const {
+    if (l.Variable() < activities_.size()) return activities_[l.Variable()];
+    return 0.0;
+  }
+
+  // Like SetAssignmentPreference() but it can be overridden by phase-saving.
+  void SetTargetPolarityIfUnassigned(Literal l) {
+    if (trail_.Assignment().VariableIsAssigned(l.Variable())) return;
+    has_target_polarity_[l.Variable()] = true;
+    target_polarity_[l.Variable()] = var_polarity_[l.Variable()] =
+        l.IsPositive();
+    best_partial_assignment_.push_back(l);
+    target_length_++;
+  }
+  absl::Span<const Literal> GetBestPartialAssignment() const {
+    return best_partial_assignment_;
+  }
+  void ClearBestPartialAssignment() {
+    target_length_ = 0;
+    has_target_polarity_.assign(has_target_polarity_.size(), false);
+    best_partial_assignment_.clear();
+  }
+
+  // Increases activities of variables in the best partial assignment to ensure
+  // they are branched on first in the same order until the next conflict.
+  // Activities before this call are scaled to become disambiguation terms.
+  // Future conflicts will bump activity by the largest increase applied by this
+  // method.
+  // This acts as a soft-reset of the decision policy, useful when exploring a
+  // new region of the search space.
+  void ResetActivitiesToFollowBestPartialAssignment();
 
  private:
   // Computes an initial variable ordering.
@@ -110,7 +140,7 @@ class SatDecisionPolicy {
   // Rescales activity value of all variables when one of them reached the max.
   void RescaleVariableActivities(double scaling_factor);
 
-  // Reinitializes the inital polarity of all the variables with an index
+  // Reinitializes the initial polarity of all the variables with an index
   // greater than or equal to the given one.
   void ResetInitialPolarity(int from, bool inverted = false);
 
@@ -121,6 +151,9 @@ class SatDecisionPolicy {
   void FlipCurrentPolarity();
   void RandomizeCurrentPolarity();
 
+  // This one returns false if there is no such solution to use.
+  bool UseLsSolutionAsInitialPolarity();
+
   // Adds the given variable to var_ordering_ or updates its priority if it is
   // already present.
   void PqInsertOrUpdate(BooleanVariable var);
@@ -129,6 +162,12 @@ class SatDecisionPolicy {
   const SatParameters& parameters_;
   const Trail& trail_;
   ModelRandomGenerator* random_;
+
+  // TODO(user): This is in term of proto indices. Ideally we would need
+  // CpModelMapping to map that to Booleans but this currently lead to cyclic
+  // dependencies. For now we just assume one to one correspondence for the
+  // first entries. This will only work on pure Boolean problems.
+  SharedLsSolutionRepository* ls_hints_;
 
   // Variable ordering (priority will be adjusted dynamically). queue_elements_
   // holds the elements used by var_ordering_ (it uses pointers).
@@ -201,33 +240,30 @@ class SatDecisionPolicy {
 
   // Stores variable activity and the number of time each variable was "bumped".
   // The later is only used with the ERWA heuristic.
-  absl::StrongVector<BooleanVariable, double> activities_;
-  absl::StrongVector<BooleanVariable, double> tie_breakers_;
-  absl::StrongVector<BooleanVariable, int64_t> num_bumps_;
+  util_intops::StrongVector<BooleanVariable, double> activities_;
+  util_intops::StrongVector<BooleanVariable, float> tie_breakers_;
+  util_intops::StrongVector<BooleanVariable, int64_t> num_bumps_;
 
-  // If the polarity if forced (externally) we alway use this first.
-  absl::StrongVector<BooleanVariable, bool> has_forced_polarity_;
-  absl::StrongVector<BooleanVariable, bool> forced_polarity_;
+  // If the polarity if forced (externally) we always use this first.
+  util_intops::StrongVector<BooleanVariable, bool> has_forced_polarity_;
+  util_intops::StrongVector<BooleanVariable, bool> forced_polarity_;
 
   // If we are in a stable phase, we follow the current target.
   bool in_stable_phase_ = false;
   int target_length_ = 0;
-  absl::StrongVector<BooleanVariable, bool> has_target_polarity_;
-  absl::StrongVector<BooleanVariable, bool> target_polarity_;
+  util_intops::StrongVector<BooleanVariable, bool> has_target_polarity_;
+  util_intops::StrongVector<BooleanVariable, bool> target_polarity_;
 
   // Otherwise we follow var_polarity_ which is reset at the beginning of
   // each new polarity phase. This is also overwritten by phase saving.
   // Each phase last for an arithmetically increasing number of conflicts.
-  absl::StrongVector<BooleanVariable, bool> var_polarity_;
+  util_intops::StrongVector<BooleanVariable, bool> var_polarity_;
   bool maybe_enable_phase_saving_ = true;
   int64_t polarity_phase_ = 0;
   int64_t num_conflicts_until_rephase_ = 1000;
 
   // The longest partial assignment since the last reset.
   std::vector<Literal> best_partial_assignment_;
-
-  // Used in initial polarity computation.
-  absl::StrongVector<BooleanVariable, double> weighted_sign_;
 
   // Used in InitializeVariableOrdering().
   std::vector<BooleanVariable> tmp_variables_;
@@ -236,4 +272,4 @@ class SatDecisionPolicy {
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_SAT_DECISION_H_
+#endif  // ORTOOLS_SAT_SAT_DECISION_H_

@@ -1,18 +1,23 @@
-file(GLOB _SRCS "*.h" "*.cc")
-if(NOT BUILD_LP_PARSER)
-  list(FILTER _SRCS EXCLUDE REGEX ".*/lp_parser.h")
-  list(FILTER _SRCS EXCLUDE REGEX ".*/lp_parser.cc")
-endif()
+# Copyright 2010-2025 Google LLC
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+file(GLOB _SRCS "*.h" "*.cc")
 set(NAME ${PROJECT_NAME}_lp_data)
 
 # Will be merge in libortools.so
 #add_library(${NAME} STATIC ${_SRCS})
 add_library(${NAME} OBJECT ${_SRCS})
 set_target_properties(${NAME} PROPERTIES
-  CXX_STANDARD 17
-  CXX_STANDARD_REQUIRED ON
-  CXX_EXTENSIONS OFF
   POSITION_INDEPENDENT_CODE ON
   )
 target_include_directories(${NAME} PRIVATE
@@ -24,5 +29,5 @@ target_link_libraries(${NAME} PRIVATE
   absl::str_format
   protobuf::libprotobuf
   ${RE2_DEPS}
-  ${PROJECT_NAME}::proto)
-#add_library(${PROJECT_NAME}::lp_data ALIAS ${NAME})
+  ${PROJECT_NAMESPACE}::ortools_proto)
+#add_library(${PROJECT_NAMESPACE}::lp_data ALIAS ${NAME})

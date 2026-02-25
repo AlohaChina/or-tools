@@ -1,30 +1,37 @@
 # OR-Tools Bazel Build Instructions
-| OS       | C++   |
-|:-------- | :---: |
-| Linux    | [![Status][linux_svg]][linux_link] |
-| MacOS    | [![Status][macos_svg]][macos_link] |
-| Windows  | [![Status][windows_svg]][windows_link] |
+| OS   | C++   |
+|:---- | :---: |
+| amd64 Linux   | [![Status][linux_svg]][linux_link] |
+| arm64 MacOS   | [![Status][arm64_macos_svg]][arm64_macos_link] |
+| amd64 MacOS   | [![Status][amd64_macos_svg]][amd64_macos_link] |
+| amd64 Windows | [![Status][windows_svg]][windows_link] |
 
-[linux_svg]: https://github.com/google/or-tools/actions/workflows/bazel_linux.yml/badge.svg?branch=master
-[linux_link]: https://github.com/google/or-tools/actions/workflows/bazel_linux.yml
-[macos_svg]: https://github.com/google/or-tools/actions/workflows/bazel_macos.yml/badge.svg?branch=master
-[macos_link]: https://github.com/google/or-tools/actions/workflows/bazel_macos.yml
-[windows_svg]: https://github.com/google/or-tools/actions/workflows/bazel_windows.yml/badge.svg?branch=master
-[windows_link]: https://github.com/google/or-tools/actions/workflows/bazel_windows.yml
+[linux_svg]: ./../../../actions/workflows/amd64_linux_bazel.yml/badge.svg?branch=main
+[linux_link]: ./../../../actions/workflows/amd64_linux_bazel.yml
+
+[arm64_macos_svg]: ./../../../actions/workflows/arm64_macos_bazel.yml/badge.svg?branch=main
+[arm64_macos_link]: ./../../../actions/workflows/arm64_macos_bazel.yml
+
+[amd64_macos_svg]: ./../../../actions/workflows/amd64_macos_bazel.yml/badge.svg?branch=main
+[amd64_macos_link]: ./../../../actions/workflows/amd64_macos_bazel.yml
+
+[windows_svg]: ./../../../actions/workflows/amd64_windows_bazel.yml/badge.svg?branch=main
+[windows_link]: ./../../../actions/workflows/amd64_windows_bazel.yml
 
 Dockers [Alpine, Archlinux, Centos, Debian, Fedora, OpenSuse, Ubuntu]: [![Status][docker_svg]][docker_link]
 
-[docker_svg]: https://github.com/google/or-tools/actions/workflows/bazel_docker.yml/badge.svg?branch=master
-[docker_link]: https://github.com/google/or-tools/actions/workflows/bazel_docker.yml
+[docker_svg]: ./../../../actions/workflows/amd64_docker_bazel.yml/badge.svg?branch=main
+[docker_link]: ./../../../actions/workflows/amd64_docker_bazel.yml
 
 ## Introduction
 
 <nav for="bazel"> |
+<a href="#requirement">Requirement</a> |
 <a href="#dependencies">Dependencies</a> |
 <a href="#compilation">Compilation</a> |
 <a href="#testing">Testing</a> |
 <a href="#integration">Integration</a> |
-<a href="doc/ci.md">CI</a> |
+<a href="docs/ci.md">CI</a> |
 </nav>
 
 OR-Tools comes with a Bazel based build ([WORKSPACE](../WORKSPACE)) that can be
@@ -34,42 +41,66 @@ you can download it for free from <https://bazel.build/>.
 **warning: Currently OR-Tools Bazel doesn't support Python, Java nor .Net,
 please use the Makefile or CMake based build instead.**
 
+## Requirement
+
+You'll need:
+
+* `Bazel >= 5.4.0`.
+* A compiler with C++17 support.
+
+## Solvers supported
+
+Here the list of supported solvers:
+
+*   CP-SAT
+*   GLOP
+*   GLPK
+*   PDLP
+*   SCIP
+
 ## Dependencies
 
-OR-Tools depends on severals mandatory libraries.
+OR-Tools depends on several mandatory libraries.
 
-* Google Abseil-cpp,
-* Google Protobuf,
-* Google Gtest,
-* Bliss,
-* SCIP,
-* GLPK (GNU Linear Programming Kit)
+*   Eigen
+*   Google Abseil-cpp,
+*   Google Protobuf,
+*   Google Gtest,
+*   Bliss,
+*   SCIP,
+*   GLPK (GNU Linear Programming Kit)
 
 ## Compilation
 
-You must compile OR-Tools using C++17:
+You must compile OR-Tools using at least C++17 (C++20 on windows):
 
-* on UNIX:
-  ```sh
-  bazel build --cxxopt=-std=c++17 //...:all
-  ```
-* on Windows when using MSVC:
-  ```sh
-  bazel build --cxxopt="-std:c++17" //...:all
-  ```
+*   on UNIX:
+
+    ```sh
+    bazel build -c opt --cxxopt=-std=c++17 ...
+    ```
+
+*   on Windows when using MSVC:
+
+    ```sh
+    bazel build -c opt --cxxopt="/std:c++20" ...
+    ```
 
 ## Testing
 
 You may run tests using:
 
-* on UNIX:
-  ```sh
-  bazel test --cxxopt=-std=c++17 //...:all
-  ```
-* on Windows when using MSVC:
-  ```sh
-  bazel test --cxxopt="-std:c++17" //...:all
-  ```
+*   on UNIX:
+
+    ```sh
+    bazel test -c opt --cxxopt=-std=c++17 ...
+    ```
+
+*   on Windows when using MSVC:
+
+    ```sh
+    bazel test -c opt --cxxopt="/std:c++20" ...
+    ```
 
 ## Integration
 

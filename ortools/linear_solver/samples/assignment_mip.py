@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2010-2021 Google LLC
+# Copyright 2010-2025 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -11,10 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """MIP example that solves an assignment problem."""
 # [START program]
 # [START import]
 from ortools.linear_solver import pywraplp
+
 # [END import]
 
 
@@ -35,8 +37,10 @@ def main():
     # Solver
     # [START solver]
     # Create the mip solver with the SCIP backend.
-    solver = pywraplp.Solver.CreateSolver('SCIP')
+    solver = pywraplp.Solver.CreateSolver("SCIP")
 
+    if not solver:
+        return
     # [END solver]
 
     # Variables
@@ -46,7 +50,7 @@ def main():
     x = {}
     for i in range(num_workers):
         for j in range(num_tasks):
-            x[i, j] = solver.IntVar(0, 1, '')
+            x[i, j] = solver.IntVar(0, 1, "")
     # [END variables]
 
     # Constraints
@@ -71,24 +75,24 @@ def main():
 
     # Solve
     # [START solve]
+    print(f"Solving with {solver.SolverVersion()}")
     status = solver.Solve()
     # [END solve]
 
     # Print solution.
     # [START print_solution]
     if status == pywraplp.Solver.OPTIMAL or status == pywraplp.Solver.FEASIBLE:
-        print(f'Total cost = {solver.Objective().Value()}\n')
+        print(f"Total cost = {solver.Objective().Value()}\n")
         for i in range(num_workers):
             for j in range(num_tasks):
                 # Test if x[i,j] is 1 (with tolerance for floating point arithmetic).
                 if x[i, j].solution_value() > 0.5:
-                    print(f'Worker {i} assigned to task {j}.' +
-                          f' Cost: {costs[i][j]}')
+                    print(f"Worker {i} assigned to task {j}." + f" Cost: {costs[i][j]}")
     else:
-        print('No solution found.')
+        print("No solution found.")
     # [END print_solution]
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 # [END program]

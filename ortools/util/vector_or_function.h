@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_UTIL_VECTOR_OR_FUNCTION_H_
-#define OR_TOOLS_UTIL_VECTOR_OR_FUNCTION_H_
+#ifndef ORTOOLS_UTIL_VECTOR_OR_FUNCTION_H_
+#define ORTOOLS_UTIL_VECTOR_OR_FUNCTION_H_
 
 #include <algorithm>
 #include <vector>
 
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
+#include "ortools/util/flat_matrix.h"
 
 namespace operations_research {
 
@@ -91,6 +91,20 @@ class MatrixOrFunction<ScalarType, std::vector<std::vector<ScalarType>>,
   std::vector<std::vector<ScalarType>> matrix_;
 };
 
+// Specialization for FlatMatrix<>, which is faster than vector<vector<>>.
+template <typename ScalarType, bool square>
+class MatrixOrFunction<ScalarType, FlatMatrix<ScalarType>, square> {
+ public:
+  explicit MatrixOrFunction(FlatMatrix<ScalarType> matrix)
+      : matrix_(std::move(matrix)) {}
+  void Reset(FlatMatrix<ScalarType> matrix) { matrix_ = std::move(matrix); }
+  ScalarType operator()(int i, int j) const { return matrix_[i][j]; }
+  bool Check() const { return true; }
+
+ private:
+  FlatMatrix<ScalarType> matrix_;
+};
+
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_UTIL_VECTOR_OR_FUNCTION_H_
+#endif  // ORTOOLS_UTIL_VECTOR_OR_FUNCTION_H_

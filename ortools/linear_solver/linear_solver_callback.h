@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,17 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// See go/mpsolver-callbacks for documentation on how to use this file.
-
-#ifndef OR_TOOLS_LINEAR_SOLVER_LINEAR_SOLVER_CALLBACK_H_
-#define OR_TOOLS_LINEAR_SOLVER_LINEAR_SOLVER_CALLBACK_H_
+#ifndef ORTOOLS_LINEAR_SOLVER_LINEAR_SOLVER_CALLBACK_H_
+#define ORTOOLS_LINEAR_SOLVER_LINEAR_SOLVER_CALLBACK_H_
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
-#include "ortools/base/integral_types.h"
 
 namespace operations_research {
 
@@ -96,7 +93,7 @@ class MPCallbackContext {
   //
   // This constraint must not cut off integer solutions, it should only
   // strengthen the LP (behavior is undefined otherwise).  Use
-  // MPCallbackContext::AddLazyConstriant() if you are cutting off integer
+  // MPCallbackContext::AddLazyConstraint() if you are cutting off integer
   // solutions.
   virtual void AddCut(const LinearRange& cutting_plane) = 0;
 
@@ -138,7 +135,6 @@ class MPCallbackContext {
 // Extend this class with model specific logic, and register through
 // MPSolver::SetCallback, passing a pointer to this object.
 //
-// See go/mpsolver-callbacks for additional documentation.
 class MPCallback {
  public:
   // If you intend to call call MPCallbackContext::AddCut(), you must set
@@ -179,4 +175,4 @@ class MPCallbackList : public MPCallback {
 
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_LINEAR_SOLVER_LINEAR_SOLVER_CALLBACK_H_
+#endif  // ORTOOLS_LINEAR_SOLVER_LINEAR_SOLVER_CALLBACK_H_

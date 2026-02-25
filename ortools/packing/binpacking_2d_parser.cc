@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,10 +13,14 @@
 
 #include "ortools/packing/binpacking_2d_parser.h"
 
+#include <string>
+#include <vector>
+
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_split.h"
-#include "ortools/base/filelineiter.h"
+#include "absl/strings/string_view.h"
 #include "ortools/base/logging.h"
+#include "ortools/util/filelineiter.h"
 
 namespace operations_research {
 namespace packing {
@@ -27,7 +31,7 @@ BinPacking2dParser::BinPacking2dParser()
       num_items_(0),
       instances_seen_(0) {}
 
-bool BinPacking2dParser::Load2BPFile(const std::string& file_name,
+bool BinPacking2dParser::Load2BPFile(absl::string_view file_name,
                                      int instance) {
   if (load_status_ != NOT_STARTED) {
     return false;

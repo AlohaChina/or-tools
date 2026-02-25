@@ -1,26 +1,27 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <LangVersion>8.0</LangVersion>
-    <TargetFrameworks>net6.0</TargetFrameworks>
+    <LangVersion>@DOTNET_SAMPLE_LANG@</LangVersion>
+    @DOTNET_TFM@
     <EnableDefaultItems>false</EnableDefaultItems>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <!-- see https://github.com/dotnet/docs/issues/12237 -->
     <RollForward>LatestMajor</RollForward>
     <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
-    <AssemblyName>@DOTNET_PROJECT@.@SAMPLE_NAME@</AssemblyName>
-    <Version>@PROJECT_VERSION@</Version>
+    <AssemblyName>@DOTNET_PROJECT@.@COMPONENT_NAME@.@SAMPLE_NAME@</AssemblyName>
+    <Version>@PROJECT_VERSION@@DOTNET_RELEASE@</Version>
 
     <!-- Nuget Properties -->
     <Description>Simple App consuming @DOTNET_PROJECT@ package</Description>
 
     <!-- Pack Option -->
     <IsPackable>true</IsPackable>
-    <Title>@DOTNET_PROJECT@.@SAMPLE_NAME@ v@PROJECT_VERSION@</Title>
-    <PackageId>@DOTNET_PROJECT@.@SAMPLE_NAME@</PackageId>
+    <Title>@DOTNET_PROJECT@.@COMPONENT_NAME@.@SAMPLE_NAME@ v@PROJECT_VERSION@@DOTNET_RELEASE@</Title>
+    <PackageId>@DOTNET_PROJECT@.@COMPONENT_NAME@.@SAMPLE_NAME@</PackageId>
     <PackageTags>sample</PackageTags>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PackageOutputPath>@DOTNET_PACKAGES_DIR@/samples</PackageOutputPath>
 
     <!-- Signing -->
     <SignAssembly>false</SignAssembly>
@@ -40,7 +41,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="@FILE_NAME@" />
-    <PackageReference Include="@DOTNET_PROJECT@" Version="@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@.*" />
+    <Compile Include="@SAMPLE_NAME@.cs" />
+    <PackageReference Include="@DOTNET_PROJECT@" Version="@PROJECT_VERSION@@DOTNET_RELEASE@" />
   </ItemGroup>
 </Project>

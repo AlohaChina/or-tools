@@ -1,12 +1,19 @@
 FROM ortools/cmake:opensuse_swig AS env
+
 ENV PATH=/root/.local/bin:$PATH
-RUN zypper update -y \
-&& zypper install -y python3 python3-pip python3-devel \
+RUN zypper refresh \
+&& zypper install -y python3 python3-devel \
+ python3-pip python3-wheel python3-virtualenv python3-setuptools \
 && zypper clean -a
+RUN python3 -m pip install --break-system-packages \
+ absl-py mypy mypy-protobuf
 
 FROM env AS devel
 WORKDIR /home/project
 COPY . .
+
+ARG CMAKE_BUILD_PARALLEL_LEVEL
+ENV CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL:-4}
 
 FROM devel AS build
 RUN cmake -S. -Bbuild -DBUILD_PYTHON=ON -DBUILD_CXX_SAMPLES=OFF -DBUILD_CXX_EXAMPLES=OFF
@@ -19,7 +26,7 @@ RUN CTEST_OUTPUT_ON_FAILURE=1 cmake --build build --target test
 FROM env AS install_env
 WORKDIR /home/sample
 COPY --from=build /home/project/build/python/dist/*.whl .
-RUN python3 -m pip install *.whl
+RUN python3 -m pip install --break-system-packages *.whl
 
 FROM install_env AS install_devel
 COPY cmake/samples/python .

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,15 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_CUMULATIVE_H_
-#define OR_TOOLS_SAT_CUMULATIVE_H_
+#ifndef ORTOOLS_SAT_CUMULATIVE_H_
+#define ORTOOLS_SAT_CUMULATIVE_H_
 
 #include <functional>
 #include <vector>
 
-#include "ortools/sat/integer.h"
+#include "absl/types/span.h"
+#include "ortools/sat/integer_base.h"
 #include "ortools/sat/intervals.h"
 #include "ortools/sat/model.h"
+#include "ortools/sat/sat_base.h"
+#include "ortools/sat/scheduling_helpers.h"
 
 namespace operations_research {
 namespace sat {
@@ -43,8 +46,9 @@ namespace sat {
 // Optimization: If one already have an helper constructed from the interval
 // variable, it can be passed as last argument.
 std::function<void(Model*)> Cumulative(
+    const std::vector<Literal>& enforcement_literals,
     const std::vector<IntervalVariable>& vars,
-    const std::vector<AffineExpression>& demands, AffineExpression capacity,
+    absl::Span<const AffineExpression> demands, AffineExpression capacity,
     SchedulingConstraintHelper* helper = nullptr);
 
 // Adds a simple cumulative constraint. See the comment of Cumulative() above
@@ -53,17 +57,19 @@ std::function<void(Model*)> Cumulative(
 // This constraint assumes that task demands and the resource capacity are fixed
 // to non-negative number.
 std::function<void(Model*)> CumulativeTimeDecomposition(
-    const std::vector<IntervalVariable>& vars,
-    const std::vector<AffineExpression>& demands, AffineExpression capacity,
+    absl::Span<const Literal> enforcement_literals,
+    absl::Span<const IntervalVariable> vars,
+    absl::Span<const AffineExpression> demands, AffineExpression capacity,
     SchedulingConstraintHelper* helper = nullptr);
 
 // Another testing code, same assumptions as the CumulativeTimeDecomposition().
 std::function<void(Model*)> CumulativeUsingReservoir(
-    const std::vector<IntervalVariable>& vars,
-    const std::vector<AffineExpression>& demands, AffineExpression capacity,
+    absl::Span<const Literal> enforcement_literals,
+    absl::Span<const IntervalVariable> vars,
+    absl::Span<const AffineExpression> demands, AffineExpression capacity,
     SchedulingConstraintHelper* helper = nullptr);
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_CUMULATIVE_H_
+#endif  // ORTOOLS_SAT_CUMULATIVE_H_

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -21,14 +21,18 @@
 //
 // See the comments on the class below for more details.
 
-#ifndef OR_TOOLS_ALGORITHMS_FIND_GRAPH_SYMMETRIES_H_
-#define OR_TOOLS_ALGORITHMS_FIND_GRAPH_SYMMETRIES_H_
+#ifndef ORTOOLS_ALGORITHMS_FIND_GRAPH_SYMMETRIES_H_
+#define ORTOOLS_ALGORITHMS_FIND_GRAPH_SYMMETRIES_H_
 
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
+#include "absl/numeric/int128.h"
 #include "absl/status/status.h"
 #include "absl/time/time.h"
+#include "absl/types/span.h"
 #include "ortools/algorithms/dynamic_partition.h"
 #include "ortools/algorithms/dynamic_permutation.h"
 #include "ortools/graph/graph.h"
@@ -103,7 +107,7 @@ class GraphSymmetryFinder {
   //   elements are valid factors of the automorphism group size.
   absl::Status FindSymmetries(
       std::vector<int>* node_equivalence_classes_io,
-      std::vector<std::unique_ptr<SparsePermutation> >* generators,
+      std::vector<std::unique_ptr<SparsePermutation>>* generators,
       std::vector<int>* factorized_automorphism_group_size,
       TimeLimit* time_limit = nullptr);
 
@@ -169,9 +173,9 @@ class GraphSymmetryFinder {
   std::unique_ptr<SparsePermutation> FindOneSuitablePermutation(
       int root_node, int root_image_node, DynamicPartition* base_partition,
       DynamicPartition* image_partition,
-      const std::vector<std::unique_ptr<SparsePermutation> >&
+      absl::Span<const std::unique_ptr<SparsePermutation>>
           generators_found_so_far,
-      const std::vector<std::vector<int> >& permutations_displacing_node);
+      absl::Span<const std::vector<int>> permutations_displacing_node);
 
   // Data structure used by FindOneSuitablePermutation(). See the .cc
   struct SearchState {
@@ -229,18 +233,18 @@ class GraphSymmetryFinder {
   // For each orbit, keep the first node that appears in "nodes".
   void PruneOrbitsUnderPermutationsCompatibleWithPartition(
       const DynamicPartition& partition,
-      const std::vector<std::unique_ptr<SparsePermutation> >& all_permutations,
-      const std::vector<int>& permutation_indices, std::vector<int>* nodes);
+      absl::Span<const std::unique_ptr<SparsePermutation>> all_permutations,
+      absl::Span<const int> permutation_indices, std::vector<int>* nodes);
 
   // Temporary objects used by some of the class methods, and owned by the
   // class to avoid (costly) re-allocation. Their resting states are described
   // in the side comments; with N = NumNodes().
-  DynamicPermutation tmp_dynamic_permutation_;            // Identity(N)
-  mutable std::vector<bool> tmp_node_mask_;               // [0..N-1] = false
-  std::vector<int> tmp_degree_;                           // [0..N-1] = 0.
-  std::vector<int> tmp_stack_;                            // Empty.
-  std::vector<std::vector<int> > tmp_nodes_with_degree_;  // [0..N-1] = [].
-  MergingPartition tmp_partition_;                        // Reset(N).
+  DynamicPermutation tmp_dynamic_permutation_;           // Identity(N)
+  mutable std::vector<bool> tmp_node_mask_;              // [0..N-1] = false
+  std::vector<int> tmp_degree_;                          // [0..N-1] = 0.
+  std::vector<int> tmp_stack_;                           // Empty.
+  std::vector<std::vector<int>> tmp_nodes_with_degree_;  // [0..N-1] = [].
+  MergingPartition tmp_partition_;                       // Reset(N).
   std::vector<const SparsePermutation*> tmp_compatible_permutations_;  // Empty.
 
   // Internal statistics, used for performance tuning and debugging.
@@ -314,6 +318,39 @@ class GraphSymmetryFinder {
   mutable Stats stats_;
 };
 
+// HELPER FUNCTIONS: PUBLIC FOR UNIT TESTING ONLY.
+
+// Returns, for each node A, the number of pairs of nodes (B, C) such that
+// arcs A->B, A->C and B->C exist. Skips nodes with degree > max_degree
+// (this allows to remain linear in the number of nodes, but gives partial
+// results).
+// The complexity is O(num_nodes * max_degree²).
+//
+// DIFFERENTIATION: In unit test CollisionImpliesIsomorphismInPractice,
+// this metric differentiated 33 of the 34 non-isomorphic collisions found
+// across 200K graphs: only one remained.
+//
+// Example graph differentiated by this metric, but not by LocalBfsFprint():
+//  ,-1-3-.         ,-1-3-.
+// 0  | |  5  and  0   X   5
+//  `-2-3-'         `-2-4-'
+std::vector<int> CountTriangles(const ::util::StaticGraph<int, int>& graph,
+                                int max_degree);
+
+// Runs a Breadth-First-Search locally: it stops when we settled the given
+// number of nodes, though it will finish the current radius.
+// `visited` will contain either the full connected components, or all the nodes
+// with distance ≤ R+1 from the source, where R is the radius where we stopped.
+// `num_within_radius` contains the increasing number of nodes within distance
+// 0, 1, .., R+1 of the source.
+void LocalBfs(const ::util::StaticGraph<int, int>& graph, int source,
+              int stop_after_num_nodes, std::vector<int>* visited,
+              std::vector<int>* num_within_radius,
+              // For performance, the user provides us with an already-
+              // allocated bitmask of size graph.num_nodes() with all values set
+              // to "false", which we'll restore in the same state upon return.
+              std::vector<bool>* tmp_mask);
+
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_ALGORITHMS_FIND_GRAPH_SYMMETRIES_H_
+#endif  // ORTOOLS_ALGORITHMS_FIND_GRAPH_SYMMETRIES_H_

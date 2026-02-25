@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -23,8 +23,9 @@
 
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
-#include "ortools/base/integral_types.h"
+#include "absl/types/span.h"
 #include "ortools/base/logging.h"
+#include "ortools/base/types.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 
@@ -50,7 +51,7 @@ class Dimension : public BaseObject {
                                    const std::vector<int>& unassigned) = 0;
   virtual void EndPropagate() = 0;
   std::string DebugString() const override { return "Dimension"; }
-  virtual void Accept(ModelVisitor* const visitor) const = 0;
+  virtual void Accept(ModelVisitor* visitor) const = 0;
 
   Solver* solver() const { return solver_; }
 
@@ -522,7 +523,7 @@ void SortWeightVector(std::vector<int>* const indices,
 }
 
 void SortIndexByWeight(std::vector<int>* const indices,
-                       const std::vector<int64_t>& weights) {
+                       absl::Span<const int64_t> weights) {
   std::vector<WeightContainer> to_sort;
   for (int index = 0; index < indices->size(); ++index) {
     if (weights[index] != 0) {

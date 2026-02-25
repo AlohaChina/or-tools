@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,6 +13,12 @@
 
 #include "ortools/lp_data/lp_utils.h"
 
+#include <algorithm>
+
+#include "absl/log/check.h"
+#include "absl/types/span.h"
+#include "ortools/lp_data/lp_types.h"
+#include "ortools/lp_data/scattered_vector.h"
 #include "ortools/lp_data/sparse_column.h"
 
 namespace operations_research {
@@ -43,6 +49,17 @@ Fractional PreciseSquaredNorm(const SparseColumn& v) {
   return sum.Value();
 }
 
+Fractional SquaredNorm(const ScatteredColumn& v) {
+  if (v.ShouldUseDenseIteration()) {
+    return SquaredNorm(v.values);
+  }
+  Fractional sum(0.0);
+  for (const RowIndex row : v.non_zeros) {
+    sum += Square(v[row]);
+  }
+  return sum;
+}
+
 Fractional PreciseSquaredNorm(const ScatteredColumn& v) {
   if (v.ShouldUseDenseIteration()) {
     return PreciseSquaredNorm(v.values);
@@ -54,20 +71,73 @@ Fractional PreciseSquaredNorm(const ScatteredColumn& v) {
   return sum.Value();
 }
 
-Fractional SquaredNorm(const DenseColumn& column) {
-  Fractional sum(0.0);
-  RowIndex row(0);
-  const size_t num_blocks = column.size().value() / 4;
-  for (size_t i = 0; i < num_blocks; ++i) {
-    // See the comment in ScalarProduct in the header for some notes about the
-    // effect of adding up several squares at a time.
-    sum += Square(column[row++]) + Square(column[row++]) +
-           Square(column[row++]) + Square(column[row++]);
+Fractional SquaredNorm(absl::Span<const Fractional> data) {
+  // We expand ourselves since we don't really care about the floating
+  // point order of operation and this seems faster.
+  int i = 0;
+  const int end = data.size();
+  const int shifted_end = end - 3;
+  Fractional sum1 = 0.0;
+  Fractional sum2 = 0.0;
+  Fractional sum3 = 0.0;
+  Fractional sum4 = 0.0;
+  for (; i < shifted_end; i += 4) {
+    sum1 += data[i] * data[i];
+    sum2 += data[i + 1] * data[i + 1];
+    sum3 += data[i + 2] * data[i + 2];
+    sum4 += data[i + 3] * data[i + 3];
   }
-  while (row < column.size()) {
-    sum += Square(column[row++]);
+  Fractional sum = sum1 + sum2 + sum3 + sum4;
+  if (i < end) {
+    sum += data[i] * data[i];
+    if (i + 1 < end) {
+      sum += data[i + 1] * data[i + 1];
+      if (i + 2 < end) {
+        sum += data[i + 2] * data[i + 2];
+      }
+    }
   }
   return sum;
+}
+
+Fractional SquaredNormAndResetToZero(absl::Span<Fractional> data) {
+  // We expand ourselves since we don't really care about the floating
+  // point order of operation and this seems faster.
+  int i = 0;
+  const int end = data.size();
+  const int shifted_end = end - 3;
+  Fractional sum1 = 0.0;
+  Fractional sum2 = 0.0;
+  Fractional sum3 = 0.0;
+  Fractional sum4 = 0.0;
+  for (; i < shifted_end; i += 4) {
+    sum1 += data[i] * data[i];
+    sum2 += data[i + 1] * data[i + 1];
+    sum3 += data[i + 2] * data[i + 2];
+    sum4 += data[i + 3] * data[i + 3];
+    data[i] = 0.0;
+    data[i + 1] = 0.0;
+    data[i + 2] = 0.0;
+    data[i + 3] = 0.0;
+  }
+  Fractional sum = sum1 + sum2 + sum3 + sum4;
+  if (i < end) {
+    sum += data[i] * data[i];
+    data[i] = 0.0;
+    if (i + 1 < end) {
+      sum += data[i + 1] * data[i + 1];
+      data[i + 1] = 0.0;
+      if (i + 2 < end) {
+        sum += data[i + 2] * data[i + 2];
+        data[i + 2] = 0.0;
+      }
+    }
+  }
+  return sum;
+}
+
+Fractional SquaredNorm(const DenseColumn& column) {
+  return SquaredNorm(absl::MakeSpan(column.data(), column.size().value()));
 }
 
 Fractional PreciseSquaredNorm(const DenseColumn& column) {

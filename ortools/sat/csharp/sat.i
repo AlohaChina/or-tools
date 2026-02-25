@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -39,6 +39,8 @@ using Google.OrTools.Util;
 %typemap(csimports) operations_research::sat::SolveWrapper %{
 // Used to wrap log callbacks (std::function<void(const std::string&>)
 public delegate void StringToVoidDelegate(string message);
+// Used to wrap best bound callbacks (std::function<void(double>)
+public delegate void DoubleToVoidDelegate(double bound);
 %}
 
 PROTO_INPUT(operations_research::sat::CpModelProto,
@@ -60,6 +62,14 @@ PROTO_INPUT(operations_research::sat::IntegerVariableProto,
 PROTO2_RETURN(operations_research::sat::CpSolverResponse,
               Google.OrTools.Sat.CpSolverResponse);
 
+%template(IntVector) std::vector<int>;
+VECTOR_AS_CSHARP_ARRAY(int, int, int, IntVector);
+
+%template(Int64Vector) std::vector<int64_t>;
+%template(Int64VectorVector) std::vector<std::vector<int64_t> >;
+VECTOR_AS_CSHARP_ARRAY(int64_t, int64_t, long, Int64Vector);
+JAGGED_MATRIX_AS_CSHARP_ARRAY(int64_t, int64_t, long, Int64VectorVector);
+
 %ignoreall
 
 // SatParameters are proto2, thus not compatible with C# Protobufs.
@@ -74,8 +84,17 @@ PROTO2_RETURN(operations_research::sat::CpSolverResponse,
 %unignore operations_research::sat::LogCallback::~LogCallback;
 %unignore operations_research::sat::LogCallback::NewMessage;
 
+// Temporary wrapper class for the DoubleToVoidDelegate.
+%feature("director") operations_research::sat::BestBoundCallback;
+%unignore operations_research::sat::BestBoundCallback;
+%unignore operations_research::sat::BestBoundCallback::~BestBoundCallback;
+%unignore operations_research::sat::BestBoundCallback::NewBestBound;
+
+
 // Wrap the SolveWrapper class.
 %unignore operations_research::sat::SolveWrapper;
+%unignore operations_research::sat::SolveWrapper::SolveWrapper;
+%unignore operations_research::sat::SolveWrapper::AddBestBoundCallbackFromClass;
 %unignore operations_research::sat::SolveWrapper::AddLogCallbackFromClass;
 %unignore operations_research::sat::SolveWrapper::AddSolutionCallback;
 %unignore operations_research::sat::SolveWrapper::ClearSolutionCallback;
@@ -93,6 +112,7 @@ PROTO2_RETURN(operations_research::sat::CpSolverResponse,
 
 %feature("director") operations_research::sat::SolutionCallback;
 %unignore operations_research::sat::SolutionCallback;
+%unignore operations_research::sat::SolutionCallback::SolutionCallback;
 %unignore operations_research::sat::SolutionCallback::~SolutionCallback;
 %unignore operations_research::sat::SolutionCallback::BestObjectiveBound;
 %feature("nodirector") operations_research::sat::SolutionCallback::BestObjectiveBound;

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -38,36 +38,44 @@
 //
 // The above limitations are largely due MPSolver and this file, not Gurobi.
 //
-// Warning(rander): the interactions between callbacks and incrementalism are
+// TODO(user): the interactions between callbacks and incrementalism are
 // poorly tested, proceed with caution.
-//
 
+#include <algorithm>
+#include <atomic>
 #include <cmath>
-#include <cstddef>
 #include <cstdint>
+#include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/base/attributes.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/flags/flag.h"
+#include "absl/log/check.h"
+#include "absl/log/die_if_null.h"
 #include "absl/status/status.h"
-#include "absl/strings/match.h"
 #include "absl/strings/str_format.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/integral_types.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/map_util.h"
 #include "ortools/base/timer.h"
-#include "ortools/gurobi/environment.h"
-#include "ortools/linear_solver/gurobi_proto_solver.h"
+#include "ortools/linear_solver/gurobi_util.h"
 #include "ortools/linear_solver/linear_solver.h"
 #include "ortools/linear_solver/linear_solver_callback.h"
+#include "ortools/linear_solver/proto_solver/gurobi_proto_solver.h"
+#include "ortools/linear_solver/proto_solver/proto_utils.h"
+#include "ortools/third_party_solvers/gurobi_environment.h"
+#include "ortools/util/lazy_mutable_copy.h"
 #include "ortools/util/time_limit.h"
 
-ABSL_FLAG(int, num_gurobi_threads, 4,
+ABSL_FLAG(int, num_gurobi_threads, 0,
           "Number of threads available for Gurobi.");
 
 namespace operations_research {
@@ -75,7 +83,7 @@ namespace operations_research {
 class GurobiInterface : public MPSolverInterface {
  public:
   // Constructor that takes a name for the underlying GRB solver.
-  explicit GurobiInterface(MPSolver* const solver, bool mip);
+  explicit GurobiInterface(MPSolver* solver, bool mip);
   ~GurobiInterface() override;
 
   // Sets the optimization direction (min/max).
@@ -84,8 +92,22 @@ class GurobiInterface : public MPSolverInterface {
   // ----- Solve -----
   // Solves the problem using the parameter values specified.
   MPSolver::ResultStatus Solve(const MPSolverParameters& param) override;
-  absl::optional<MPSolutionResponse> DirectlySolveProto(
-      const MPModelRequest& request, std::atomic<bool>* interrupt) override;
+
+  // ----- Directly solve proto is supported without interrupt ---
+  bool SupportsDirectlySolveProto(std::atomic<bool>* interrupt) const override {
+    return interrupt == nullptr;
+  }
+  MPSolutionResponse DirectlySolveProto(LazyMutableCopy<MPModelRequest> request,
+                                        std::atomic<bool>* interrupt) override {
+    DCHECK_EQ(interrupt, nullptr);
+    const bool log_error = request->enable_internal_solver_output();
+
+    // Here we reuse the Gurobi environment to support single-use license that
+    // forbids creating a second environment if one already exists.
+    return ConvertStatusOrMPSolutionResponse(
+        log_error, GurobiSolveProto(std::move(request), global_env_));
+  }
+
   // Writes the model.
   void Write(const std::string& filename) override;
 
@@ -99,18 +121,17 @@ class GurobiInterface : public MPSolverInterface {
   void SetConstraintBounds(int row_index, double lb, double ub) override;
 
   // Adds Constraint incrementally.
-  void AddRowConstraint(MPConstraint* const ct) override;
-  bool AddIndicatorConstraint(MPConstraint* const ct) override;
+  void AddRowConstraint(MPConstraint* ct) override;
+  bool AddIndicatorConstraint(MPConstraint* ct) override;
   // Adds variable incrementally.
-  void AddVariable(MPVariable* const var) override;
+  void AddVariable(MPVariable* var) override;
   // Changes a coefficient in a constraint.
-  void SetCoefficient(MPConstraint* const constraint,
-                      const MPVariable* const variable, double new_value,
-                      double old_value) override;
+  void SetCoefficient(MPConstraint* constraint, const MPVariable* variable,
+                      double new_value, double old_value) override;
   // Clears a constraint from all its terms.
-  void ClearConstraint(MPConstraint* const constraint) override;
+  void ClearConstraint(MPConstraint* constraint) override;
   // Changes a coefficient in the linear objective
-  void SetObjectiveCoefficient(const MPVariable* const variable,
+  void SetObjectiveCoefficient(const MPVariable* variable,
                                double coefficient) override;
   // Changes the constant term in the linear objective.
   void SetObjectiveOffset(double value) override;
@@ -147,7 +168,7 @@ class GurobiInterface : public MPSolverInterface {
   }
 
   bool InterruptSolve() override {
-    const absl::MutexLock lock(&hold_interruptions_mutex_);
+    const absl::MutexLock lock(hold_interruptions_mutex_);
     if (model_ != nullptr) GRBterminate(model_);
     return true;
   }
@@ -232,7 +253,11 @@ class GurobiInterface : public MPSolverInterface {
   int SolutionCount() const;
 
   GRBmodel* model_;
-  GRBenv* env_;
+  // The environment used to create model_. Note that once the model is created,
+  // it used a copy of the environment, accessible via GRBgetenv(model_), which
+  // you should use for setting parameters. Use global_env_ only to create a new
+  // model or for GRBgeterrormsg().
+  GRBenv* global_env_;
   bool mip_;
   int current_solution_index_;
   MPCallback* callback_ = nullptr;
@@ -264,9 +289,10 @@ class GurobiInterface : public MPSolverInterface {
 
 namespace {
 
+constexpr int kGurobiOkCode = 0;
 void CheckedGurobiCall(int err, GRBenv* const env) {
-  CHECK_EQ(0, err) << "Fatal error with code " << err << ", due to "
-                   << GRBgeterrormsg(env);
+  CHECK_EQ(kGurobiOkCode, err)
+      << "Fatal error with code " << err << ", due to " << GRBgeterrormsg(env);
 }
 
 // For interacting directly with the Gurobi C API for callbacks.
@@ -517,6 +543,13 @@ struct MPCallbackWithGurobiContext {
 
 // NOTE(user): This function must have this exact API, because we are passing
 // it to Gurobi as a callback.
+
+#if defined(_MSC_VER)
+#define GUROBI_STDCALL __stdcall
+#else
+#define GUROBI_STDCALL
+#endif
+
 int GUROBI_STDCALL CallbackImpl(GRBmodel* model,
                                 void* gurobi_internal_callback_data, int where,
                                 void* raw_model_and_callback) {
@@ -536,7 +569,7 @@ int GUROBI_STDCALL CallbackImpl(GRBmodel* model,
 }  // namespace
 
 void GurobiInterface::CheckedGurobiCall(int err) const {
-  ::operations_research::CheckedGurobiCall(err, env_);
+  ::operations_research::CheckedGurobiCall(err, global_env_);
 }
 
 void GurobiInterface::SetIntAttr(const char* name, int value) {
@@ -603,11 +636,11 @@ char GurobiInterface::GetCharAttrElement(const char* name, int index) const {
 GurobiInterface::GurobiInterface(MPSolver* const solver, bool mip)
     : MPSolverInterface(solver),
       model_(nullptr),
-      env_(nullptr),
+      global_env_(nullptr),
       mip_(mip),
       current_solution_index_(0) {
-  env_ = GetGurobiEnv().value();
-  CheckedGurobiCall(GRBnewmodel(env_, &model_, solver_->name_.c_str(),
+  global_env_ = GetGurobiEnv().value();
+  CheckedGurobiCall(GRBnewmodel(global_env_, &model_, solver_->name_.c_str(),
                                 0,          // numvars
                                 nullptr,    // obj
                                 nullptr,    // lb
@@ -615,23 +648,25 @@ GurobiInterface::GurobiInterface(MPSolver* const solver, bool mip)
                                 nullptr,    // vtype
                                 nullptr));  // varnanes
   SetIntAttr(GRB_INT_ATTR_MODELSENSE, maximize_ ? GRB_MAXIMIZE : GRB_MINIMIZE);
-  CheckedGurobiCall(GRBsetintparam(env_, GRB_INT_PAR_THREADS,
+  CheckedGurobiCall(
+      GRBsetintparam(GRBgetenv(model_), GRB_INT_PAR_OUTPUTFLAG, 0));
+  CheckedGurobiCall(GRBsetintparam(GRBgetenv(model_), GRB_INT_PAR_THREADS,
                                    absl::GetFlag(FLAGS_num_gurobi_threads)));
 }
 
 GurobiInterface::~GurobiInterface() {
   CheckedGurobiCall(GRBfreemodel(model_));
-  GRBfreeenv(env_);
+  GRBfreeenv(global_env_);
 }
 
 // ------ Model modifications and extraction -----
 
 void GurobiInterface::Reset() {
   // We hold calls to GRBterminate() until the new model_ is ready.
-  const absl::MutexLock lock(&hold_interruptions_mutex_);
+  const absl::MutexLock lock(hold_interruptions_mutex_);
 
   GRBmodel* old_model = model_;
-  CheckedGurobiCall(GRBnewmodel(env_, &model_, solver_->name_.c_str(),
+  CheckedGurobiCall(GRBnewmodel(global_env_, &model_, solver_->name_.c_str(),
                                 0,          // numvars
                                 nullptr,    // obj
                                 nullptr,    // lb
@@ -647,6 +682,9 @@ void GurobiInterface::Reset() {
   // The current code only reapplies the parameters stored in
   // solver_specific_parameter_string_ at the start of the solve; other
   // parameters set by previous calls are only kept in the Gurobi model.
+  //
+  // TODO - b/328604189: Fix logging issue upstream, switch to a different API
+  // for copying parameters, or avoid calling Reset() in more places.
   CheckedGurobiCall(GRBcopyparams(GRBgetenv(model_), GRBgetenv(old_model)));
 
   CheckedGurobiCall(GRBfreemodel(old_model));
@@ -1204,8 +1242,8 @@ MPSolver::ResultStatus GurobiInterface::Solve(const MPSolverParameters& param) {
   if (callback_ == nullptr) {
     CheckedGurobiCall(GRBsetcallbackfunc(model_, nullptr, nullptr));
   } else {
-    gurobi_context = absl::make_unique<GurobiMPCallbackContext>(
-        env_, &mp_var_to_gurobi_var_, num_gurobi_vars_,
+    gurobi_context = std::make_unique<GurobiMPCallbackContext>(
+        global_env_, &mp_var_to_gurobi_var_, num_gurobi_vars_,
         callback_->might_add_cuts(), callback_->might_add_lazy_constraints());
     mp_callback_with_context.context = gurobi_context.get();
     mp_callback_with_context.callback = callback_;
@@ -1219,12 +1257,18 @@ MPSolver::ResultStatus GurobiInterface::Solve(const MPSolverParameters& param) {
   CheckedGurobiCall(GRBsetintparam(
       GRBgetenv(model_), GRB_INT_PAR_LAZYCONSTRAINTS, gurobi_lazy_constraint));
 
+  // Logs all parameters not at default values in the model environment.
+  if (!quiet()) {
+    std::cout << GurobiParamInfoForLogging(GRBgetenv(model_),
+                                           /*one_liner_output=*/true);
+  }
+
   // Solve
   timer.Restart();
   const int status = GRBoptimize(model_);
 
   if (status) {
-    VLOG(1) << "Failed to optimize MIP." << GRBgeterrormsg(env_);
+    VLOG(1) << "Failed to optimize MIP." << GRBgeterrormsg(global_env_);
   } else {
     VLOG(1) << absl::StrFormat("Solved in %s.",
                                absl::FormatDuration(timer.GetDuration()));
@@ -1266,7 +1310,7 @@ MPSolver::ResultStatus GurobiInterface::Solve(const MPSolverParameters& param) {
         GRBgetdblattr(model_, GRB_DBL_ATTR_OBJBOUND, &best_objective_bound_);
     LOG_IF(WARNING, error != 0)
         << "Best objective bound is not available, error=" << error
-        << ", message=" << GRBgeterrormsg(env_);
+        << ", message=" << GRBgeterrormsg(global_env_);
     VLOG(1) << "best bound = " << best_objective_bound_;
   }
 
@@ -1318,28 +1362,6 @@ MPSolver::ResultStatus GurobiInterface::Solve(const MPSolverParameters& param) {
   return result_status_;
 }
 
-absl::optional<MPSolutionResponse> GurobiInterface::DirectlySolveProto(
-    const MPModelRequest& request, std::atomic<bool>* interrupt) {
-  // Interruption via atomic<bool> is not directly supported by Gurobi.
-  if (interrupt != nullptr) return absl::nullopt;
-
-  // Here we reuse the Gurobi environment to support single-use license that
-  // forbids creating a second environment if one already exists.
-  const auto status_or = GurobiSolveProto(request, env_);
-  if (status_or.ok()) return status_or.value();
-  // Special case: if something is not implemented yet, fall back to solving
-  // through MPSolver.
-  if (absl::IsUnimplemented(status_or.status())) return absl::nullopt;
-
-  if (request.enable_internal_solver_output()) {
-    LOG(INFO) << "Invalid Gurobi status: " << status_or.status();
-  }
-  MPSolutionResponse response;
-  response.set_status(MPSOLVER_NOT_SOLVED);
-  response.set_status_str(status_or.status().ToString());
-  return response;
-}
-
 bool GurobiInterface::NextSolution() {
   // Next solution only supported for MIP
   if (!mip_) return false;
@@ -1381,16 +1403,34 @@ void GurobiInterface::Write(const std::string& filename) {
   VLOG(1) << "Writing Gurobi model file \"" << filename << "\".";
   const int status = GRBwrite(model_, filename.c_str());
   if (status) {
-    LOG(WARNING) << "Failed to write MIP." << GRBgeterrormsg(env_);
+    LOG(WARNING) << "Failed to write MIP." << GRBgeterrormsg(global_env_);
   }
-}
-
-MPSolverInterface* BuildGurobiInterface(bool mip, MPSolver* const solver) {
-  return new GurobiInterface(solver, mip);
 }
 
 void GurobiInterface::SetCallback(MPCallback* mp_callback) {
   callback_ = mp_callback;
 }
+
+namespace {
+
+// See MpSolverInterfaceFactoryRepository for details.
+const void* const kRegisterGurobiLp ABSL_ATTRIBUTE_UNUSED = [] {
+  MPSolverInterfaceFactoryRepository::GetInstance()->Register(
+      [](MPSolver* solver) { return new GurobiInterface(solver, false); },
+      MPSolver::GUROBI_LINEAR_PROGRAMMING,
+      []() { return GurobiIsCorrectlyInstalled(); });
+  return nullptr;
+}();
+
+// See MpSolverInterfaceFactoryRepository for details.
+const void* const kRegisterGurobiMip ABSL_ATTRIBUTE_UNUSED = [] {
+  MPSolverInterfaceFactoryRepository::GetInstance()->Register(
+      [](MPSolver* solver) { return new GurobiInterface(solver, true); },
+      MPSolver::GUROBI_MIXED_INTEGER_PROGRAMMING,
+      []() { return GurobiIsCorrectlyInstalled(); });
+  return nullptr;
+}();
+
+}  // namespace
 
 }  // namespace operations_research

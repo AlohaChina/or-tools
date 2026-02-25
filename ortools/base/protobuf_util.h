@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,24 +11,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_BASE_PROTOBUF_UTIL_H_
-#define OR_TOOLS_BASE_PROTOBUF_UTIL_H_
+#ifndef ORTOOLS_BASE_PROTOBUF_UTIL_H_
+#define ORTOOLS_BASE_PROTOBUF_UTIL_H_
 
 #include <string>
+#include <vector>
 
+#include "absl/log/check.h"
 #include "google/protobuf/repeated_field.h"
+#include "google/protobuf/repeated_ptr_field.h"
 #include "google/protobuf/text_format.h"
-#include "ortools/base/logging.h"
 
-namespace google {
-namespace protobuf {
-namespace util {
+namespace google::protobuf::util {
 // RepeatedPtrField version.
 template <typename T>
 inline void Truncate(RepeatedPtrField<T>* array, int new_size) {
   const int size = array->size();
   DCHECK_GE(size, new_size);
   array->DeleteSubrange(new_size, size - new_size);
+}
+
+// RepeatedField version.
+template <typename T>
+inline void Truncate(RepeatedField<T>* array, int new_size) {
+  // RepeatedField::Truncate performs size validity checks.
+  array->Truncate(new_size);
 }
 
 // Removes the elements at the indices specified by 'indices' from 'array' in
@@ -66,6 +73,33 @@ int RemoveAt(RepeatedType* array, const IndexContainer& indices) {
   return num_indices;
 }
 
+// For RepeatedPtrField.
+// Removes all elements from 'array' for which unary predicate Pred pr is true.
+// Relative ordering of elements left in the array stays the same. Returns
+// number of removed elements.
+// The predicate is invoked exactly once for each element of 'array' in order of
+// its elements.
+// Define your predicate like this: struct MyPredicate {
+//   bool operator()(const T* t) const { ... your logic ... }
+// };
+// where T is going to be some derivation of ProtocolMessageGroup.
+//
+// Alternatively, RepeatedPtrField supports the erase-remove idiom directly.
+template <typename T, typename Pred>
+int RemoveIf(RepeatedPtrField<T>* array, const Pred& pr) {
+  T** const begin = array->mutable_data();
+  T** const end = begin + array->size();
+  T** write = begin;
+  while (write < end && !pr(*write)) ++write;
+  if (write == end) return 0;
+  // 'write' is positioned at first element to be removed.
+  for (T** scan = write + 1; scan < end; ++scan) {
+    if (!pr(*scan)) std::swap(*scan, *write++);
+  }
+  Truncate(array, write - begin);
+  return end - write;
+}
+
 template <typename T>
 T ParseTextOrDie(const std::string& input) {
   T result;
@@ -73,8 +107,6 @@ T ParseTextOrDie(const std::string& input) {
   return result;
 }
 
-}  // namespace util
-}  // namespace protobuf
-}  // namespace google
+}  // namespace google::protobuf::util
 
-#endif  // OR_TOOLS_BASE_PROTOBUF_UTIL_H_
+#endif  // ORTOOLS_BASE_PROTOBUF_UTIL_H_

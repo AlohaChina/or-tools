@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,16 +16,15 @@
 // This file should only be included in base.i inside Python-specific part:
 //   #ifdef SWIGPYTHON
 //   %{
-//   #include "ortools/base/swig/python-swig.cc"
+//   #include "ortools/base/python-swig.h"
 //   %}
 //   #endif
 // It has no XXX_H_ guard because SWIG protects all %include'd files to be used
 // only once.
 
-#ifndef OR_TOOLS_BASE_PYTHON_SWIG_H_
-#define OR_TOOLS_BASE_PYTHON_SWIG_H_
+#ifndef ORTOOLS_BASE_PYTHON_SWIG_H_
+#define ORTOOLS_BASE_PYTHON_SWIG_H_
 
-#if PY_VERSION_HEX >= 0x03030000  // Py3.3+
 // Use Py3 unicode str() type for C++ strings.
 #ifdef PyString_FromStringAndSize
 #undef PyString_FromStringAndSize
@@ -44,14 +43,13 @@ static inline int PyString_AsStringAndSize(PyObject* obj, char** buf,
                                            Py_ssize_t* psize) {
   if (PyUnicode_Check(obj)) {
     *buf = const_cast<char*>(PyUnicode_AsUTF8AndSize(obj, psize));
-    return *buf == NULL ? -1 : 0;
+    return *buf == nullptr ? -1 : 0;
   } else if (PyBytes_Check(obj)) {
     return PyBytes_AsStringAndSize(obj, buf, psize);
   }
   PyErr_SetString(PyExc_TypeError, "Expecting str or bytes");
   return -1;
 }
-#endif  // Py3.3+
 
 template <class T>
 inline bool PyObjAs(PyObject* pystr, T* cstr) {
@@ -67,14 +65,12 @@ template <>
 inline bool PyObjAs(PyObject* pystr, ::std::string* cstr) {
   char* buf;
   Py_ssize_t len;
-#if PY_VERSION_HEX >= 0x03030000
   if (PyUnicode_Check(pystr)) {
     buf = PyUnicode_AsUTF8AndSize(pystr, &len);
     if (!buf) return false;
-  } else  // NOLINT
-#endif
-      if (PyBytes_AsStringAndSize(pystr, &buf, &len) == -1)
+  } else if (PyBytes_AsStringAndSize(pystr, &buf, &len) == -1) {  // NOLINT
     return false;
+  }
   if (cstr) cstr->assign(buf, len);
   return true;
 }
@@ -83,14 +79,12 @@ template <class T>
 inline bool PyObjAs(PyObject* pystr, std::string* cstr) {
   char* buf;
   Py_ssize_t len;
-#if PY_VERSION_HEX >= 0x03030000
   if (PyUnicode_Check(pystr)) {
     buf = const_cast<char*>(PyUnicode_AsUTF8AndSize(pystr, &len));
     if (!buf) return false;
-  } else  // NOLINT
-#endif
-      if (PyBytes_AsStringAndSize(pystr, &buf, &len) == -1)
+  } else if (PyBytes_AsStringAndSize(pystr, &buf, &len) == -1) {  // NOLINT
     return false;
+  }
   if (cstr) cstr->assign(buf, len);
   return true;
 }
@@ -132,36 +126,18 @@ inline bool PyObjAs(PyObject* py, unsigned int* c) {
 
 template <>
 inline bool PyObjAs(PyObject* py, int64_t* c) {  // NOLINT
-  int64_t i;                                     // NOLINT
-#if PY_MAJOR_VERSION < 3
-  if (PyInt_Check(py)) {
-    i = PyInt_AsLong(py);
-  } else {
-    if (!PyLong_Check(py)) return false;  // Not a Python long.
-#else
-  {
-#endif
-    i = PyLong_AsLongLong(py);
-    if (i == -1 && PyErr_Occurred()) return false;  // Not a C long long.
-  }
+  const int64_t i = PyLong_AsLongLong(py);
+  if (i == -1 && PyErr_Occurred()) return false;  // Not a C long long.
   if (c) *c = i;
   return true;
 }
 
 template <>
 inline bool PyObjAs(PyObject* py, uint64_t* c) {  // NOLINT
-  uint64_t i;                                     // NOLINT
-#if PY_MAJOR_VERSION < 3
-  if (PyInt_Check(py)) {
-    i = PyInt_AsUnsignedLongLongMask(py);
-  } else  // NOLINT
-#endif
-  {
-    if (!PyLong_Check(py)) return false;  // Not a Python long.
-    i = PyLong_AsUnsignedLongLong(py);
-    if (i == (uint64_t)-1 && PyErr_Occurred())  // NOLINT
-      return false;
-  }
+  if (!PyLong_Check(py)) return false;            // Not a Python long.
+  const uint64_t i = PyLong_AsUnsignedLongLong(py);
+  if (i == (uint64_t)-1 && PyErr_Occurred())  // NOLINT
+    return false;
   if (c) *c = i;
   return true;
 }
@@ -171,12 +147,6 @@ inline bool PyObjAs(PyObject* py, double* c) {
   double d;
   if (PyFloat_Check(py)) {
     d = PyFloat_AsDouble(py);
-#if PY_MAJOR_VERSION < 3
-  } else if (PyInt_Check(py)) {
-    d = PyInt_AsLong(py);
-  } else if (!PyLong_Check(py)) {
-    return false;  // float or int/long expected
-#endif
   } else {
     d = PyLong_AsDouble(py);
     if (d == -1.0 && PyErr_Occurred()) {
@@ -210,13 +180,7 @@ inline bool PyObjAs(PyObject* py, bool* c) {
   return true;
 }
 
-inline int SwigPyIntOrLong_Check(PyObject* o) {
-  return (PyLong_Check(o)
-#if PY_MAJOR_VERSION <= 2
-          || PyInt_Check(o)
-#endif
-  );  // NOLINT
-}
+inline int SwigPyIntOrLong_Check(PyObject* o) { return PyLong_Check(o); }
 
 inline int SwigString_Check(PyObject* o) { return PyUnicode_Check(o); }
 
@@ -300,15 +264,15 @@ inline bool vector_input_wrap_helper(PyObject* seq, std::vector<T>* out,
 // into the corresponding Python object.
 template <class T, class Converter>
 inline PyObject* list_output_helper(const T* vec, Converter converter) {
-  if (vec == NULL) Py_RETURN_NONE;  // Return a nice out-of-band value.
+  if (vec == nullptr) Py_RETURN_NONE;  // Return a nice out-of-band value.
   PyObject* lst = PyList_New(vec->size());
-  if (lst == NULL) return NULL;
+  if (lst == nullptr) return nullptr;
   int i = 0;
   for (typename T::const_reference pt : *vec) {
     PyObject* obj = converter(pt);
     if (!obj) {
       Py_DECREF(lst);
-      return NULL;
+      return nullptr;
     }
     PyList_SET_ITEM(lst, i++, obj);
   }
@@ -352,13 +316,11 @@ inline PyObject* vector_output_wrap_helper(const std::vector<T*>* vec,
 #endif
 }
 
-#if PY_MAJOR_VERSION > 2
 /* SWIG 2's own C preprocessor macro for this is too strict.
  * It requires a (x) parameter which doesn't work for the case where the
  * function is being passed by & as a converter into a helper such as
  * vector_output_helper above. */
 #undef PyInt_FromLong
 #define PyInt_FromLong PyLong_FromLong
-#endif
 
-#endif  // OR_TOOLS_BASE_PYTHON_SWIG_H_
+#endif  // ORTOOLS_BASE_PYTHON_SWIG_H_

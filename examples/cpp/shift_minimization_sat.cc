@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,7 +16,7 @@
 // https://publications.csiro.au/rpr/download?pid=csiro:EP104071&dsid=DS2)/
 //
 // Data files are in
-//    examples/data/shift_scheduling/minization
+//    /cns/li-d/home/operations-research/shift_minization_scheduling
 //
 // The problem is the following:
 //   - There is a list of jobs. Each job has a start date and an end date. They
@@ -26,22 +26,25 @@
 //   - The objective it to minimize the number of active workers, while
 //     performing all the jobs.
 
-#include <map>
-#include <set>
+#include <algorithm>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
+#include "absl/base/log_severity.h"
 #include "absl/container/btree_set.h"
 #include "absl/flags/flag.h"
-#include "absl/flags/parse.h"
-#include "absl/flags/usage.h"
+#include "absl/log/check.h"
+#include "absl/log/globals.h"
+#include "absl/log/log.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_split.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/filelineiter.h"
-#include "ortools/base/logging.h"
+#include "absl/strings/string_view.h"
+#include "ortools/base/init_google.h"
 #include "ortools/sat/cp_model.h"
 #include "ortools/sat/model.h"
+#include "ortools/util/filelineiter.h"
+#include "ortools/util/sorted_interval_list.h"
 
 ABSL_FLAG(std::string, input, "", "Input file.");
 ABSL_FLAG(std::string, params, "", "Sat parameters in text proto format.");
@@ -105,7 +108,7 @@ class ShiftMinimizationParser {
  private:
   enum LoadStatus { NOT_STARTED, STARTED, JOBS_SEEN, WORKERS_SEEN };
 
-  int strtoint32(const std::string& word) {
+  int strtoint32(absl::string_view word) {
     int result;
     CHECK(absl::SimpleAtoi(word, &result));
     return result;
@@ -214,7 +217,7 @@ void LoadAndSolve(const std::string& file_name) {
         if (Overlaps(jobs[job1], jobs[job2])) {
           const BoolVar v1 = worker_job_vars[w][i];
           const BoolVar v2 = worker_job_vars[w][j];
-          cp_model.AddBoolOr({Not(v1), Not(v2)});
+          cp_model.AddBoolOr({~v1, ~v2});
         }
       }
     }
@@ -304,9 +307,8 @@ void LoadAndSolve(const std::string& file_name) {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  absl::SetFlag(&FLAGS_logtostderr, true);
-  google::InitGoogleLogging(argv[0]);
-  absl::ParseCommandLine(argc, argv);
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
+  InitGoogle(argv[0], &argc, &argv, true);
 
   if (absl::GetFlag(FLAGS_input).empty()) {
     LOG(FATAL) << "Please supply a data file with --input=";

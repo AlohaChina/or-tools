@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,26 +17,37 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <numeric>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/flags/flag.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_format.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/integral_types.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "ortools/base/logging.h"
+#include "ortools/graph/graph.h"
 #if !defined(__PORTABLE_PLATFORM__)
-#include "ortools/graph/io.h"
+#include "ortools/graph/graph_io.h"
 #endif  // __PORTABLE_PLATFORM__
 #include "ortools/algorithms/find_graph_symmetries.h"
-#include "ortools/base/hash.h"
-#include "ortools/base/int_type.h"
-#include "ortools/base/map_util.h"
+#include "ortools/algorithms/sparse_permutation.h"
 #include "ortools/base/strong_vector.h"
 #include "ortools/graph/util.h"
 #include "ortools/port/proto_utils.h"
+#include "ortools/sat/boolean_problem.pb.h"
+#include "ortools/sat/cp_model.pb.h"
+#include "ortools/sat/pb_constraint.h"
+#include "ortools/sat/sat_base.h"
 #include "ortools/sat/sat_parameters.pb.h"
+#include "ortools/sat/sat_solver.h"
+#include "ortools/sat/simplification.h"
+#include "ortools/util/strong_integers.h"
 
 ABSL_FLAG(std::string, debug_dump_symmetry_graph_to_file, "",
           "If this flag is non-empty, an undirected graph whose"
@@ -486,7 +497,7 @@ void StoreAssignment(const VariablesAssignment& assignment,
 }
 
 void ExtractSubproblem(const LinearBooleanProblem& problem,
-                       const std::vector<int>& constraint_indices,
+                       absl::Span<const int> constraint_indices,
                        LinearBooleanProblem* subproblem) {
   *subproblem = problem;
   subproblem->set_name("Subproblem of " + problem.name());
@@ -502,13 +513,13 @@ namespace {
 // GenerateGraphForSymmetryDetection().
 class IdGenerator {
  public:
-  IdGenerator() {}
+  IdGenerator() = default;
 
   // If the pair (type, coefficient) was never seen before, then generate
   // a new id, otherwise return the previously generated id.
   int GetId(int type, Coefficient coefficient) {
     const std::pair<int, int64_t> key(type, coefficient.value());
-    return gtl::LookupOrInsert(&id_map_, key, id_map_.size());
+    return id_map_.emplace(key, id_map_.size()).first->second;
   }
 
  private:
@@ -742,7 +753,7 @@ void FindLinearBooleanProblemSymmetries(
 }
 
 void ApplyLiteralMappingToBooleanProblem(
-    const absl::StrongVector<LiteralIndex, LiteralIndex>& mapping,
+    const util_intops::StrongVector<LiteralIndex, LiteralIndex>& mapping,
     LinearBooleanProblem* problem) {
   Coefficient bound_shift;
   Coefficient max_value;
@@ -832,9 +843,8 @@ void ProbeAndSimplifyProblem(SatPostsolver* postsolver,
       LOG(INFO) << "UNSAT when loading the problem.";
     }
 
-    absl::StrongVector<LiteralIndex, LiteralIndex> equiv_map;
-    ProbeAndFindEquivalentLiteral(&solver, postsolver, /*drat_writer=*/nullptr,
-                                  &equiv_map);
+    util_intops::StrongVector<LiteralIndex, LiteralIndex> equiv_map;
+    ProbeAndFindEquivalentLiteral(&solver, postsolver, &equiv_map);
 
     // We can abort if no information is learned.
     if (equiv_map.empty() && solver.LiteralTrail().Index() == 0) break;
@@ -858,7 +868,7 @@ void ProbeAndSimplifyProblem(SatPostsolver* postsolver,
     // Remap the variables into a dense set. All the variables for which the
     // equiv_map is not the identity are no longer needed.
     BooleanVariable new_var(0);
-    absl::StrongVector<BooleanVariable, BooleanVariable> var_map;
+    util_intops::StrongVector<BooleanVariable, BooleanVariable> var_map;
     for (BooleanVariable var(0); var < solver.NumVariables(); ++var) {
       if (equiv_map[Literal(var, true).Index()] == Literal(var, true).Index()) {
         var_map.push_back(new_var);

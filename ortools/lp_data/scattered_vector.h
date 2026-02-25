@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,15 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_LP_DATA_SCATTERED_VECTOR_H_
-#define OR_TOOLS_LP_DATA_SCATTERED_VECTOR_H_
+#ifndef ORTOOLS_LP_DATA_SCATTERED_VECTOR_H_
+#define ORTOOLS_LP_DATA_SCATTERED_VECTOR_H_
 
-#include <cmath>
-#include <limits>
+#include <cstddef>
+#include <vector>
 
-#include "ortools/base/basictypes.h"
-#include "ortools/base/int_type.h"
-#include "ortools/base/logging.h"
+#include "absl/log/check.h"
 #include "ortools/lp_data/lp_types.h"
 #include "ortools/util/bitset.h"
 
@@ -64,7 +62,7 @@ struct ScatteredVector {
   // Temporary vector used in some sparse computation on the ScatteredVector.
   // True indicates a possible non-zero value. Note that its state is not always
   // consistent.
-  StrictITIVector<Index, bool> is_non_zero;
+  Bitset64<Index> is_non_zero;
 
   // In many cases there is a choice between treating the ScatteredVector as
   // dense or as sparse.  By default, dense algorithms are used when the
@@ -98,7 +96,7 @@ struct ScatteredVector {
   void Add(Index index, Fractional value) {
     values[index] += value;
     if (!is_non_zero[index] && value != 0.0) {
-      is_non_zero[index] = true;
+      is_non_zero.Set(index);
       non_zeros.push_back(index);
       non_zeros_are_sorted = false;
     }
@@ -131,20 +129,23 @@ struct ScatteredVector {
   // Efficiently clears the is_non_zero vector.
   void ClearSparseMask() {
     if (ShouldUseDenseIteration()) {
-      is_non_zero.assign(values.size(), false);
+      is_non_zero.ClearAndResize(values.size());
     } else {
-      is_non_zero.resize(values.size(), false);
+      is_non_zero.Resize(values.size());
       for (const Index index : non_zeros) {
-        is_non_zero[index] = false;
+        is_non_zero.ClearBucket(index);
       }
-      DCHECK(IsAllFalse(is_non_zero));
+      DCHECK(is_non_zero.IsAllFalse());
     }
   }
 
   // Update the is_non_zero vector to be consistent with the non_zeros vector.
   void RepopulateSparseMask() {
     ClearSparseMask();
-    for (const Index index : non_zeros) is_non_zero[index] = true;
+    for (const Index index : non_zeros) {
+      //      is_non_zero[index] = true;
+      is_non_zero.Set(index);
+    }
   }
 
   // If the proportion of non-zero entries is too large, clears the vector of
@@ -160,7 +161,7 @@ struct ScatteredVector {
     ClearNonZerosIfTooDense(kDefaultRatioForUsingDenseIteration);
   }
 
-  // Returns an over-estimate of the number of non-zeros. This is actually
+  // Returns an overestimate of the number of non-zeros. This is actually
   // exact for sparse vector, or the full size otherwise.
   size_t NumNonZerosEstimate() const {
     return non_zeros.empty() ? values.size().value() : non_zeros.size();
@@ -207,4 +208,4 @@ inline const ScatteredColumn& TransposedView(const ScatteredRow& r) {
 }  // namespace glop
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_LP_DATA_SCATTERED_VECTOR_H_
+#endif  // ORTOOLS_LP_DATA_SCATTERED_VECTOR_H_

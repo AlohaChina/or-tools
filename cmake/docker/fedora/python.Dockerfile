@@ -1,4 +1,5 @@
 FROM ortools/cmake:fedora_swig AS env
+
 ENV PATH=/root/.local/bin:$PATH
 RUN dnf -y update \
 && dnf -y install python3 python3-devel python3-pip \
@@ -7,6 +8,9 @@ RUN dnf -y update \
 FROM env AS devel
 WORKDIR /home/project
 COPY . .
+
+ARG CMAKE_BUILD_PARALLEL_LEVEL
+ENV CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL:-4}
 
 FROM devel AS build
 RUN cmake -S. -Bbuild -DBUILD_PYTHON=ON -DBUILD_CXX_SAMPLES=OFF -DBUILD_CXX_EXAMPLES=OFF

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//
-
 #include <algorithm>
 #include <cstdint>
 #include <memory>
@@ -20,17 +18,10 @@
 #include <vector>
 
 #include "absl/base/attributes.h"
-#include "absl/memory/memory.h"
-#include "absl/strings/match.h"
 #include "absl/strings/str_format.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/hash.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/timer.h"
 #include "ortools/linear_solver/linear_solver.h"
-
-#if defined(USE_CLP) || defined(USE_CBC)
 
 #undef PACKAGE
 #undef VERSION
@@ -44,7 +35,7 @@ namespace operations_research {
 class CLPInterface : public MPSolverInterface {
  public:
   // Constructor that takes a name for the underlying CLP solver.
-  explicit CLPInterface(MPSolver* const solver);
+  explicit CLPInterface(MPSolver* solver);
   ~CLPInterface() override;
 
   // Sets the optimization direction (min/max).
@@ -64,18 +55,17 @@ class CLPInterface : public MPSolverInterface {
   void SetConstraintBounds(int row_index, double lb, double ub) override;
 
   // Add constraint incrementally.
-  void AddRowConstraint(MPConstraint* const ct) override;
+  void AddRowConstraint(MPConstraint* ct) override;
   // Add variable incrementally.
-  void AddVariable(MPVariable* const var) override;
+  void AddVariable(MPVariable* var) override;
   // Change a coefficient in a constraint.
-  void SetCoefficient(MPConstraint* const constraint,
-                      const MPVariable* const variable, double new_value,
-                      double old_value) override;
+  void SetCoefficient(MPConstraint* constraint, const MPVariable* variable,
+                      double new_value, double old_value) override;
   // Clear a constraint from all its terms.
-  void ClearConstraint(MPConstraint* const constraint) override;
+  void ClearConstraint(MPConstraint* constraint) override;
 
   // Change a coefficient in the linear objective.
-  void SetObjectiveCoefficient(const MPVariable* const variable,
+  void SetObjectiveCoefficient(const MPVariable* variable,
                                double coefficient) override;
   // Change the constant term in the linear objective.
   void SetObjectiveOffset(double offset) override;
@@ -147,7 +137,7 @@ CLPInterface::CLPInterface(MPSolver* const solver)
 CLPInterface::~CLPInterface() {}
 
 void CLPInterface::Reset() {
-  clp_ = absl::make_unique<ClpSimplex>();
+  clp_ = std::make_unique<ClpSimplex>();
   clp_->setOptimizationDirection(maximize_ ? -1 : 1);
   ResetExtractionInformation();
 }
@@ -445,7 +435,7 @@ MPSolver::ResultStatus CLPInterface::Solve(const MPSolverParameters& param) {
 
     // Start from a fresh set of default parameters and set them to
     // specified values.
-    options_ = absl::make_unique<ClpSolve>();
+    options_ = std::make_unique<ClpSolve>();
     SetParameters(param);
 
     // Solve
@@ -625,9 +615,16 @@ void CLPInterface::SetLpAlgorithm(int value) {
   }
 }
 
-MPSolverInterface* BuildCLPInterface(MPSolver* const solver) {
-  return new CLPInterface(solver);
-}
+namespace {
+
+// See MpSolverInterfaceFactoryRepository for details.
+const void* const kRegisterCLP ABSL_ATTRIBUTE_UNUSED = [] {
+  MPSolverInterfaceFactoryRepository::GetInstance()->Register(
+      [](MPSolver* const solver) { return new CLPInterface(solver); },
+      MPSolver::CLP_LINEAR_PROGRAMMING);
+  return nullptr;
+}();
+
+}  // namespace
 
 }  // namespace operations_research
-#endif  // #if defined(USE_CBC) || defined(USE_CLP)

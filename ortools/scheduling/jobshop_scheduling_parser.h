@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,13 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SCHEDULING_JOBSHOP_SCHEDULING_PARSER_H_
-#define OR_TOOLS_SCHEDULING_JOBSHOP_SCHEDULING_PARSER_H_
+#ifndef ORTOOLS_SCHEDULING_JOBSHOP_SCHEDULING_PARSER_H_
+#define ORTOOLS_SCHEDULING_JOBSHOP_SCHEDULING_PARSER_H_
 
 #include <cstdint>
+#include <string>
 
 #include "absl/strings/match.h"
-#include "ortools/base/integral_types.h"
+#include "absl/strings/string_view.h"
+#include "ortools/base/types.h"
 #include "ortools/scheduling/jobshop_scheduling.pb.h"
 
 namespace operations_research {
@@ -53,11 +55,11 @@ class JsspParser {
     DONE
   };
 
-  ~JsspParser() {}
+  ~JsspParser() = default;
 
   // Parses a file to load a jobshop problem.
   // Tries to auto detect the file format.
-  bool ParseFile(const std::string& filename);
+  bool ParseFile(absl::string_view filename);
 
   // Returns the loaded problem.
   const JsspInputProblem& problem() const { return problem_; }
@@ -73,8 +75,8 @@ class JsspParser {
 
   void SetJobs(int job_count);
   void SetMachines(int machine_count);
-  int strtoint32(const std::string& word);
-  int64_t strtoint64(const std::string& word);
+  int strtoint32(absl::string_view word);
+  int64_t strtoint64(absl::string_view word);
 
   JsspInputProblem problem_;
   int declared_machine_count_ = -1;
@@ -90,4 +92,4 @@ class JsspParser {
 }  // namespace scheduling
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SCHEDULING_JOBSHOP_SCHEDULING_PARSER_H_
+#endif  // ORTOOLS_SCHEDULING_JOBSHOP_SCHEDULING_PARSER_H_

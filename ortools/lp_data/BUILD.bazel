@@ -1,23 +1,21 @@
-package(default_visibility = ["//visibility:public"])
+# Copyright 2010-2025 Google LLC
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-config_setting(
-    name = "on_linux",
-    constraint_values = [
-        "@platforms//os:linux",
-    ],
-)
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 
-config_setting(
-    name = "on_macos",
-    constraint_values = [
-        "@platforms//os:macos",
-    ],
-)
-
-config_setting(
-    name = "on_windows",
-    constraint_values = [
-        "@platforms//os:windows",
+package(
+    default_visibility = [
+        "//visibility:public",
     ],
 )
 
@@ -25,9 +23,9 @@ config_setting(
 # dangerous optimizations. For example do not assume that FP expressions
 # are associative. This is what -fno-fast-math is for.
 SAFE_FP_CODE = select({
-    "on_linux": ["-fno-fast-math"],
-    "on_macos": [],  # no_fast_math is the default.
-    "on_windows": [],  # /fp:precise is the default.
+    "@platforms//os:linux": ["-fno-fast-math"],
+    "@platforms//os:macos": [],  # no_fast_math is the default.
+    "@platforms//os:windows": [],  # /fp:precise is the default.
     "//conditions:default": [],
 })
 
@@ -37,12 +35,15 @@ cc_library(
     hdrs = ["lp_types.h"],
     deps = [
         "//ortools/base",
-        "//ortools/base:hash",
-        "//ortools/base:int_type",
         "//ortools/base:strong_vector",
         "//ortools/util:bitset",
+        "//ortools/util:strong_integers",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
     ],
 )
+
+# Handling of permutations.
 
 cc_library(
     name = "permutation",
@@ -50,9 +51,10 @@ cc_library(
     copts = SAFE_FP_CODE,
     deps = [
         ":base",
-        "//ortools/base",
+        "//ortools/base:strong_vector",
         "//ortools/util:return_macros",
-        "@com_google_absl//absl/random",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/random",
     ],
 )
 
@@ -62,12 +64,12 @@ cc_library(
     hdrs = ["scattered_vector.h"],
     deps = [
         ":base",
-        "//ortools/base",
-        "//ortools/base:int_type",
-        "//ortools/base:strong_vector",
         "//ortools/util:bitset",
+        "@abseil-cpp//absl/log:check",
     ],
 )
+
+# Compressed sparse columns.
 
 cc_library(
     name = "sparse_vector",
@@ -77,10 +79,10 @@ cc_library(
         ":base",
         ":permutation",
         "//ortools/base",
+        "//ortools/base:types",
         "//ortools/graph:iterators",
         "//ortools/util:return_macros",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
+        "@abseil-cpp//absl/strings:str_format",
     ],
 )
 
@@ -91,8 +93,10 @@ cc_library(
     copts = SAFE_FP_CODE,
     deps = [
         ":base",
+        ":permutation",
         ":sparse_vector",
-        "//ortools/base",
+        "//ortools/util:return_macros",
+        "@abseil-cpp//absl/log:check",
     ],
 )
 
@@ -101,9 +105,8 @@ cc_library(
     hdrs = ["sparse_row.h"],
     copts = SAFE_FP_CODE,
     deps = [
-        ":base",
         ":sparse_vector",
-        "//ortools/base",
+        "//ortools/base:strong_vector",
     ],
 )
 
@@ -116,19 +119,20 @@ cc_library(
     copts = SAFE_FP_CODE,
     deps = [
         ":base",
-        ":matrix_scaler_hdr",
         ":permutation",
         ":scattered_vector",
         ":sparse_column",
-        "//ortools/base",
-        "//ortools/base:hash",
-        "//ortools/base:int_type",
-        "//ortools/base:strong_vector",
-        "//ortools/util:fp_utils",
+        "//ortools/base:types",
+        "//ortools/graph:iterators",
+        "//ortools/util:bitset",
         "//ortools/util:return_macros",
-        "@com_google_absl//absl/strings",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/strings:str_format",
+        "@abseil-cpp//absl/types:span",
     ],
 )
+
+# Matrix scaler.
 
 cc_library(
     name = "matrix_scaler",
@@ -137,27 +141,24 @@ cc_library(
     copts = SAFE_FP_CODE,
     deps = [
         ":base",
+        ":lp_data",
         ":lp_utils",
         ":sparse",
+        ":sparse_column",
         "//ortools/base",
-        "//ortools/base:hash",
         "//ortools/base:strong_vector",
+        "//ortools/base:types",
         "//ortools/glop:parameters_cc_proto",
         "//ortools/glop:revised_simplex",
         "//ortools/glop:status",
-        "//ortools/util:fp_utils",
+        "//ortools/util:return_macros",
+        "//ortools/util:time_limit",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/strings:str_format",
     ],
 )
 
-cc_library(
-    name = "matrix_scaler_hdr",
-    hdrs = ["matrix_scaler.h"],
-    deps = [
-        ":base",
-        "//ortools/base",
-        "//ortools/base:strong_vector",
-    ],
-)
+# Linear Programming data storage.
 
 cc_library(
     name = "lp_data",
@@ -171,15 +172,18 @@ cc_library(
         ":matrix_utils",
         ":permutation",
         ":sparse",
+        ":sparse_column",
         "//ortools/base",
         "//ortools/base:hash",
-        "//ortools/base:int_type",
         "//ortools/base:strong_vector",
         "//ortools/glop:parameters_cc_proto",
         "//ortools/util:fp_utils",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/container:flat_hash_set",
-        "@com_google_absl//absl/strings",
+        "//ortools/util:strong_integers",
+        "@abseil-cpp//absl/container:flat_hash_map",
+        "@abseil-cpp//absl/container:flat_hash_set",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:str_format",
     ],
 )
 
@@ -191,9 +195,15 @@ cc_library(
         ":base",
         ":lp_data",
         ":matrix_scaler",
+        ":scattered_vector",
+        ":sparse_column",
         "//ortools/glop:parameters_cc_proto",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/types:span",
     ],
 )
+
+# Lp utilities.
 
 cc_library(
     name = "lp_utils",
@@ -202,10 +212,12 @@ cc_library(
     copts = SAFE_FP_CODE,
     deps = [
         ":base",
+        ":permutation",
         ":scattered_vector",
         ":sparse_column",
-        "//ortools/base",
         "//ortools/base:accurate_sum",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/types:span",
     ],
 )
 
@@ -217,8 +229,9 @@ cc_library(
     deps = [
         ":base",
         ":sparse",
-        "//ortools/base",
+        ":sparse_column",
         "//ortools/base:hash",
+        "@abseil-cpp//absl/log:check",
     ],
 )
 
@@ -231,26 +244,19 @@ cc_library(
         ":base",
         ":lp_data",
         ":proto_utils",
-        "//ortools/base",
-        "//ortools/base:case",
-        "//ortools/base:map_util",
         "//ortools/linear_solver:linear_solver_cc_proto",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_re2//:re2",
+        "@abseil-cpp//absl/base:core_headers",
+        "@abseil-cpp//absl/container:flat_hash_set",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings",
+        "@re2",
     ],
 )
 
-#cc_library(
-#    name = "lp_constraint_classifier",
-#    srcs = ["lp_constraint_classifier.cc"],
-#    hdrs = ["lp_constraint_classifier.h"],
-#    copts = SAFE_FP_CODE,
-#    deps = [
-#        ":lp_data",
-#        "//ortools/util:fp_utils",
-#    ],
-#)
+# Linear Programming printing utilities.
 
 cc_library(
     name = "lp_print_utils",
@@ -259,23 +265,50 @@ cc_library(
     copts = SAFE_FP_CODE,
     deps = [
         ":base",
-        "//ortools/base",
+        "//ortools/base:types",
         "//ortools/util:rational_approximation",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:str_format",
     ],
 )
+
+# Proto conversion
 
 cc_library(
     name = "proto_utils",
     srcs = ["proto_utils.cc"],
     hdrs = ["proto_utils.h"],
     copts = SAFE_FP_CODE,
+    visibility = ["//visibility:public"],
     deps = [
         ":base",
         ":lp_data",
-        "//ortools/base",
+        ":sparse",
+        ":sparse_column",
         "//ortools/linear_solver:linear_solver_cc_proto",
+        "@abseil-cpp//absl/log:check",
+    ],
+)
+
+# Test utilities.
+
+# MPS reader.
+cc_library(
+    name = "mps_reader_template",
+    srcs = ["mps_reader_template.cc"],
+    hdrs = ["mps_reader_template.h"],
+    deps = [
+        "//ortools/base:file",
+        "//ortools/base:status_macros",
+        "//ortools/util:filelineiter",
+        "@abseil-cpp//absl/container:flat_hash_map",
+        "@abseil-cpp//absl/container:flat_hash_set",
+        "@abseil-cpp//absl/container:inlined_vector",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings",
     ],
 )
 
@@ -287,40 +320,44 @@ cc_library(
     deps = [
         ":base",
         ":lp_data",
-        ":lp_print_utils",
-        "//ortools/base",
-        "//ortools/base:file",
-        "//ortools/base:filelineiter",
-        "//ortools/base:hash",
-        "//ortools/base:int_type",
-        "//ortools/base:map_util",
+        ":mps_reader_template",
         "//ortools/base:protobuf_util",
-        "//ortools/base:status_builder",
         "//ortools/base:status_macros",
-        "//ortools/base:strong_vector",
         "//ortools/linear_solver:linear_solver_cc_proto",
-        "@com_google_absl//absl/container:btree",
-        "@com_google_absl//absl/container:node_hash_set",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/strings",
+        "@abseil-cpp//absl/base:core_headers",
+        "@abseil-cpp//absl/container:btree",
+        "@abseil-cpp//absl/container:flat_hash_map",
+        "@abseil-cpp//absl/log",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings",
     ],
 )
 
+# Utility to represent the MPS layout as a PNG.
+
 cc_library(
-    name = "model_reader",
-    srcs = ["model_reader.cc"],
-    hdrs = ["model_reader.h"],
+    name = "sol_reader",
+    srcs = ["sol_reader.cc"],
+    hdrs = ["sol_reader.h"],
     deps = [
+        ":base",
         ":lp_data",
-        ":mps_reader",
-        ":proto_utils",
-        #        "//net/proto2/util/public:differencer",
-        "//ortools/base",
-        "//ortools/base:file",
+        "//ortools/base:numbers",
+        "//ortools/base:status_macros",
         "//ortools/linear_solver:linear_solver_cc_proto",
         "//ortools/util:file_util",
+        "@abseil-cpp//absl/container:flat_hash_map",
+        "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings",
     ],
 )
+
+# Library to show matrix fill-in as a PNG bitmap.
+
+# Decompose a LinearProgram into several independent LinearPrograms.
 
 cc_library(
     name = "lp_decomposer",
@@ -330,11 +367,13 @@ cc_library(
     deps = [
         ":base",
         ":lp_data",
-        ":lp_utils",
+        ":sparse",
+        ":sparse_column",
         "//ortools/algorithms:dynamic_partition",
-        "//ortools/base",
-        "//ortools/base:hash",
-        "//ortools/glop:parameters_cc_proto",
-        "@com_google_absl//absl/synchronization",
+        "//ortools/util:bitset",
+        "@abseil-cpp//absl/base:core_headers",
+        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/synchronization",
+        "@abseil-cpp//absl/types:span",
     ],
 )

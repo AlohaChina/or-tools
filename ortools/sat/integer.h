@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,329 +11,79 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_INTEGER_H_
-#define OR_TOOLS_SAT_INTEGER_H_
+#ifndef ORTOOLS_SAT_INTEGER_H_
+#define ORTOOLS_SAT_INTEGER_H_
 
+#include <stdlib.h>
+
+#include <algorithm>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <limits>
-#include <map>
-#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/base/attributes.h"
+#include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
 #include "absl/strings/str_cat.h"
 #include "absl/types/span.h"
-#include "ortools/base/hash.h"
-#include "ortools/base/int_type.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
-#include "ortools/base/map_util.h"
 #include "ortools/base/strong_vector.h"
-#include "ortools/graph/iterators.h"
+#include "ortools/sat/clause.h"
+#include "ortools/sat/integer_base.h"
+#include "ortools/sat/lrat_proof_handler.h"
 #include "ortools/sat/model.h"
 #include "ortools/sat/sat_base.h"
+#include "ortools/sat/sat_parameters.pb.h"
 #include "ortools/sat/sat_solver.h"
 #include "ortools/util/bitset.h"
 #include "ortools/util/rev.h"
-#include "ortools/util/saturated_arithmetic.h"
 #include "ortools/util/sorted_interval_list.h"
+#include "ortools/util/strong_integers.h"
+#include "ortools/util/time_limit.h"
 
 namespace operations_research {
 namespace sat {
 
-// Value type of an integer variable. An integer variable is always bounded
-// on both sides, and this type is also used to store the bounds [lb, ub] of the
-// range of each integer variable.
-//
-// Note that both bounds are inclusive, which allows to write many propagation
-// algorithms for just one of the bound and apply it to the negated variables to
-// get the symmetric algorithm for the other bound.
-DEFINE_INT_TYPE(IntegerValue, int64_t);
+using InlinedIntegerLiteralVector = absl::InlinedVector<IntegerLiteral, 2>;
+using InlinedIntegerValueVector =
+    absl::InlinedVector<std::pair<IntegerVariable, IntegerValue>, 2>;
 
-// The max range of an integer variable is [kMinIntegerValue, kMaxIntegerValue].
-//
-// It is symmetric so the set of possible ranges stays the same when we take the
-// negation of a variable. Moreover, we need some IntegerValue that fall outside
-// this range on both side so that we can usually take care of integer overflow
-// by simply doing "saturated arithmetic" and if one of the bound overflow, the
-// two bounds will "cross" each others and we will get an empty range.
-constexpr IntegerValue kMaxIntegerValue(
-    std::numeric_limits<IntegerValue::ValueType>::max() - 1);
-constexpr IntegerValue kMinIntegerValue(-kMaxIntegerValue);
+struct LiteralValueValue {
+  Literal literal;
+  IntegerValue left_value;
+  IntegerValue right_value;
 
-inline double ToDouble(IntegerValue value) {
-  const double kInfinity = std::numeric_limits<double>::infinity();
-  if (value >= kMaxIntegerValue) return kInfinity;
-  if (value <= kMinIntegerValue) return -kInfinity;
-  return static_cast<double>(value.value());
-}
-
-template <class IntType>
-inline IntType IntTypeAbs(IntType t) {
-  return IntType(std::abs(t.value()));
-}
-
-inline IntegerValue CeilRatio(IntegerValue dividend,
-                              IntegerValue positive_divisor) {
-  DCHECK_GT(positive_divisor, 0);
-  const IntegerValue result = dividend / positive_divisor;
-  const IntegerValue adjust =
-      static_cast<IntegerValue>(result * positive_divisor < dividend);
-  return result + adjust;
-}
-
-inline IntegerValue FloorRatio(IntegerValue dividend,
-                               IntegerValue positive_divisor) {
-  DCHECK_GT(positive_divisor, 0);
-  const IntegerValue result = dividend / positive_divisor;
-  const IntegerValue adjust =
-      static_cast<IntegerValue>(result * positive_divisor > dividend);
-  return result - adjust;
-}
-
-// Returns dividend - FloorRatio(dividend, divisor) * divisor;
-//
-// This function is around the same speed than the computation above, but it
-// never causes integer overflow. Note also that when calling FloorRatio() then
-// PositiveRemainder(), the compiler should optimize the modulo away and just
-// reuse the one from the first integer division.
-inline IntegerValue PositiveRemainder(IntegerValue dividend,
-                                      IntegerValue positive_divisor) {
-  DCHECK_GT(positive_divisor, 0);
-  const IntegerValue m = dividend % positive_divisor;
-  return m < 0 ? m + positive_divisor : m;
-}
-
-// Computes result += a * b, and return false iff there is an overflow.
-inline bool AddProductTo(IntegerValue a, IntegerValue b, IntegerValue* result) {
-  const int64_t prod = CapProd(a.value(), b.value());
-  if (prod == std::numeric_limits<int64_t>::min() ||
-      prod == std::numeric_limits<int64_t>::max())
-    return false;
-  const int64_t add = CapAdd(prod, result->value());
-  if (add == std::numeric_limits<int64_t>::min() ||
-      add == std::numeric_limits<int64_t>::max())
-    return false;
-  *result = IntegerValue(add);
-  return true;
-}
-
-// Index of an IntegerVariable.
-//
-// Each time we create an IntegerVariable we also create its negation. This is
-// done like that so internally we only stores and deal with lower bound. The
-// upper bound beeing the lower bound of the negated variable.
-DEFINE_INT_TYPE(IntegerVariable, int32_t);
-const IntegerVariable kNoIntegerVariable(-1);
-inline IntegerVariable NegationOf(IntegerVariable i) {
-  return IntegerVariable(i.value() ^ 1);
-}
-
-inline bool VariableIsPositive(IntegerVariable i) {
-  return (i.value() & 1) == 0;
-}
-
-inline IntegerVariable PositiveVariable(IntegerVariable i) {
-  return IntegerVariable(i.value() & (~1));
-}
-
-// Special type for storing only one thing for var and NegationOf(var).
-DEFINE_INT_TYPE(PositiveOnlyIndex, int32_t);
-inline PositiveOnlyIndex GetPositiveOnlyIndex(IntegerVariable var) {
-  return PositiveOnlyIndex(var.value() / 2);
-}
-
-inline std::string IntegerTermDebugString(IntegerVariable var,
-                                          IntegerValue coeff) {
-  coeff = VariableIsPositive(var) ? coeff : -coeff;
-  return absl::StrCat(coeff.value(), "*X", var.value() / 2);
-}
-
-// Returns the vector of the negated variables.
-std::vector<IntegerVariable> NegationOf(
-    const std::vector<IntegerVariable>& vars);
-
-// The integer equivalent of a literal.
-// It represents an IntegerVariable and an upper/lower bound on it.
-//
-// Overflow: all the bounds below kMinIntegerValue and kMaxIntegerValue are
-// treated as kMinIntegerValue - 1 and kMaxIntegerValue + 1.
-struct IntegerLiteral {
-  // Because IntegerLiteral should never be created at a bound less constrained
-  // than an existing IntegerVariable bound, we don't allow GreaterOrEqual() to
-  // have a bound lower than kMinIntegerValue, and LowerOrEqual() to have a
-  // bound greater than kMaxIntegerValue. The other side is not constrained
-  // to allow for a computed bound to overflow. Note that both the full initial
-  // domain and the empty domain can always be represented.
-  static IntegerLiteral GreaterOrEqual(IntegerVariable i, IntegerValue bound);
-  static IntegerLiteral LowerOrEqual(IntegerVariable i, IntegerValue bound);
-
-  // These two static integer literals represent an always true and an always
-  // false condition.
-  static IntegerLiteral TrueLiteral();
-  static IntegerLiteral FalseLiteral();
-
-  // Clients should prefer the static construction methods above.
-  IntegerLiteral() : var(kNoIntegerVariable), bound(0) {}
-  IntegerLiteral(IntegerVariable v, IntegerValue b) : var(v), bound(b) {
-    DCHECK_GE(bound, kMinIntegerValue);
-    DCHECK_LE(bound, kMaxIntegerValue + 1);
-  }
-
-  bool IsValid() const { return var != kNoIntegerVariable; }
-  bool IsTrueLiteral() const { return var == kNoIntegerVariable && bound <= 0; }
-  bool IsFalseLiteral() const { return var == kNoIntegerVariable && bound > 0; }
-
-  // The negation of x >= bound is x <= bound - 1.
-  IntegerLiteral Negated() const;
-
-  bool operator==(IntegerLiteral o) const {
-    return var == o.var && bound == o.bound;
-  }
-  bool operator!=(IntegerLiteral o) const {
-    return var != o.var || bound != o.bound;
+  // Used for testing.
+  bool operator==(const LiteralValueValue& rhs) const {
+    return literal.Index() == rhs.literal.Index() &&
+           left_value == rhs.left_value && right_value == rhs.right_value;
   }
 
   std::string DebugString() const {
-    return VariableIsPositive(var)
-               ? absl::StrCat("I", var.value() / 2, ">=", bound.value())
-               : absl::StrCat("I", var.value() / 2, "<=", -bound.value());
+    return absl::StrCat("(lit(", literal.Index().value(), ") * ",
+                        left_value.value(), " * ", right_value.value(), ")");
   }
-
-  // Note that bound should be in [kMinIntegerValue, kMaxIntegerValue + 1].
-  IntegerVariable var = kNoIntegerVariable;
-  IntegerValue bound = IntegerValue(0);
 };
 
-inline std::ostream& operator<<(std::ostream& os, IntegerLiteral i_lit) {
-  os << i_lit.DebugString();
-  return os;
-}
-
-using InlinedIntegerLiteralVector = absl::InlinedVector<IntegerLiteral, 2>;
-
-// Represents [coeff * variable + constant] or just a [constant].
+// Sometimes we propagate fact with no reason at a positive level, those
+// will automatically be fixed on the next restart.
 //
-// In some places it is useful to manipulate such expression instead of having
-// to create an extra integer variable. This is mainly used for scheduling
-// related constraints.
-struct AffineExpression {
-  // Helper to construct an AffineExpression.
-  AffineExpression() {}
-  AffineExpression(IntegerValue cst)  // NOLINT(runtime/explicit)
-      : constant(cst) {}
-  AffineExpression(IntegerVariable v)  // NOLINT(runtime/explicit)
-      : var(v), coeff(1) {}
-  AffineExpression(IntegerVariable v, IntegerValue c)
-      : var(c > 0 ? v : NegationOf(v)), coeff(IntTypeAbs(c)) {}
-  AffineExpression(IntegerVariable v, IntegerValue c, IntegerValue cst)
-      : var(c > 0 ? v : NegationOf(v)), coeff(IntTypeAbs(c)), constant(cst) {}
-
-  // Returns the integer literal corresponding to expression >= value or
-  // expression <= value.
-  //
-  // On constant expressions, they will return IntegerLiteral::TrueLiteral()
-  // or IntegerLiteral::FalseLiteral().
-  IntegerLiteral GreaterOrEqual(IntegerValue bound) const;
-  IntegerLiteral LowerOrEqual(IntegerValue bound) const;
-
-  // It is safe to call these with non-typed constants.
-  // This simplify the code when we need GreaterOrEqual(0) for instance.
-  IntegerLiteral GreaterOrEqual(int64_t bound) const;
-  IntegerLiteral LowerOrEqual(int64_t bound) const;
-
-  AffineExpression Negated() const {
-    if (var == kNoIntegerVariable) return AffineExpression(-constant);
-    return AffineExpression(NegationOf(var), coeff, -constant);
-  }
-
-  AffineExpression MultipliedBy(IntegerValue multiplier) const {
-    // Note that this also works if multiplier is negative.
-    return AffineExpression(var, coeff * multiplier, constant * multiplier);
-  }
-
-  bool operator==(AffineExpression o) const {
-    return var == o.var && coeff == o.coeff && constant == o.constant;
-  }
-
-  // Returns the value of this affine expression given its variable value.
-  IntegerValue ValueAt(IntegerValue var_value) const {
-    return coeff * var_value + constant;
-  }
-
-  // Returns the affine expression value under a given LP solution.
-  double LpValue(
-      const absl::StrongVector<IntegerVariable, double>& lp_values) const {
-    if (var == kNoIntegerVariable) return ToDouble(constant);
-    return ToDouble(coeff) * lp_values[var] + ToDouble(constant);
-  }
-
-  const std::string DebugString() const {
-    if (var == kNoIntegerVariable) return absl::StrCat(constant.value());
-    if (constant == 0) {
-      return absl::StrCat("(", coeff.value(), " * X", var.value(), ")");
-    } else {
-      return absl::StrCat("(", coeff.value(), " * X", var.value(), " + ",
-                          constant.value(), ")");
-    }
-  }
-
-  // The coefficient MUST be positive. Use NegationOf(var) if needed.
-  //
-  // TODO(user): Make this private to enforce the invariant that coeff cannot be
-  // negative.
-  IntegerVariable var = kNoIntegerVariable;  // kNoIntegerVariable for constant.
-  IntegerValue coeff = IntegerValue(0);      // Zero for constant.
-  IntegerValue constant = IntegerValue(0);
+// Note that for integer literal, we already remore all "stale" entry, however
+// this is still needed to properly update the InitialVariableDomain().
+//
+// TODO(user): we should update the initial domain right away, but this as
+// some complication to clean up first.
+struct DelayedRootLevelDeduction {
+  std::vector<Literal> literal_to_fix;
+  std::vector<IntegerLiteral> integer_literal_to_fix;
 };
-
-// A model singleton that holds the INITIAL integer variable domains.
-struct IntegerDomains : public absl::StrongVector<IntegerVariable, Domain> {
-  explicit IntegerDomains(Model* model) {}
-};
-
-// A model singleton used for debugging. If this is set in the model, then we
-// can check that various derived constraint do not exclude this solution (if it
-// is a known optimal solution for instance).
-struct DebugSolution
-    : public absl::StrongVector<IntegerVariable, IntegerValue> {
-  explicit DebugSolution(Model* model) {}
-};
-
-// A value and a literal.
-struct ValueLiteralPair {
-  struct CompareByLiteral {
-    bool operator()(const ValueLiteralPair& a,
-                    const ValueLiteralPair& b) const {
-      return a.literal < b.literal;
-    }
-  };
-  struct CompareByValue {
-    bool operator()(const ValueLiteralPair& a,
-                    const ValueLiteralPair& b) const {
-      return (a.value < b.value) ||
-             (a.value == b.value && a.literal < b.literal);
-    }
-  };
-
-  bool operator==(const ValueLiteralPair& o) const {
-    return value == o.value && literal == o.literal;
-  }
-
-  std::string DebugString() const;
-
-  IntegerValue value = IntegerValue(0);
-  Literal literal = Literal(kNoLiteralIndex);
-};
-
-std::ostream& operator<<(std::ostream& os, const ValueLiteralPair& p);
 
 // Each integer variable x will be associated with a set of literals encoding
 // (x >= v) for some values of v. This class maintains the relationship between
@@ -357,12 +107,23 @@ class IntegerEncoder {
  public:
   explicit IntegerEncoder(Model* model)
       : sat_solver_(model->GetOrCreate<SatSolver>()),
-        domains_(model->GetOrCreate<IntegerDomains>()),
+        trail_(model->GetOrCreate<Trail>()),
+        clause_id_generator_(model->GetOrCreate<ClauseIdGenerator>()),
+        lrat_proof_handler_(model->Mutable<LratProofHandler>()),
+        delayed_to_fix_(model->GetOrCreate<DelayedRootLevelDeduction>()),
+        domains_(*model->GetOrCreate<IntegerDomains>()),
         num_created_variables_(0) {}
+
+  // This type is neither copyable nor movable.
+  IntegerEncoder(const IntegerEncoder&) = delete;
+  IntegerEncoder& operator=(const IntegerEncoder&) = delete;
 
   ~IntegerEncoder() {
     VLOG(1) << "#variables created = " << num_created_variables_;
   }
+
+  // Memory optimization: you can call this before encoding variables.
+  void ReserveSpaceForNumVariables(int num_vars);
 
   // Fully encode a variable using its current initial domain.
   // If the variable is already fully encoded, this does nothing.
@@ -387,23 +148,20 @@ class IntegerEncoder {
   // called.
   bool VariableIsFullyEncoded(IntegerVariable var) const;
 
-  // Computes the full encoding of a variable on which FullyEncodeVariable() has
-  // been called. The returned elements are always sorted by increasing
-  // IntegerValue and we filter values associated to false literals.
+  // Returns the list of literal <=> var == value currently associated to the
+  // given variable. The result is sorted by value. We filter literal at false,
+  // and if a literal is true, then you will get a singleton. To be sure to get
+  // the full set of encoded value, then you should call this at level zero.
   //
-  // Performance note: This function is not particularly fast, however it should
-  // only be required during domain creation.
-  std::vector<ValueLiteralPair> FullDomainEncoding(IntegerVariable var) const;
-
-  // Same as FullDomainEncoding() but only returns the list of value that are
-  // currently associated to a literal. In particular this has no guarantee to
-  // span the full domain of the given variable (but it might).
-  std::vector<ValueLiteralPair> PartialDomainEncoding(
+  // The FullDomainEncoding() just check VariableIsFullyEncoded() and returns
+  // the same result.
+  //
+  // WARNING: The reference returned is only valid until the next call to one
+  // of these functions.
+  const std::vector<ValueLiteralPair>& FullDomainEncoding(
       IntegerVariable var) const;
-
-  // Raw encoding. May be incomplete and is not sorted. Contains all literals,
-  // true or false.
-  std::vector<ValueLiteralPair> RawDomainEncoding(IntegerVariable var) const;
+  const std::vector<ValueLiteralPair>& PartialDomainEncoding(
+      IntegerVariable var) const;
 
   // Returns the "canonical" (i_lit, negation of i_lit) pair. This mainly
   // deal with domain with initial hole like [1,2][5,6] so that if one ask
@@ -417,6 +175,11 @@ class IntegerEncoder {
   // needed.
   std::pair<IntegerLiteral, IntegerLiteral> Canonicalize(
       IntegerLiteral i_lit) const;
+
+  // Returns true if the given variable has a "complex" domain.
+  bool VariableDomainHasHoles(IntegerVariable var) {
+    return domains_[GetPositiveOnlyIndex(var)].NumIntervals() > 1;
+  }
 
   // Returns, after creating it if needed, a Boolean literal such that:
   // - if true, then the IntegerLiteral is true.
@@ -439,18 +202,21 @@ class IntegerEncoder {
   void AssociateToIntegerEqualValue(Literal literal, IntegerVariable var,
                                     IntegerValue value);
 
-  // Returns true iff the given integer literal is associated. The second
-  // version returns the associated literal or kNoLiteralIndex. Note that none
-  // of these function call Canonicalize() first for speed, so it is possible
-  // that this returns false even though GetOrCreateAssociatedLiteral() would
-  // not create a new literal.
-  bool LiteralIsAssociated(IntegerLiteral i_lit) const;
+  // Returns kNoLiteralIndex if there is no associated or the associated literal
+  // otherwise.
+  //
+  // Tricky: for domain with hole, like [0,1][5,6], we assume some equivalence
+  // classes, like >=2, >=3, >=4 are all the same as >= 5.
+  //
+  // Note that GetAssociatedLiteral() should not be called with trivially true
+  // or trivially false literal. This is DCHECKed.
+  bool IsFixedOrHasAssociatedLiteral(IntegerLiteral i_lit) const;
   LiteralIndex GetAssociatedLiteral(IntegerLiteral i_lit) const;
   LiteralIndex GetAssociatedEqualityLiteral(IntegerVariable var,
                                             IntegerValue value) const;
 
   // Advanced usage. It is more efficient to create the associated literals in
-  // order, but it might be anoying to do so. Instead, you can first call
+  // order, but it might be annoying to do so. Instead, you can first call
   // DisableImplicationBetweenLiteral() and when you are done creating all the
   // associated literals, you can call (only at level zero)
   // AddAllImplicationsBetweenAssociatedLiterals() which will also turn back on
@@ -464,43 +230,50 @@ class IntegerEncoder {
     if (lit.Index() >= reverse_encoding_.size()) {
       return empty_integer_literal_vector_;
     }
-    return reverse_encoding_[lit.Index()];
+    return reverse_encoding_[lit];
   }
 
-  // Same as GetIntegerLiterals(), but in addition, if the literal was
-  // associated to an integer == value, then the returned list will contain both
-  // (integer >= value) and (integer <= value).
-  const InlinedIntegerLiteralVector& GetAllIntegerLiterals(Literal lit) const {
-    if (lit.Index() >= full_reverse_encoding_.size()) {
-      return empty_integer_literal_vector_;
+  // Returns the variable == value pairs that were associated with the given
+  // Literal. Note that only positive IntegerVariable appears here.
+  const InlinedIntegerValueVector& GetEqualityLiterals(Literal lit) const {
+    if (lit.Index() >= reverse_equality_encoding_.size()) {
+      return empty_integer_value_vector_;
     }
-    return full_reverse_encoding_[lit.Index()];
+    return reverse_equality_encoding_[lit];
   }
 
-  // This is part of a "hack" to deal with new association involving a fixed
-  // literal. Note that these are only allowed at the decision level zero.
-  const std::vector<IntegerLiteral> NewlyFixedIntegerLiterals() const {
-    return newly_fixed_integer_literals_;
-  }
-  void ClearNewlyFixedIntegerLiterals() {
-    newly_fixed_integer_literals_.clear();
+  // Returns all the variables for which this literal is associated to either
+  // var >= value or var == value.
+  const std::vector<IntegerVariable>& GetAllAssociatedVariables(
+      Literal lit) const {
+    temp_associated_vars_.clear();
+    for (const IntegerLiteral l : GetIntegerLiterals(lit)) {
+      temp_associated_vars_.push_back(l.var);
+    }
+    for (const auto& [var, value] : GetEqualityLiterals(lit)) {
+      temp_associated_vars_.push_back(var);
+    }
+    return temp_associated_vars_;
   }
 
-  // If it exists, returns a [0,1] integer variable which is equal to 1 iff the
+  // If it exists, returns a [0, 1] integer variable which is equal to 1 iff the
   // given literal is true. Returns kNoIntegerVariable if such variable does not
   // exist. Note that one can create one by creating a new IntegerVariable and
   // calling AssociateToIntegerEqualValue().
-  const IntegerVariable GetLiteralView(Literal lit) const {
+  //
+  // Note that this will only return "positive" IntegerVariable.
+  IntegerVariable GetLiteralView(Literal lit) const {
     if (lit.Index() >= literal_view_.size()) return kNoIntegerVariable;
-    return literal_view_[lit.Index()];
+    const IntegerVariable result = literal_view_[lit];
+    DCHECK(result == kNoIntegerVariable || VariableIsPositive(result));
+    return result;
   }
 
   // If this is true, then a literal can be linearized with an affine expression
   // involving an integer variable.
-  const bool LiteralOrNegationHasView(Literal lit) const {
-    return GetLiteralView(lit) != kNoIntegerVariable ||
-           GetLiteralView(lit.Negated()) != kNoIntegerVariable;
-  }
+  ABSL_MUST_USE_RESULT bool LiteralOrNegationHasView(
+      Literal lit, IntegerVariable* view = nullptr,
+      bool* view_is_direct = nullptr) const;
 
   // Returns a Boolean literal associated with a bound lower than or equal to
   // the one of the given IntegerLiteral. If the given IntegerLiteral is true,
@@ -510,17 +283,28 @@ class IntegerEncoder {
   // Ex: if 'i' is (x >= 4) and we already created a literal associated to
   // (x >= 2) but not to (x >= 3), we will return the literal associated with
   // (x >= 2).
-  LiteralIndex SearchForLiteralAtOrBefore(IntegerLiteral i,
+  LiteralIndex SearchForLiteralAtOrBefore(IntegerLiteral i_lit,
                                           IntegerValue* bound) const;
+  LiteralIndex SearchForLiteralAtOrAfter(IntegerLiteral i_lit,
+                                         IntegerValue* bound) const;
 
   // Gets the literal always set to true, make it if it does not exist.
   Literal GetTrueLiteral() {
-    DCHECK_EQ(0, sat_solver_->CurrentDecisionLevel());
     if (literal_index_true_ == kNoLiteralIndex) {
+      DCHECK_EQ(0, sat_solver_->CurrentDecisionLevel());
       const Literal literal_true =
           Literal(sat_solver_->NewBooleanVariable(), true);
       literal_index_true_ = literal_true.Index();
-      sat_solver_->AddUnitClause(literal_true);
+
+      ClauseId clause_id = kNoClauseId;
+      if (lrat_proof_handler_ != nullptr) {
+        clause_id = clause_id_generator_->GetNextId();
+        // We cannot prove `literal_true` by unit propagation, but we can with a
+        // RAT inference (trivial here since there are no clauses containing the
+        // negation of the pivot `literal_true`).
+        lrat_proof_handler_->AddInferredClause(clause_id, {literal_true}, {});
+      }
+      trail_->EnqueueWithUnitReason(clause_id, literal_true);
     }
     return Literal(literal_index_true_);
   }
@@ -529,20 +313,18 @@ class IntegerEncoder {
   // Returns the set of Literal associated to IntegerLiteral of the form var >=
   // value. We make a copy, because this can be easily invalidated when calling
   // any function of this class. So it is less efficient but safer.
-  std::map<IntegerValue, Literal> PartialGreaterThanEncoding(
-      IntegerVariable var) const {
-    if (var >= encoding_by_var_.size()) {
-      return std::map<IntegerValue, Literal>();
-    }
-    return encoding_by_var_[var];
-  }
+  std::vector<ValueLiteralPair> PartialGreaterThanEncoding(
+      IntegerVariable var) const;
+
+  // Makes sure all element in the >= encoding are non-trivial and canonical.
+  // The input variable must be positive.
+  bool UpdateEncodingOnInitialDomainChange(IntegerVariable var, Domain domain);
+
+  // All IntegerVariable passed to the functions above must be in
+  // [0, NumVariables).
+  int NumVariables() const { return 2 * encoding_by_var_.size(); }
 
  private:
-  // Only add the equivalence between i_lit and literal, if there is already an
-  // associated literal with i_lit, this make literal and this associated
-  // literal equivalent.
-  void HalfAssociateGivenLiteral(IntegerLiteral i_lit, Literal literal);
-
   // Adds the implications:
   //    Literal(before) <= associated_lit <= Literal(after).
   // Arguments:
@@ -550,12 +332,17 @@ class IntegerEncoder {
   //    slight optimization.
   //  - 'it' is the current position of associated_lit in map, i.e. we must have
   //    it->second == associated_lit.
-  void AddImplications(const std::map<IntegerValue, Literal>& map,
-                       std::map<IntegerValue, Literal>::const_iterator it,
-                       Literal associated_lit);
+  void AddImplications(
+      const absl::btree_map<IntegerValue, Literal>& map,
+      absl::btree_map<IntegerValue, Literal>::const_iterator it,
+      Literal associated_lit);
 
   SatSolver* sat_solver_;
-  IntegerDomains* domains_;
+  Trail* trail_;
+  ClauseIdGenerator* clause_id_generator_;
+  LratProofHandler* lrat_proof_handler_;
+  DelayedRootLevelDeduction* delayed_to_fix_;
+  const IntegerDomains& domains_;
 
   bool add_implications_ = true;
   int64_t num_created_variables_ = 0;
@@ -564,22 +351,35 @@ class IntegerEncoder {
   // by bound (so we can properly add implications between the literals
   // corresponding to the same variable).
   //
+  // Note that we only keep this for positive variable.
+  // The one for the negation can be inferred by it.
+  //
+  // Like                x >= 1     x >= 4     x >= 5
+  // Correspond to       x <= 0     x <= 3     x <= 4
+  // That is            -x >= 0    -x >= -2   -x >= -4
+  //
+  // With potentially stronger <= bound if we fall into domain holes.
+  //
   // TODO(user): Remove the entry no longer needed because of level zero
   // propagations.
-  absl::StrongVector<IntegerVariable, std::map<IntegerValue, Literal>>
+  util_intops::StrongVector<PositiveOnlyIndex,
+                            absl::btree_map<IntegerValue, Literal>>
       encoding_by_var_;
 
   // Store for a given LiteralIndex the list of its associated IntegerLiterals.
   const InlinedIntegerLiteralVector empty_integer_literal_vector_;
-  absl::StrongVector<LiteralIndex, InlinedIntegerLiteralVector>
+  util_intops::StrongVector<LiteralIndex, InlinedIntegerLiteralVector>
       reverse_encoding_;
-  absl::StrongVector<LiteralIndex, InlinedIntegerLiteralVector>
-      full_reverse_encoding_;
-  std::vector<IntegerLiteral> newly_fixed_integer_literals_;
+  const InlinedIntegerValueVector empty_integer_value_vector_;
+  util_intops::StrongVector<LiteralIndex, InlinedIntegerValueVector>
+      reverse_equality_encoding_;
 
-  // Store for a given LiteralIndex its IntegerVariable view or kNoLiteralIndex
-  // if there is none.
-  absl::StrongVector<LiteralIndex, IntegerVariable> literal_view_;
+  // Used by GetAllAssociatedVariables().
+  mutable std::vector<IntegerVariable> temp_associated_vars_;
+
+  // Store for a given LiteralIndex its IntegerVariable view or kNoVariableIndex
+  // if there is none. Note that only positive IntegerVariable will appear here.
+  util_intops::StrongVector<LiteralIndex, IntegerVariable> literal_view_;
 
   // Mapping (variable == value) -> associated literal. Note that even if
   // there is more than one literal associated to the same fact, we just keep
@@ -591,11 +391,12 @@ class IntegerEncoder {
       equality_to_associated_literal_;
 
   // Mutable because this is lazily cleaned-up by PartialDomainEncoding().
-  mutable absl::StrongVector<PositiveOnlyIndex, std::vector<ValueLiteralPair>>
+  mutable util_intops::StrongVector<PositiveOnlyIndex,
+                                    absl::InlinedVector<ValueLiteralPair, 2>>
       equality_by_var_;
 
   // Variables that are fully encoded.
-  mutable absl::StrongVector<PositiveOnlyIndex, bool> is_fully_encoded_;
+  mutable util_intops::StrongVector<PositiveOnlyIndex, bool> is_fully_encoded_;
 
   // A literal that is always true, convenient to encode trivial domains.
   // This will be lazily created when needed.
@@ -603,23 +404,139 @@ class IntegerEncoder {
 
   // Temporary memory used by FullyEncodeVariable().
   std::vector<IntegerValue> tmp_values_;
+  std::vector<ValueLiteralPair> tmp_encoding_;
 
-  DISALLOW_COPY_AND_ASSIGN(IntegerEncoder);
+  // Temporary memory for the result of PartialDomainEncoding().
+  mutable std::vector<ValueLiteralPair> partial_encoding_;
 };
+
+// The reason is the union of all of these fact.
+//
+// WARNING: the Span<> will not be valid forever, so this IntegerReason
+// class should just be used temporarily during conflict resolution, and not
+// keep in persistent storage.
+struct IntegerReason {
+  void clear() {
+    index_at_propagation = 0;
+    slack = 0;
+
+    boolean_literals_at_true = {};
+    boolean_literals_at_false = {};
+    integer_literals = {};
+    vars = {};
+    coeffs = {};
+  }
+
+  bool empty() const {
+    return boolean_literals_at_true.empty() &&
+           boolean_literals_at_false.empty() && integer_literals.empty() &&
+           vars.empty();
+  }
+
+  // Note the integer_literals are always "true". But for Booleans, we support
+  // both specification. Just listing true literals make more sense, but
+  // historically in the SAT world, a span into (n - 1) literals of a clause is
+  // used as a reason, where all the literals there are false.
+  absl::Span<const Literal> boolean_literals_at_true;
+  absl::Span<const Literal> boolean_literals_at_false;
+  absl::Span<const IntegerLiteral> integer_literals;
+
+  // Expresses the fact that the propagated_i_lit is true assuming the lower
+  // bound for all variables in the linear expression at the time of
+  // @index_at_propagation and the reasons above.
+  //
+  // WARNING: to avoid copying stuff around, vars/coeffs will contain an entry
+  // for propagated_i_lit.var that should be ignored.
+  //
+  // The slack and individual coefficients indicate by how much the bounds at
+  // the time might be relaxed and still explain propagated_i_lit correctly.
+  int index_at_propagation;
+  IntegerValue slack;
+  IntegerLiteral propagated_i_lit;
+  absl::Span<const IntegerVariable> vars;
+  absl::Span<const IntegerValue> coeffs;
+};
+
+class LazyReasonInterface {
+ public:
+  LazyReasonInterface() = default;
+  virtual ~LazyReasonInterface() = default;
+
+  virtual std::string LazyReasonName() const = 0;
+
+  // When called, this must fill the given reason (which is already cleared).
+  // Note that some fields of IntegerReason like index_at_propagation and
+  // propagated_i_lit are already filled.
+  //
+  // Remark: integer_literal[reason.index_at_propagation] might not exist or has
+  // nothing to do with what was propagated.
+  virtual void Explain(int id, IntegerLiteral to_explain,
+                       IntegerReason* reason) = 0;
+};
+
+// This is used by the IntegerConflictResolution class.
+//
+// An ordered sequence of index, the "reason" for each index should be
+// a sequence of lower indices.
+//
+// TODO(user): We could use a single int32_t if we use a generic trail. Or
+// alternatively, push "place_holder" to the boolean trail. But for
+// non-chronological backtracking, having the assignment level here seems nice.
+struct GlobalTrailIndex {
+  constexpr static int kNoIntegerIndex = std::numeric_limits<int>::max();
+
+  int level;
+  int bool_index;
+  int integer_index = kNoIntegerIndex;
+
+  bool IsBoolean() const { return integer_index == kNoIntegerIndex; }
+  bool IsInteger() const { return integer_index != kNoIntegerIndex; }
+
+  // By convention, for all indices sharing the same bool_index, we need all
+  // IsInteger() indices to be before the unique IsBoolean() one.
+  bool operator<(const GlobalTrailIndex& o) const {
+    if (level != o.level) return level < o.level;
+    if (bool_index != o.bool_index) return bool_index < o.bool_index;
+    return integer_index < o.integer_index;
+  }
+
+  bool operator==(const GlobalTrailIndex& o) const {
+    return level == o.level && bool_index == o.bool_index &&
+           integer_index == o.integer_index;
+  }
+
+  bool operator<=(const GlobalTrailIndex& o) const {
+    return *this == o || *this < o;
+  }
+
+  bool operator>=(const GlobalTrailIndex& o) const { return !(*this < o); }
+
+  bool operator>(const GlobalTrailIndex& o) const { return !(*this <= o); }
+};
+
+// Index used to store reasons.
+DEFINE_STRONG_INDEX_TYPE(ReasonIndex);
 
 // This class maintains a set of integer variables with their current bounds.
 // Bounds can be propagated from an external "source" and this class helps
 // to maintain the reason for each propagation.
-class IntegerTrail : public SatPropagator {
+class IntegerTrail final : public SatPropagator {
  public:
   explicit IntegerTrail(Model* model)
       : SatPropagator("IntegerTrail"),
+        delayed_to_fix_(model->GetOrCreate<DelayedRootLevelDeduction>()),
         domains_(model->GetOrCreate<IntegerDomains>()),
         encoder_(model->GetOrCreate<IntegerEncoder>()),
         trail_(model->GetOrCreate<Trail>()),
+        sat_solver_(model->GetOrCreate<SatSolver>()),
+        time_limit_(model->GetOrCreate<TimeLimit>()),
         parameters_(*model->GetOrCreate<SatParameters>()) {
     model->GetOrCreate<SatSolver>()->AddPropagator(this);
   }
+
+  // This type is neither copyable nor movable.
+  IntegerTrail(const IntegerTrail&) = delete;
+  IntegerTrail& operator=(const IntegerTrail&) = delete;
   ~IntegerTrail() final;
 
   // SatPropagator interface. These functions make sure the current bounds
@@ -628,15 +545,33 @@ class IntegerTrail : public SatPropagator {
   // correct state before calling any of its functions.
   bool Propagate(Trail* trail) final;
   void Untrail(const Trail& trail, int literal_trail_index) final;
-  absl::Span<const Literal> Reason(const Trail& trail,
-                                   int trail_index) const final;
+  absl::Span<const Literal> Reason(const Trail& trail, int trail_index,
+                                   int64_t conflict_id) const final;
+
+  // Warning the conflict is only set just after ReportConflict() was called
+  // here. It will be destroyed as soon as ReasonAsGlobalIndex() is used.
+  const IntegerReason& IntegerConflict() {
+    if (trail_->conflict_timestamp() != global_id_conflict_timestamp_) {
+      tmp_reason_.clear();
+      tmp_reason_.boolean_literals_at_false = trail_->FailingClause();
+    }
+    return tmp_reason_;
+  }
+
+  // Returns the reason for the propagation with given "global" index.
+  // This will correctly handle boolean/integer reasons.
+  //
+  // If index.IsInteger(), one can provide the bound that need to be explained,
+  // which might be lower than the one that was propagated.
+  const IntegerReason& GetIntegerReason(
+      GlobalTrailIndex index, std::optional<IntegerValue> needed_bound);
 
   // Returns the number of created integer variables.
   //
   // Note that this is twice the number of call to AddIntegerVariable() since
   // we automatically create the NegationOf() variable too.
   IntegerVariable NumIntegerVariables() const {
-    return IntegerVariable(vars_.size());
+    return IntegerVariable(var_lbs_.size());
   }
 
   // Optimization: you can call this before calling AddIntegerVariable()
@@ -687,38 +622,13 @@ class IntegerTrail : public SatPropagator {
     return AddIntegerVariable(kMinIntegerValue, kMaxIntegerValue);
   }
 
-  // For an optional variable, both its lb and ub must be valid bound assuming
-  // the fact that the variable is "present". However, the domain [lb, ub] is
-  // allowed to be empty (i.e. ub < lb) if the given is_ignored literal is true.
-  // Moreover, if is_ignored is true, then the bound of such variable should NOT
-  // impact any non-ignored variable in any way (but the reverse is not true).
-  bool IsOptional(IntegerVariable i) const {
-    return is_ignored_literals_[i] != kNoLiteralIndex;
-  }
-  bool IsCurrentlyIgnored(IntegerVariable i) const {
-    const LiteralIndex is_ignored_literal = is_ignored_literals_[i];
-    return is_ignored_literal != kNoLiteralIndex &&
-           trail_->Assignment().LiteralIsTrue(Literal(is_ignored_literal));
-  }
-  Literal IsIgnoredLiteral(IntegerVariable i) const {
-    DCHECK(IsOptional(i));
-    return Literal(is_ignored_literals_[i]);
-  }
-  LiteralIndex OptionalLiteralIndex(IntegerVariable i) const {
-    return is_ignored_literals_[i] == kNoLiteralIndex
-               ? kNoLiteralIndex
-               : Literal(is_ignored_literals_[i]).NegatedIndex();
-  }
-  void MarkIntegerVariableAsOptional(IntegerVariable i, Literal is_considered) {
-    DCHECK(is_ignored_literals_[i] == kNoLiteralIndex ||
-           is_ignored_literals_[i] == is_considered.NegatedIndex());
-    is_ignored_literals_[i] = is_considered.NegatedIndex();
-    is_ignored_literals_[NegationOf(i)] = is_considered.NegatedIndex();
-  }
-
   // Returns the current lower/upper bound of the given integer variable.
   IntegerValue LowerBound(IntegerVariable i) const;
   IntegerValue UpperBound(IntegerVariable i) const;
+
+  // If one needs to do a lot of LowerBound()/UpperBound() it will be faster
+  // to cache the current pointer to the underlying vector.
+  const IntegerValue* LowerBoundsData() const { return var_lbs_.data(); }
 
   // Checks if the variable is fixed.
   bool IsFixed(IntegerVariable i) const;
@@ -729,6 +639,7 @@ class IntegerTrail : public SatPropagator {
   // Same as above for an affine expression.
   IntegerValue LowerBound(AffineExpression expr) const;
   IntegerValue UpperBound(AffineExpression expr) const;
+  IntegerValue UpperBound(LinearExpression2 expr) const;
   bool IsFixed(AffineExpression expr) const;
   IntegerValue FixedValue(AffineExpression expr) const;
 
@@ -746,6 +657,7 @@ class IntegerTrail : public SatPropagator {
   // Returns the current value (if known) of an IntegerLiteral.
   bool IntegerLiteralIsTrue(IntegerLiteral l) const;
   bool IntegerLiteralIsFalse(IntegerLiteral l) const;
+  bool IsTrueAtLevelZero(IntegerLiteral l) const;
 
   // Returns globally valid lower/upper bound on the given integer variable.
   IntegerValue LevelZeroLowerBound(IntegerVariable var) const;
@@ -754,6 +666,10 @@ class IntegerTrail : public SatPropagator {
   // Returns globally valid lower/upper bound on the given affine expression.
   IntegerValue LevelZeroLowerBound(AffineExpression exp) const;
   IntegerValue LevelZeroUpperBound(AffineExpression exp) const;
+
+  // Returns globally valid lower/upper bound on the given linear expression.
+  IntegerValue LevelZeroLowerBound(LinearExpression2 expr) const;
+  IntegerValue LevelZeroUpperBound(LinearExpression2 expr) const;
 
   // Returns true if the variable is fixed at level 0.
   bool IsFixedAtLevelZero(IntegerVariable var) const;
@@ -765,6 +681,10 @@ class IntegerTrail : public SatPropagator {
   // Returns the current lower bound assuming the literal is true.
   IntegerValue ConditionalLowerBound(Literal l, IntegerVariable i) const;
   IntegerValue ConditionalLowerBound(Literal l, AffineExpression expr) const;
+
+  // Returns the current upper bound assuming the literal is true.
+  IntegerValue ConditionalUpperBound(Literal l, IntegerVariable i) const;
+  IntegerValue ConditionalUpperBound(Literal l, AffineExpression expr) const;
 
   // Advanced usage. Given the reason for
   // (Sum_i coeffs[i] * reason[i].var >= current_lb) initially in reason,
@@ -809,8 +729,8 @@ class IntegerTrail : public SatPropagator {
   // restrictive bound than the current one will have no effect.
   //
   // The reason for this "assignment" must be provided as:
-  // - A set of Literal currently beeing all false.
-  // - A set of IntegerLiteral currently beeing all true.
+  // - A set of Literal currently being all false.
+  // - A set of IntegerLiteral currently being all true.
   //
   // IMPORTANT: Notice the inversed sign in the literal reason. This is a bit
   // confusing but internally SAT use this direction for efficiency.
@@ -822,9 +742,14 @@ class IntegerTrail : public SatPropagator {
   // TODO(user): If the given bound is equal to the current bound, maybe the new
   // reason is better? how to decide and what to do in this case? to think about
   // it. Currently we simply don't do anything.
+  ABSL_MUST_USE_RESULT bool Enqueue(IntegerLiteral i_lit) {
+    return EnqueueInternal(i_lit, false, {}, {});
+  }
   ABSL_MUST_USE_RESULT bool Enqueue(
       IntegerLiteral i_lit, absl::Span<const Literal> literal_reason,
-      absl::Span<const IntegerLiteral> integer_reason);
+      absl::Span<const IntegerLiteral> integer_reason) {
+    return EnqueueInternal(i_lit, false, literal_reason, integer_reason);
+  }
 
   // Enqueue new information about a variable bound. It has the same behavior
   // as the Enqueue() method, except that it accepts true and false integer
@@ -837,6 +762,9 @@ class IntegerTrail : public SatPropagator {
   // ReportConflict() or Enqueue().
   ABSL_MUST_USE_RESULT bool SafeEnqueue(
       IntegerLiteral i_lit, absl::Span<const IntegerLiteral> integer_reason);
+  ABSL_MUST_USE_RESULT bool SafeEnqueue(
+      IntegerLiteral i_lit, absl::Span<const Literal> literal_reason,
+      absl::Span<const IntegerLiteral> integer_reason);
 
   // Pushes the given integer literal assuming that the Boolean literal is true.
   // This can do a few things:
@@ -858,29 +786,50 @@ class IntegerTrail : public SatPropagator {
   ABSL_MUST_USE_RESULT bool Enqueue(
       IntegerLiteral i_lit, absl::Span<const Literal> literal_reason,
       absl::Span<const IntegerLiteral> integer_reason,
-      int trail_index_with_same_reason);
+      int trail_index_with_same_reason) {
+    return EnqueueInternal(i_lit, false, literal_reason, integer_reason,
+                           trail_index_with_same_reason);
+  }
 
   // Lazy reason API.
+  ABSL_MUST_USE_RESULT bool EnqueueWithLazyReason(
+      IntegerLiteral i_lit, int id, IntegerValue propagation_slack,
+      LazyReasonInterface* explainer) {
+    const int trail_index = integer_trail_.size();
+    lazy_reasons_.push_back(
+        LazyReasonEntry{explainer, propagation_slack, i_lit, id, trail_index});
+    return EnqueueInternal(i_lit, true, {}, {});
+  }
+
+  // These temporary vector can be used by the lazy reason explainer to fill
+  // the IntegerReason spans. Note that we clear them on each call.
+  std::vector<Literal>& ClearedMutableTmpLiterals() {
+    tmp_lazy_reason_boolean_literals_.clear();
+    return tmp_lazy_reason_boolean_literals_;
+  }
+  std::vector<IntegerLiteral>& ClearedMutableTmpIntegerLiterals() {
+    tmp_lazy_reason_integer_literals_.clear();
+    return tmp_lazy_reason_integer_literals_;
+  }
+
+  // Sometimes we infer some root level bounds but we are not at the root level.
+  // In this case, we will update the level-zero bounds right away, but will
+  // delay the current push until the next restart.
   //
-  // The function is provided with the IntegerLiteral to explain and its index
-  // in the integer trail. It must fill the two vectors so that literals
-  // contains any Literal part of the reason and dependencies contains the trail
-  // index of any IntegerLiteral that is also part of the reason.
-  //
-  // Remark: sometimes this is called to fill the conflict while the literal
-  // to explain is propagated. In this case, trail_index_of_literal will be
-  // the current trail index, and we cannot assume that there is anything filled
-  // yet in integer_literal[trail_index_of_literal].
-  using LazyReasonFunction = std::function<void(
-      IntegerLiteral literal_to_explain, int trail_index_of_literal,
-      std::vector<Literal>* literals, std::vector<int>* dependencies)>;
-  ABSL_MUST_USE_RESULT bool Enqueue(IntegerLiteral i_lit,
-                                    LazyReasonFunction lazy_reason);
+  // Note that if you want to also push the literal at the current level, then
+  // just calling Enqueue() is enough. Since there is no reason, the literal
+  // will still be recorded properly.
+  ABSL_MUST_USE_RESULT bool RootLevelEnqueue(IntegerLiteral i_lit);
 
   // Enqueues the given literal on the trail.
   // See the comment of Enqueue() for the reason format.
-  void EnqueueLiteral(Literal literal, absl::Span<const Literal> literal_reason,
-                      absl::Span<const IntegerLiteral> integer_reason);
+  ABSL_MUST_USE_RESULT bool EnqueueLiteral(
+      Literal literal, absl::Span<const Literal> literal_reason,
+      absl::Span<const IntegerLiteral> integer_reason);
+
+  ABSL_MUST_USE_RESULT bool SafeEnqueueLiteral(
+      Literal literal, absl::Span<const Literal> literal_reason,
+      absl::Span<const IntegerLiteral> integer_reason);
 
   // Returns the reason (as set of Literal currently false) for a given integer
   // literal. Note that the bound must be less restrictive than the current
@@ -888,7 +837,8 @@ class IntegerTrail : public SatPropagator {
   std::vector<Literal> ReasonFor(IntegerLiteral literal) const;
 
   // Appends the reason for the given integer literals to the output and call
-  // STLSortAndRemoveDuplicates() on it.
+  // STLSortAndRemoveDuplicates() on it. This function accept "constant"
+  // literal.
   void MergeReasonInto(absl::Span<const IntegerLiteral> literals,
                        std::vector<Literal>* output) const;
 
@@ -912,27 +862,74 @@ class IntegerTrail : public SatPropagator {
     watchers_.push_back(p);
   }
 
+  IntegerVariable VarAtIndex(int integer_trail_index) const {
+    return integer_trail_[integer_trail_index].var;
+  }
+  IntegerLiteral IntegerLiteralAtIndex(int integer_trail_index) const {
+    return IntegerLiteral::GreaterOrEqual(
+        integer_trail_[integer_trail_index].var,
+        integer_trail_[integer_trail_index].bound);
+  }
+  int GetFirstIndexBefore(IntegerVariable var, GlobalTrailIndex source_index,
+                          int starting_integer_index) {
+    CHECK_GE(var, 0);
+    CHECK_LT(var, var_trail_index_.size());
+    int index = std::min(starting_integer_index, var_trail_index_[var]);
+    while (true) {
+      // Did we reach root level?
+      if (index < static_cast<int>(var_lbs_.size())) return -1;
+      CHECK_LT(index, integer_trail_.size());
+      CHECK_EQ(integer_trail_[index].var, var);
+      if (GlobalIndexAt(index) < source_index) return index;
+      index = integer_trail_[index].prev_trail_index;
+    }
+  }
+  int PreviousTrailIndex(int integer_trail_index) const {
+    if (integer_trail_index < var_lbs_.size()) {
+      CHECK_EQ(integer_trail_[integer_trail_index].prev_trail_index, -1);
+    }
+    return integer_trail_[integer_trail_index].prev_trail_index;
+  }
+  GlobalTrailIndex GlobalIndexAt(int integer_index) const {
+    CHECK_GE(integer_index, var_lbs_.size());
+    CHECK_NE(integer_trail_[integer_index].var, kNoIntegerVariable);
+
+    const auto& entry = extra_trail_info_[integer_index];
+    CHECK_NE(entry.assignment_level, 0);
+    return GlobalTrailIndex{entry.assignment_level, entry.bool_trail_index,
+                            integer_index};
+  }
+
   // Helper functions to report a conflict. Always return false so a client can
   // simply do: return integer_trail_->ReportConflict(...);
   bool ReportConflict(absl::Span<const Literal> literal_reason,
                       absl::Span<const IntegerLiteral> integer_reason) {
-    DCHECK(ReasonIsValid(literal_reason, integer_reason));
+    DCHECK(ReasonIsValid(IntegerLiteral::FalseLiteral(), literal_reason,
+                         integer_reason));
     std::vector<Literal>* conflict = trail_->MutableConflict();
+    if (new_conflict_resolution_) {
+      global_id_conflict_timestamp_ = trail_->conflict_timestamp();
+
+      // Copy.
+      tmp_reason_.clear();
+      tmp_literal_reason_.assign(literal_reason.begin(), literal_reason.end());
+      tmp_integer_reason_.assign(integer_reason.begin(), integer_reason.end());
+      tmp_reason_.boolean_literals_at_false = tmp_literal_reason_;
+      tmp_reason_.integer_literals = tmp_integer_reason_;
+      return false;
+    }
+
     conflict->assign(literal_reason.begin(), literal_reason.end());
     MergeReasonInto(integer_reason, conflict);
     return false;
   }
   bool ReportConflict(absl::Span<const IntegerLiteral> integer_reason) {
-    DCHECK(ReasonIsValid({}, integer_reason));
-    std::vector<Literal>* conflict = trail_->MutableConflict();
-    conflict->clear();
-    MergeReasonInto(integer_reason, conflict);
-    return false;
+    return ReportConflict({}, integer_reason);
   }
 
   // Returns true if the variable lower bound is still the one from level zero.
   bool VariableLowerBoundIsFromLevelZero(IntegerVariable var) const {
-    return vars_[var].current_trail_index < vars_.size();
+    return var_trail_index_[var] < var_lbs_.size();
   }
 
   // Registers a reversible class. This class will always be synced with the
@@ -948,6 +945,12 @@ class IntegerTrail : public SatPropagator {
   // propagations on the trail.
   void AppendNewBounds(std::vector<IntegerLiteral>* output) const;
 
+  // Inspects the trail and output all the non-level zero bounds from the base
+  // index (one per variables) to the output. The algo is sparse if there is
+  // only a few propagations on the trail.
+  void AppendNewBoundsFrom(int base_index,
+                           std::vector<IntegerLiteral>* output) const;
+
   // Returns the trail index < threshold of a TrailEntry about var. Returns -1
   // if there is no such entry (at a positive decision level). This is basically
   // the trail index of the lower bound of var at the time.
@@ -959,44 +962,96 @@ class IntegerTrail : public SatPropagator {
   // Basic heuristic to detect when we are in a propagation loop, and suggest
   // a good variable to branch on (taking the middle value) to get out of it.
   bool InPropagationLoop() const;
+  void NotifyThatPropagationWasAborted();
   IntegerVariable NextVariableToBranchOnInPropagationLoop() const;
 
   // If we had an incomplete propagation, it is important to fix all the
-  // variables and not relly on the propagation to do so. This is related to the
-  // InPropagationLoop() code above.
+  // variables and not really on the propagation to do so. This is related to
+  // the InPropagationLoop() code above.
   bool CurrentBranchHadAnIncompletePropagation();
   IntegerVariable FirstUnassignedVariable() const;
 
   // Return true if we can fix new fact at level zero.
   bool HasPendingRootLevelDeduction() const {
-    return !literal_to_fix_.empty() || !integer_literal_to_fix_.empty();
+    return !delayed_to_fix_->literal_to_fix.empty() ||
+           !delayed_to_fix_->integer_literal_to_fix.empty();
   }
 
+  // If this is set, and in debug mode, we will call this on all conflict to
+  // be checked for potential issue. Usually against a known optimal solution.
+  void RegisterDebugChecker(
+      std::function<bool(absl::Span<const Literal> clause,
+                         absl::Span<const IntegerLiteral> integers)>
+          checker) {
+    debug_checker_ = std::move(checker);
+  }
+
+  // Tricky: we cannot rely on the parameters
+  // use_new_integer_conflict_resolution, because they are many codepath when
+  // the IntegerConflictResolution class is not yet registered, like in
+  // presolve.
+  //
+  // TODO(user): Ideally if the parameter is on, we should just use it
+  // everywhere, find a way.
+  void UseNewConflictResolution() { new_conflict_resolution_ = true; }
+
+  // Saves the given reason and returns a new reason index.
+  // The content can be retrieved by the ReasonAsSpan() functions as long as
+  // the reason index is valid.
+  //
+  // Warning: a reason_index is only valid until we backtrack over it, at which
+  // time the memory used by the reason will be reclaimed.
+  //
+  // This is mostly an internal API, but it is exposed so that we can store
+  // payload in a lazy reasons.
+  ReasonIndex AppendReasonToInternalBuffers(
+      absl::Span<const Literal> literal_reason,
+      absl::Span<const IntegerLiteral> integer_reason);
+  absl::Span<const IntegerLiteral> IntegerReasonAsSpan(ReasonIndex index) const;
+  absl::Span<const Literal> LiteralReasonAsSpan(ReasonIndex index) const;
+
  private:
+  // All integer_trail_.push_back() should go through this.
+  void PushOnTrail(IntegerLiteral i_lit, int prev_trail_index,
+                   int bool_trail_index, ReasonIndex reason_index,
+                   int assignment_level);
+
   // Used for DHECKs to validate the reason given to the public functions above.
   // Tests that all Literal are false. Tests that all IntegerLiteral are true.
   bool ReasonIsValid(absl::Span<const Literal> literal_reason,
                      absl::Span<const IntegerLiteral> integer_reason);
 
+  // Same as above, but with the literal for which this is the reason for.
+  bool ReasonIsValid(Literal lit, absl::Span<const Literal> literal_reason,
+                     absl::Span<const IntegerLiteral> integer_reason);
+  bool ReasonIsValid(IntegerLiteral i_lit,
+                     absl::Span<const Literal> literal_reason,
+                     absl::Span<const IntegerLiteral> integer_reason);
+
+  // If the variable has holes in its domain, make sure the literal is
+  // canonicalized.
+  void CanonicalizeLiteralIfNeeded(IntegerLiteral* i_lit);
+
   // Called by the Enqueue() functions that detected a conflict. This does some
   // common conflict initialization that must terminate by a call to
   // MergeReasonIntoInternal(conflict) where conflict is the returned vector.
   std::vector<Literal>* InitializeConflict(
-      IntegerLiteral integer_literal, const LazyReasonFunction& lazy_reason,
+      IntegerLiteral integer_literal, bool use_lazy_reason,
       absl::Span<const Literal> literals_reason,
       absl::Span<const IntegerLiteral> bounds_reason);
 
   // Internal implementation of the different public Enqueue() functions.
   ABSL_MUST_USE_RESULT bool EnqueueInternal(
-      IntegerLiteral i_lit, LazyReasonFunction lazy_reason,
+      IntegerLiteral i_lit, bool use_lazy_reason,
       absl::Span<const Literal> literal_reason,
       absl::Span<const IntegerLiteral> integer_reason,
-      int trail_index_with_same_reason);
+      int trail_index_with_same_reason = std::numeric_limits<int>::max());
 
   // Internal implementation of the EnqueueLiteral() functions.
-  void EnqueueLiteralInternal(Literal literal, LazyReasonFunction lazy_reason,
-                              absl::Span<const Literal> literal_reason,
-                              absl::Span<const IntegerLiteral> integer_reason);
+  ABSL_MUST_USE_RESULT bool EnqueueLiteralInternal(
+      Literal literal, bool use_lazy_reason,
+      absl::Span<const Literal> literal_reason,
+      absl::Span<const IntegerLiteral> integer_reason);
 
   // Same as EnqueueInternal() but for the case where we push an IntegerLiteral
   // because an associated Literal is true (and we know it). In this case, we
@@ -1005,124 +1060,148 @@ class IntegerTrail : public SatPropagator {
       IntegerLiteral i_lit, Literal literal_reason);
 
   // Does the work of MergeReasonInto() when queue_ is already initialized.
-  void MergeReasonIntoInternal(std::vector<Literal>* output) const;
+  void MergeReasonIntoInternal(std::vector<Literal>* output,
+                               int64_t conflict_id) const;
 
   // Returns the lowest trail index of a TrailEntry that can be used to explain
-  // the given IntegerLiteral. The literal must be currently true (CHECKed).
-  // Returns -1 if the explanation is trivial.
+  // the given IntegerLiteral. The literal must be currently true but not true
+  // at level zero (DCHECKed).
   int FindLowestTrailIndexThatExplainBound(IntegerLiteral i_lit) const;
 
   // This must be called before Dependencies() or AppendLiteralsReason().
   //
   // TODO(user): Not really robust, try to find a better way.
-  void ComputeLazyReasonIfNeeded(int trail_index) const;
+  void ComputeLazyReasonIfNeeded(ReasonIndex index) const;
 
   // Helper function to return the "dependencies" of a bound assignment.
   // All the TrailEntry at these indices are part of the reason for this
   // assignment.
   //
   // Important: The returned Span is only valid up to the next call.
-  absl::Span<const int> Dependencies(int trail_index) const;
+  absl::Span<const int> Dependencies(ReasonIndex index) const;
 
   // Helper function to append the Literal part of the reason for this bound
   // assignment. We use added_variables_ to not add the same literal twice.
   // Note that looking at literal.Variable() is enough since all the literals
   // of a reason must be false.
-  void AppendLiteralsReason(int trail_index,
+  void AppendLiteralsReason(ReasonIndex index,
                             std::vector<Literal>* output) const;
 
   // Returns some debugging info.
   std::string DebugString();
 
-  // Information for each internal variable about its current bound.
-  struct VarInfo {
-    // The current bound on this variable.
-    IntegerValue current_bound;
-
-    // Trail index of the last TrailEntry in the trail referring to this var.
-    int current_trail_index;
-  };
-  absl::StrongVector<IntegerVariable, VarInfo> vars_;
+  // Information for each integer variable about its current lower bound and
+  // position of the last TrailEntry in the trail referring to this var.
+  util_intops::StrongVector<IntegerVariable, IntegerValue> var_lbs_;
+  util_intops::StrongVector<IntegerVariable, int> var_trail_index_;
 
   // This is used by FindLowestTrailIndexThatExplainBound() and
   // FindTrailIndexOfVarBefore() to speed up the lookup. It keeps a trail index
   // for each variable that may or may not point to a TrailEntry regarding this
-  // variable. The validity of the index is verified before beeing used.
+  // variable. The validity of the index is verified before being used.
   //
   // The cache will only be updated with trail_index >= threshold.
   mutable int var_trail_index_cache_threshold_ = 0;
-  mutable absl::StrongVector<IntegerVariable, int> var_trail_index_cache_;
+  mutable util_intops::StrongVector<IntegerVariable, int>
+      var_trail_index_cache_;
 
   // Used by GetOrCreateConstantIntegerVariable() to return already created
   // constant variables that share the same value.
   absl::flat_hash_map<IntegerValue, IntegerVariable> constant_map_;
 
   // The integer trail. It always start by num_vars sentinel values with the
-  // level 0 bounds (in one to one correspondence with vars_).
+  // level 0 bounds (in one to one correspondence with var_lbs_).
   struct TrailEntry {
     IntegerValue bound;
     IntegerVariable var;
-    int32_t prev_trail_index;
+    int32_t prev_trail_index = -1;
 
-    // Index in literals_reason_start_/bounds_reason_starts_ If this is -1, then
-    // this was a propagation with a lazy reason, and the reason can be
-    // re-created by calling the function lazy_reasons_[trail_index].
-    int32_t reason_index;
+    // Index in literals_reason_start_/bounds_reason_starts_ If this is negative
+    // then it is a lazy reason.
+    ReasonIndex reason_index = ReasonIndex(0);
   };
   std::vector<TrailEntry> integer_trail_;
-  std::vector<LazyReasonFunction> lazy_reasons_;
+
+  // trail->CurrentDecisionLevel() and trail_->Index() at the time this entry
+  // was added. This is only used when use_new_integer_conflict_resolution is
+  // true.
+  struct ExtraTrailEntry {
+    int32_t assignment_level;
+    int32_t bool_trail_index;
+  };
+  std::vector<ExtraTrailEntry> extra_trail_info_;
+
+  struct LazyReasonEntry {
+    LazyReasonInterface* explainer;
+    IntegerValue propagation_slack;
+    IntegerLiteral propagated_i_lit;
+    int id;
+    int trail_index_at_propagation_time;
+
+    // TODO(user): I am not sure we need to store
+    // trail_index_at_propagation_time as we will know it when we call this
+    // Explain function. Make sure this is the case and just clean this up.
+    // We can assume the info refer the time when this entry was added.
+    void Explain(IntegerValue bound_to_explain, IntegerReason* reason) const {
+      DCHECK_LE(bound_to_explain, propagated_i_lit.bound);
+      reason->clear();
+      reason->slack = propagation_slack;
+      reason->propagated_i_lit = propagated_i_lit;
+      reason->index_at_propagation = trail_index_at_propagation_time;
+      explainer->Explain(id,
+                         IntegerLiteral::GreaterOrEqual(propagated_i_lit.var,
+                                                        bound_to_explain),
+                         reason);
+    }
+
+    void Explain(IntegerReason* reason) const {
+      Explain(propagated_i_lit.bound, reason);
+    }
+  };
+  std::vector<int> lazy_reason_decision_levels_;
+  util_intops::StrongVector<ReasonIndex, LazyReasonEntry> lazy_reasons_;
 
   // Start of each decision levels in integer_trail_.
   // TODO(user): use more general reversible mechanism?
   std::vector<int> integer_search_levels_;
 
   // Buffer to store the reason of each trail entry.
-  // Note that bounds_reason_buffer_ is an "union". It initially contains the
-  // IntegerLiteral, and is lazily replaced by the result of
-  // FindLowestTrailIndexThatExplainBound() applied to these literals. The
-  // encoding is a bit hacky, see Dependencies().
-  std::vector<int> reason_decision_levels_;
-  std::vector<int> literals_reason_starts_;
-  std::vector<int> bounds_reason_starts_;
+  std::vector<ReasonIndex> reason_decision_levels_;
+  util_intops::StrongVector<ReasonIndex, int> literals_reason_starts_;
   std::vector<Literal> literals_reason_buffer_;
 
-  // These two vectors are in one to one correspondence. Dependencies() will
+  // The last two vectors are in one to one correspondence. Dependencies() will
   // "cache" the result of the conversion from IntegerLiteral to trail indices
   // in trail_index_reason_buffer_.
+  util_intops::StrongVector<ReasonIndex, int> bounds_reason_starts_;
+  mutable util_intops::StrongVector<ReasonIndex, int> cached_sizes_;
   std::vector<IntegerLiteral> bounds_reason_buffer_;
   mutable std::vector<int> trail_index_reason_buffer_;
 
+  // Temporary data for IntegerReason.
+  IntegerReason tmp_reason_;
+  std::vector<Literal> tmp_lazy_reason_boolean_literals_;
+  std::vector<IntegerLiteral> tmp_lazy_reason_integer_literals_;
+
+  // Temporary for use with tmp_reason_.
+  // Tricky: these cannot be the same as the one used by lazy reason.
+  std::vector<Literal> tmp_boolean_literals_;
+  std::vector<IntegerLiteral> tmp_integer_literals_;
+
   // Temporary vector filled by calls to LazyReasonFunction().
+  mutable IntegerReason tmp_lazy_reason_;
   mutable std::vector<Literal> lazy_reason_literals_;
   mutable std::vector<int> lazy_reason_trail_indices_;
-
-  // The "is_ignored" literal of the optional variables or kNoLiteralIndex.
-  absl::StrongVector<IntegerVariable, LiteralIndex> is_ignored_literals_;
-
-  // This is only filled for variables with a domain more complex than a single
-  // interval of values. var_to_current_lb_interval_index_[var] stores the
-  // intervals in (*domains_)[var] where the current lower-bound lies.
-  //
-  // TODO(user): Avoid using hash_map here, a simple vector should be more
-  // efficient, but we need the "rev" aspect.
-  RevMap<absl::flat_hash_map<IntegerVariable, int>>
-      var_to_current_lb_interval_index_;
+  mutable std::vector<int> tmp_trail_indices_;
+  mutable std::vector<IntegerValue> tmp_coeffs_;
 
   // Temporary data used by MergeReasonInto().
   mutable bool has_dependency_ = false;
   mutable std::vector<int> tmp_queue_;
   mutable std::vector<IntegerVariable> tmp_to_clear_;
-  mutable absl::StrongVector<IntegerVariable, int>
+  mutable util_intops::StrongVector<IntegerVariable, int>
       tmp_var_to_trail_index_in_queue_;
   mutable SparseBitset<BooleanVariable> added_variables_;
-
-  // Sometimes we propagate fact with no reason at a positive level, those
-  // will automatically be fixed on the next restart.
-  //
-  // TODO(user): If we change the logic to not restart right away, we probably
-  // need to not store duplicates bounds for the same variable.
-  std::vector<Literal> literal_to_fix_;
-  std::vector<IntegerLiteral> integer_literal_to_fix_;
 
   // Temporary heap used by RelaxLinearReason();
   struct RelaxHeapEntry {
@@ -1137,16 +1216,27 @@ class IntegerTrail : public SatPropagator {
   // Temporary data used by AppendNewBounds().
   mutable SparseBitset<IntegerVariable> tmp_marked_;
 
-  // For EnqueueLiteral(), we store a special TrailEntry to recover the reason
-  // lazily. This vector indicates the correspondence between a literal that
-  // was pushed by this class at a given trail index, and the index of its
-  // TrailEntry in integer_trail_.
-  std::vector<int> boolean_trail_index_to_integer_one_;
+  // Temporary data used by SafeEnqueue();
+  std::vector<IntegerLiteral> tmp_cleaned_reason_;
+
+  // For EnqueueLiteral(), we store the reason index at its Boolean trail index.
+  std::vector<ReasonIndex> boolean_trail_index_to_reason_index_;
 
   // We need to know if we skipped some propagation in the current branch.
   // This is reverted as we backtrack over it.
   int first_level_without_full_propagation_ = -1;
 
+  // This is used to detect when MergeReasonIntoInternal() is called multiple
+  // time while processing the same conflict. It allows to optimize the reason
+  // and the time taken to compute it.
+  mutable int64_t last_conflict_id_ = -1;
+  mutable bool info_is_valid_on_subsequent_last_level_expansion_ = false;
+  mutable util_intops::StrongVector<IntegerVariable, int>
+      var_to_trail_index_at_lower_level_;
+  mutable std::vector<int> tmp_seen_;
+  mutable std::vector<IntegerVariable> to_clear_for_lower_level_;
+
+  int64_t global_id_conflict_timestamp_ = 0;
   int64_t num_enqueues_ = 0;
   int64_t num_untrails_ = 0;
   int64_t num_level_zero_enqueues_ = 0;
@@ -1155,10 +1245,21 @@ class IntegerTrail : public SatPropagator {
   std::vector<SparseBitset<IntegerVariable>*> watchers_;
   std::vector<ReversibleInterface*> reversible_classes_;
 
+  mutable int64_t work_done_in_find_indices_ = 0;
+
+  mutable Domain temp_domain_;
+  DelayedRootLevelDeduction* delayed_to_fix_;
   IntegerDomains* domains_;
   IntegerEncoder* encoder_;
   Trail* trail_;
+  SatSolver* sat_solver_;
+  TimeLimit* time_limit_;
   const SatParameters& parameters_;
+
+  bool new_conflict_resolution_ = false;
+
+  std::vector<Literal> tmp_literal_reason_;
+  std::vector<IntegerLiteral> tmp_integer_reason_;
 
   // Temporary "hash" to keep track of all the conditional enqueue that were
   // done. Note that we currently do not keep any reason for them, and as such,
@@ -1166,14 +1267,16 @@ class IntegerTrail : public SatPropagator {
   absl::flat_hash_map<std::pair<LiteralIndex, IntegerVariable>, IntegerValue>
       conditional_lbs_;
 
-  DISALLOW_COPY_AND_ASSIGN(IntegerTrail);
+  std::function<bool(absl::Span<const Literal> clause,
+                     absl::Span<const IntegerLiteral> integers)>
+      debug_checker_ = nullptr;
 };
 
 // Base class for CP like propagators.
 class PropagatorInterface {
  public:
-  PropagatorInterface() {}
-  virtual ~PropagatorInterface() {}
+  PropagatorInterface() = default;
+  virtual ~PropagatorInterface() = default;
 
   // This will be called after one or more literals that are watched by this
   // propagator changed. It will also always be called on the first propagation
@@ -1193,7 +1296,7 @@ class PropagatorInterface {
   // - At level zero, it will not contain any indices associated with literals
   //   that were already fixed when the propagator was registered. Only the
   //   indices of the literals modified after the registration will be present.
-  virtual bool IncrementalPropagate(const std::vector<int>& watch_indices) {
+  virtual bool IncrementalPropagate(const std::vector<int>& /*watch_indices*/) {
     LOG(FATAL) << "Not implemented.";
     return false;  // Remove warning in Windows
   }
@@ -1218,10 +1321,18 @@ class RevIntegerValueRepository : public RevRepository<IntegerValue> {
 // watched Literal or LbVar changes.
 //
 // TODO(user): Move this to its own file. Add unit tests!
-class GenericLiteralWatcher : public SatPropagator {
+class GenericLiteralWatcher final : public SatPropagator {
  public:
   explicit GenericLiteralWatcher(Model* model);
-  ~GenericLiteralWatcher() final {}
+
+  // This type is neither copyable nor movable.
+  GenericLiteralWatcher(const GenericLiteralWatcher&) = delete;
+  GenericLiteralWatcher& operator=(const GenericLiteralWatcher&) = delete;
+
+  ~GenericLiteralWatcher() final = default;
+
+  // Memory optimization: you can call this before registering watchers.
+  void ReserveSpaceForNumVariables(int num_vars);
 
   // On propagate, the registered propagators will be called if they need to
   // until a fixed point is reached. Propagators with low ids will tend to be
@@ -1260,7 +1371,7 @@ class GenericLiteralWatcher : public SatPropagator {
   void WatchUpperBound(IntegerVariable var, int id, int watch_index = -1);
   void WatchIntegerVariable(IntegerVariable i, int id, int watch_index = -1);
 
-  // Because the coeff is always positive, whatching an affine expression is
+  // Because the coeff is always positive, watching an affine expression is
   // the same as watching its var.
   void WatchLowerBound(AffineExpression e, int id) {
     WatchLowerBound(e.var, id);
@@ -1274,9 +1385,9 @@ class GenericLiteralWatcher : public SatPropagator {
 
   // No-op overload for "constant" IntegerVariable that are sometimes templated
   // as an IntegerValue.
-  void WatchLowerBound(IntegerValue i, int id) {}
-  void WatchUpperBound(IntegerValue i, int id) {}
-  void WatchIntegerVariable(IntegerValue v, int id) {}
+  void WatchLowerBound(IntegerValue /*i*/, int /*id*/) {}
+  void WatchUpperBound(IntegerValue /*i*/, int /*id*/) {}
+  void WatchIntegerVariable(IntegerValue /*v*/, int /*id*/) {}
 
   // Registers a reversible class with a given propagator. This class will be
   // changed to the correct state just before the propagator is called.
@@ -1297,8 +1408,26 @@ class GenericLiteralWatcher : public SatPropagator {
   // Alternatively, one can directly get the underlying RevRepository<int> with
   // a call to model.Get<>(), and use SaveWithStamp() before each modification
   // to have just a slight overhead per int updates. This later option is what
-  // is usually done in a CP solver at the cost of a sligthly more complex API.
+  // is usually done in a CP solver at the cost of a slightly more complex API.
   void RegisterReversibleInt(int id, int* rev);
+
+  // A simple form of incremental update is to maintain state as we dive into
+  // the search tree but forget everything on every backtrack. A propagator
+  // can be called many times by decision, so this can make a large proportion
+  // of the calls incremental.
+  //
+  // This allows to achieve this with a really low overhead.
+  //
+  // The propagator can define a bool rev_is_in_dive_ = false; and at the
+  // beginning of each propagate do:
+  // const bool no_backtrack_since_last_call = rev_is_in_dive_;
+  // watcher_->SetUntilNextBacktrack(&rev_is_in_dive_);
+  void SetUntilNextBacktrack(bool* is_in_dive) {
+    if (!*is_in_dive) {
+      *is_in_dive = true;
+      bool_to_reset_on_backtrack_.push_back(is_in_dive);
+    }
+  }
 
   // Returns the number of registered propagators.
   int NumPropagators() const { return in_queue_.size(); }
@@ -1317,10 +1446,29 @@ class GenericLiteralWatcher : public SatPropagator {
     level_zero_modified_variable_callback_.push_back(cb);
   }
 
+  // This will be called not too often during propagation (when we finish
+  // propagating one priority). If it returns true, we will stop propagation
+  // there. It is used by LbTreeSearch as we can stop as soon as the objective
+  // lower bound crossed a threshold and do not need to call expensive
+  // propagator when this is the case.
+  void SetStopPropagationCallback(std::function<bool()> callback) {
+    stop_propagation_callback_ = callback;
+  }
+
   // Returns the id of the propagator we are currently calling. This is meant
   // to be used from inside Propagate() in case a propagator was registered
   // more than once at different priority for instance.
   int GetCurrentId() const { return current_id_; }
+
+  // Add the given propagator to its queue.
+  //
+  // Warning: This will have no effect if called from within the propagation of
+  // a propagator since the propagator is still marked as "in the queue" until
+  // its propagation is done. Use CallAgainDuringThisPropagation() if that is
+  // what you need instead.
+  void CallOnNextPropagate(int id);
+
+  void CallAgainDuringThisPropagation() { call_again_ = true; };
 
  private:
   // Updates queue_ and in_queue_ with the propagator ids that need to be
@@ -1338,10 +1486,15 @@ class GenericLiteralWatcher : public SatPropagator {
       return id == o.id && watch_index == o.watch_index;
     }
   };
-  absl::StrongVector<LiteralIndex, std::vector<WatchData>> literal_to_watcher_;
-  absl::StrongVector<IntegerVariable, std::vector<WatchData>> var_to_watcher_;
+  util_intops::StrongVector<LiteralIndex, std::vector<WatchData>>
+      literal_to_watcher_;
+  util_intops::StrongVector<IntegerVariable, std::vector<WatchData>>
+      var_to_watcher_;
   std::vector<PropagatorInterface*> watchers_;
   SparseBitset<IntegerVariable> modified_vars_;
+
+  // For RegisterLevelZeroModifiedVariablesCallback().
+  SparseBitset<IntegerVariable> modified_vars_for_callback_;
 
   // Propagator ids that needs to be called. There is one queue per priority but
   // just one Boolean to indicate if a propagator is in one of them.
@@ -1349,11 +1502,13 @@ class GenericLiteralWatcher : public SatPropagator {
   std::vector<bool> in_queue_;
 
   // Data for each propagator.
-  DEFINE_INT_TYPE(IdType, int32_t);
+  DEFINE_STRONG_INDEX_TYPE(IdType);
+  std::vector<bool> id_need_reversible_support_;
   std::vector<int> id_to_level_at_last_call_;
   RevVector<IdType, int> id_to_greatest_common_level_since_last_call_;
   std::vector<std::vector<ReversibleInterface*>> id_to_reversible_classes_;
   std::vector<std::vector<int*>> id_to_reversible_ints_;
+
   std::vector<std::vector<int>> id_to_watch_indices_;
   std::vector<int> id_to_priority_;
   std::vector<int> id_to_idempotence_;
@@ -1363,105 +1518,61 @@ class GenericLiteralWatcher : public SatPropagator {
 
   // The id of the propagator we just called.
   int current_id_;
+  bool call_again_ = false;
 
   std::vector<std::function<void(const std::vector<IntegerVariable>&)>>
       level_zero_modified_variable_callback_;
 
-  DISALLOW_COPY_AND_ASSIGN(GenericLiteralWatcher);
+  std::function<bool()> stop_propagation_callback_;
+
+  std::vector<bool*> bool_to_reset_on_backtrack_;
 };
 
 // ============================================================================
 // Implementation.
 // ============================================================================
 
-inline IntegerLiteral IntegerLiteral::GreaterOrEqual(IntegerVariable i,
-                                                     IntegerValue bound) {
-  return IntegerLiteral(
-      i, bound > kMaxIntegerValue ? kMaxIntegerValue + 1 : bound);
-}
-
-inline IntegerLiteral IntegerLiteral::LowerOrEqual(IntegerVariable i,
-                                                   IntegerValue bound) {
-  return IntegerLiteral(
-      NegationOf(i), bound < kMinIntegerValue ? kMaxIntegerValue + 1 : -bound);
-}
-
-inline IntegerLiteral IntegerLiteral::TrueLiteral() {
-  return IntegerLiteral(kNoIntegerVariable, IntegerValue(-1));
-}
-
-inline IntegerLiteral IntegerLiteral::FalseLiteral() {
-  return IntegerLiteral(kNoIntegerVariable, IntegerValue(1));
-}
-
-inline IntegerLiteral IntegerLiteral::Negated() const {
-  // Note that bound >= kMinIntegerValue, so -bound + 1 will have the correct
-  // capped value.
-  return IntegerLiteral(
-      NegationOf(IntegerVariable(var)),
-      bound > kMaxIntegerValue ? kMinIntegerValue : -bound + 1);
-}
-
-// var * coeff + constant >= bound.
-inline IntegerLiteral AffineExpression::GreaterOrEqual(
-    IntegerValue bound) const {
-  if (var == kNoIntegerVariable) {
-    return constant >= bound ? IntegerLiteral::TrueLiteral()
-                             : IntegerLiteral::FalseLiteral();
-  }
-  DCHECK_GT(coeff, 0);
-  return IntegerLiteral::GreaterOrEqual(var,
-                                        CeilRatio(bound - constant, coeff));
-}
-
-inline IntegerLiteral AffineExpression::GreaterOrEqual(int64_t bound) const {
-  return GreaterOrEqual(IntegerValue(bound));
-}
-
-// var * coeff + constant <= bound.
-inline IntegerLiteral AffineExpression::LowerOrEqual(IntegerValue bound) const {
-  if (var == kNoIntegerVariable) {
-    return constant <= bound ? IntegerLiteral::TrueLiteral()
-                             : IntegerLiteral::FalseLiteral();
-  }
-  DCHECK_GT(coeff, 0);
-  return IntegerLiteral::LowerOrEqual(var, FloorRatio(bound - constant, coeff));
-}
-
-inline IntegerLiteral AffineExpression::LowerOrEqual(int64_t bound) const {
-  return LowerOrEqual(IntegerValue(bound));
-}
-
 inline IntegerValue IntegerTrail::LowerBound(IntegerVariable i) const {
-  return vars_[i].current_bound;
+  return var_lbs_[i];
 }
 
 inline IntegerValue IntegerTrail::UpperBound(IntegerVariable i) const {
-  return -vars_[NegationOf(i)].current_bound;
+  return -var_lbs_[NegationOf(i)];
 }
 
 inline bool IntegerTrail::IsFixed(IntegerVariable i) const {
-  return vars_[i].current_bound == -vars_[NegationOf(i)].current_bound;
+  return var_lbs_[i] == -var_lbs_[NegationOf(i)];
 }
 
 inline IntegerValue IntegerTrail::FixedValue(IntegerVariable i) const {
   DCHECK(IsFixed(i));
-  return vars_[i].current_bound;
+  return var_lbs_[i];
 }
 
 inline IntegerValue IntegerTrail::ConditionalLowerBound(
     Literal l, IntegerVariable i) const {
   const auto it = conditional_lbs_.find({l.Index(), i});
   if (it != conditional_lbs_.end()) {
-    return std::max(vars_[i].current_bound, it->second);
+    return std::max(var_lbs_[i], it->second);
   }
-  return vars_[i].current_bound;
+  return var_lbs_[i];
 }
 
 inline IntegerValue IntegerTrail::ConditionalLowerBound(
     Literal l, AffineExpression expr) const {
   if (expr.var == kNoIntegerVariable) return expr.constant;
   return ConditionalLowerBound(l, expr.var) * expr.coeff + expr.constant;
+}
+
+inline IntegerValue IntegerTrail::ConditionalUpperBound(
+    Literal l, IntegerVariable i) const {
+  return -ConditionalLowerBound(l, NegationOf(i));
+}
+
+inline IntegerValue IntegerTrail::ConditionalUpperBound(
+    Literal l, AffineExpression expr) const {
+  if (expr.var == kNoIntegerVariable) return expr.constant;
+  return ConditionalUpperBound(l, expr.var) * expr.coeff + expr.constant;
 }
 
 inline IntegerLiteral IntegerTrail::LowerBoundAsLiteral(
@@ -1482,6 +1593,20 @@ inline IntegerValue IntegerTrail::LowerBound(AffineExpression expr) const {
 inline IntegerValue IntegerTrail::UpperBound(AffineExpression expr) const {
   if (expr.var == kNoIntegerVariable) return expr.constant;
   return UpperBound(expr.var) * expr.coeff + expr.constant;
+}
+
+inline IntegerValue IntegerTrail::UpperBound(LinearExpression2 expr) const {
+  IntegerValue result = 0;
+  for (int i = 0; i < 2; ++i) {
+    if (expr.coeffs[i] == 0) {
+      continue;
+    } else if (expr.coeffs[i] > 0) {
+      result += expr.coeffs[i] * UpperBound(expr.vars[i]);
+    } else {
+      result += expr.coeffs[i] * LowerBound(expr.vars[i]);
+    }
+  }
+  return result;
 }
 
 inline bool IntegerTrail::IsFixed(AffineExpression expr) const {
@@ -1514,10 +1639,16 @@ inline bool IntegerTrail::IntegerLiteralIsFalse(IntegerLiteral l) const {
   return l.bound > UpperBound(l.var);
 }
 
+inline bool IntegerTrail::IsTrueAtLevelZero(IntegerLiteral l) const {
+  return l.bound <= LevelZeroLowerBound(l.var);
+}
+
 // The level zero bounds are stored at the beginning of the trail and they also
 // serves as sentinels. Their index match the variables index.
 inline IntegerValue IntegerTrail::LevelZeroLowerBound(
     IntegerVariable var) const {
+  DCHECK_GE(var, 0);
+  DCHECK_LT(var, integer_trail_.size());
   return integer_trail_[var.value()].bound;
 }
 
@@ -1543,6 +1674,30 @@ inline IntegerValue IntegerTrail::LevelZeroUpperBound(
   return expr.ValueAt(LevelZeroUpperBound(expr.var));
 }
 
+inline IntegerValue IntegerTrail::LevelZeroLowerBound(
+    LinearExpression2 expr) const {
+  expr.SimpleCanonicalization();
+  IntegerValue result = 0;
+  for (int i = 0; i < 2; ++i) {
+    if (expr.coeffs[i] != 0) {
+      result += expr.coeffs[i] * LevelZeroLowerBound(expr.vars[i]);
+    }
+  }
+  return result;
+}
+
+inline IntegerValue IntegerTrail::LevelZeroUpperBound(
+    LinearExpression2 expr) const {
+  expr.SimpleCanonicalization();
+  IntegerValue result = 0;
+  for (int i = 0; i < 2; ++i) {
+    if (expr.coeffs[i] != 0) {
+      result += expr.coeffs[i] * LevelZeroUpperBound(expr.vars[i]);
+    }
+  }
+  return result;
+}
+
 inline bool IntegerTrail::IsFixedAtLevelZero(AffineExpression expr) const {
   if (expr.var == kNoIntegerVariable) return true;
   return IsFixedAtLevelZero(expr.var);
@@ -1553,7 +1708,7 @@ inline void GenericLiteralWatcher::WatchLiteral(Literal l, int id,
   if (l.Index() >= literal_to_watcher_.size()) {
     literal_to_watcher_.resize(l.Index().value() + 1);
   }
-  literal_to_watcher_[l.Index()].push_back({id, watch_index});
+  literal_to_watcher_[l].push_back({id, watch_index});
 }
 
 inline void GenericLiteralWatcher::WatchLowerBound(IntegerVariable var, int id,
@@ -1627,26 +1782,33 @@ inline std::function<IntegerVariable(Model*)> NewIntegerVariable(
 
 // Creates a 0-1 integer variable "view" of the given literal. It will have a
 // value of 1 when the literal is true, and 0 when the literal is false.
+inline IntegerVariable CreateNewIntegerVariableFromLiteral(Literal lit,
+                                                           Model* model) {
+  auto* encoder = model->GetOrCreate<IntegerEncoder>();
+  const IntegerVariable candidate = encoder->GetLiteralView(lit);
+  if (candidate != kNoIntegerVariable) return candidate;
+
+  IntegerVariable var;
+  auto* integer_trail = model->GetOrCreate<IntegerTrail>();
+  const auto& assignment = model->GetOrCreate<SatSolver>()->Assignment();
+  if (assignment.LiteralIsTrue(lit)) {
+    var = integer_trail->GetOrCreateConstantIntegerVariable(IntegerValue(1));
+  } else if (assignment.LiteralIsFalse(lit)) {
+    var = integer_trail->GetOrCreateConstantIntegerVariable(IntegerValue(0));
+  } else {
+    var = integer_trail->AddIntegerVariable(IntegerValue(0), IntegerValue(1));
+  }
+
+  encoder->AssociateToIntegerEqualValue(lit, var, IntegerValue(1));
+  DCHECK_NE(encoder->GetLiteralView(lit), kNoIntegerVariable);
+  return var;
+}
+
+// Deprecated.
 inline std::function<IntegerVariable(Model*)> NewIntegerVariableFromLiteral(
     Literal lit) {
   return [=](Model* model) {
-    auto* encoder = model->GetOrCreate<IntegerEncoder>();
-    const IntegerVariable candidate = encoder->GetLiteralView(lit);
-    if (candidate != kNoIntegerVariable) return candidate;
-
-    IntegerVariable var;
-    const auto& assignment = model->GetOrCreate<SatSolver>()->Assignment();
-    if (assignment.LiteralIsTrue(lit)) {
-      var = model->Add(ConstantIntegerVariable(1));
-    } else if (assignment.LiteralIsFalse(lit)) {
-      var = model->Add(ConstantIntegerVariable(0));
-    } else {
-      var = model->Add(NewIntegerVariable(0, 1));
-    }
-
-    encoder->AssociateToIntegerEqualValue(lit, var, IntegerValue(1));
-    DCHECK_NE(encoder->GetLiteralView(lit), kNoIntegerVariable);
-    return var;
+    return CreateNewIntegerVariableFromLiteral(lit, model);
   };
 }
 
@@ -1699,10 +1861,9 @@ inline std::function<void(Model*)> LowerOrEqual(IntegerVariable v, int64_t ub) {
             IntegerLiteral::LowerOrEqual(v, IntegerValue(ub)),
             std::vector<Literal>(), std::vector<IntegerLiteral>())) {
       model->GetOrCreate<SatSolver>()->NotifyThatModelIsUnsat();
-      LOG(WARNING) << "Model trivially infeasible, variable " << v
-                   << " has lower bound " << model->Get(LowerBound(v))
-                   << " and LowerOrEqual() was called with an upper bound of "
-                   << ub;
+      VLOG(1) << "Model trivially infeasible, variable " << v
+              << " has lower bound " << model->Get(LowerBound(v))
+              << " and LowerOrEqual() was called with an upper bound of " << ub;
     }
   };
 }
@@ -1722,9 +1883,10 @@ inline std::function<void(Model*)> Equality(IntegerVariable v, int64_t value) {
 // is the same as using different underlying variable for an integer literal and
 // its negation.
 inline std::function<void(Model*)> Implication(
-    const std::vector<Literal>& enforcement_literals, IntegerLiteral i) {
+    absl::Span<const Literal> enforcement_literals, IntegerLiteral i) {
   return [=](Model* model) {
-    IntegerTrail* integer_trail = model->GetOrCreate<IntegerTrail>();
+    auto* sat_solver = model->GetOrCreate<SatSolver>();
+    auto* integer_trail = model->GetOrCreate<IntegerTrail>();
     if (i.bound <= integer_trail->LowerBound(i.var)) {
       // Always true! nothing to do.
     } else if (i.bound > integer_trail->UpperBound(i.var)) {
@@ -1733,7 +1895,7 @@ inline std::function<void(Model*)> Implication(
       for (const Literal literal : enforcement_literals) {
         clause.push_back(literal.Negated());
       }
-      model->Add(ClauseConstraint(clause));
+      sat_solver->AddClauseDuringSearch(clause);
     } else {
       // TODO(user): Double check what happen when we associate a trivially
       // true or false literal.
@@ -1742,7 +1904,7 @@ inline std::function<void(Model*)> Implication(
       for (const Literal literal : enforcement_literals) {
         clause.push_back(literal.Negated());
       }
-      model->Add(ClauseConstraint(clause));
+      sat_solver->AddClauseDuringSearch(clause);
     }
   };
 }
@@ -1781,15 +1943,7 @@ inline std::function<std::vector<ValueLiteralPair>(Model*)> FullyEncodeVariable(
   };
 }
 
-// Same as ExcludeCurrentSolutionAndBacktrack() but this version works for an
-// integer problem with optional variables. The issue is that an optional
-// variable that is ignored can basically take any value, and we don't really
-// want to enumerate them. This function should exclude all solutions where
-// only the ignored variable values change.
-std::function<void(Model*)>
-ExcludeCurrentSolutionWithoutIgnoredVariableAndBacktrack();
-
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_INTEGER_H_
+#endif  // ORTOOLS_SAT_INTEGER_H_

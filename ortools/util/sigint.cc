@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,33 +14,61 @@
 #include "ortools/util/sigint.h"
 
 #include <csignal>
+#include <cstdlib>
+#include <functional>
 
 #include "ortools/base/logging.h"
+#include "ortools/port/os.h"
+
+#if ORTOOLS_TARGET_OS_SUPPORTS_THREADS
 
 namespace operations_research {
 
 void SigintHandler::Register(const std::function<void()>& f) {
   handler_ = [this, f]() -> void {
-    ++num_sigint_calls_;
-    if (num_sigint_calls_ >= 3) {
-      LOG(INFO) << "^C pressed " << num_sigint_calls_
-                << " times. Forcing termination.";
+    const int num_calls = ++num_calls_;
+    if (num_calls < 3) {
+      LOG(INFO)
+          << "^C pressed " << num_calls << " times. "
+          << "Interrupting the solver. Press 3 times to force termination.";
+      if (num_calls == 1) f();
+    } else if (num_calls == 3) {
+      LOG(INFO) << "^C pressed 3 times. Forcing termination.";
       exit(EXIT_FAILURE);
+    } else {
+      // Another thread is already running exit(), do nothing.
     }
-    LOG(INFO) << "^C pressed " << num_sigint_calls_ << " times. "
-              << "Interrupting the solver. Press 3 times to force termination.";
-    if (num_sigint_calls_ == 1) f();
   };
-  signal(SIGINT, &ControlCHandler);
+  signal(SIGINT, &SigHandler);
 }
 
 // This method will be called by the system after the SIGINT signal.
 // The parameter is the signal received.
-void SigintHandler::ControlCHandler(int sig) { handler_(); }
+void SigintHandler::SigHandler(int) { handler_(); }
 
-// Unregister the SIGINT handler.
-SigintHandler::~SigintHandler() { signal(SIGINT, SIG_DFL); }
+// Unregister the signal handlers.
+SigintHandler::~SigintHandler() {
+  if (handler_ != nullptr) signal(SIGINT, SIG_DFL);
+}
 
 thread_local std::function<void()> SigintHandler::handler_;
 
+void SigtermHandler::Register(const std::function<void()>& f) {
+  handler_ = [f]() -> void { f(); };
+  signal(SIGTERM, &SigHandler);
+}
+
+// This method will be called by the system after the SIGTERM signal.
+// The parameter is the signal received.
+void SigtermHandler::SigHandler(int) { handler_(); }
+
+// Unregister the signal handlers.
+SigtermHandler::~SigtermHandler() {
+  if (handler_ != nullptr) signal(SIGTERM, SIG_DFL);
+}
+
+thread_local std::function<void()> SigtermHandler::handler_;
+
 }  // namespace operations_research
+
+#endif  // ORTOOLS_TARGET_OS_SUPPORTS_THREADS

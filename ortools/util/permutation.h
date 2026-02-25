@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//
 // Classes for permuting indexable, ordered containers of data without
 // depending on that data to be accessible in any particular way. The
 // client needs to give us two things:
@@ -42,17 +41,12 @@
 // simple because the containers of interest can be indexable without
 // providing any consistent way of accessing their contents that
 // applies to all the containers of interest. For instance, if we
-// could insist that every indexable container must define an lvalue
-// operator[]() we could simply use that for the assignments we need
-// to do while walking around cycles of the permutation. But we cannot
-// insist on any such thing. To see why, consider the PackedArray
-// class template in ortools/util/packed_array.h
-// where operator[] is supplied for rvalues, but because each logical
-// array element is packed across potentially multiple instances of
-// the underlying data type that the C++ language knows about, there
-// is no way to have a C++ reference to an element of a
-// PackedArray. There are other such examples besides PackedArray,
-// too. This is the main reason we need a codified description (2) of
+// could insist that every indexable container must define a
+// `value_type& operator[]` we could simply use that for the assignments we need
+// to do while walking around cycles of the permutation. This is not guaranteed
+// though (common examples are `std::vector<bool>` or containers of bit-sized
+// integers for which no c++ reference exists).
+// This is the main reason we need a codified description (2) of
 // how to move data around in the indexable container. That
 // description comes to us via the PermutationApplier constructor's
 // argument which is a PermutationCycleHandler instance. Such an
@@ -80,11 +74,10 @@
 // operator[](), we provide the class template
 // ArrayIndexCycleHandler.
 
-#ifndef OR_TOOLS_UTIL_PERMUTATION_H_
-#define OR_TOOLS_UTIL_PERMUTATION_H_
+#ifndef ORTOOLS_UTIL_PERMUTATION_H_
+#define ORTOOLS_UTIL_PERMUTATION_H_
 
 #include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
 
 namespace operations_research {
 
@@ -93,6 +86,10 @@ namespace operations_research {
 template <typename IndexType>
 class PermutationCycleHandler {
  public:
+  // This type is neither copyable nor movable.
+  PermutationCycleHandler(const PermutationCycleHandler&) = delete;
+  PermutationCycleHandler& operator=(const PermutationCycleHandler&) = delete;
+
   // Sets the internal temporary storage from the given index in the
   // underlying container(s).
   virtual void SetTempFromIndex(IndexType source) = 0;
@@ -133,9 +130,6 @@ class PermutationCycleHandler {
 
  protected:
   PermutationCycleHandler() {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(PermutationCycleHandler);
 };
 
 // A generic cycle handler class for the common case in which the
@@ -147,6 +141,10 @@ template <typename DataType, typename IndexType>
 class ArrayIndexCycleHandler : public PermutationCycleHandler<IndexType> {
  public:
   explicit ArrayIndexCycleHandler(DataType* data) : data_(data) {}
+
+  // This type is neither copyable nor movable.
+  ArrayIndexCycleHandler(const ArrayIndexCycleHandler&) = delete;
+  ArrayIndexCycleHandler& operator=(const ArrayIndexCycleHandler&) = delete;
 
   void SetTempFromIndex(IndexType source) override { temp_ = data_[source]; }
   void SetIndexFromIndex(IndexType source,
@@ -169,8 +167,6 @@ class ArrayIndexCycleHandler : public PermutationCycleHandler<IndexType> {
 
   // Temporary storage for the one extra element we need.
   DataType temp_;
-
-  DISALLOW_COPY_AND_ASSIGN(ArrayIndexCycleHandler);
 };
 
 // Note that this template is not implemented in an especially
@@ -181,6 +177,10 @@ class PermutationApplier {
  public:
   explicit PermutationApplier(PermutationCycleHandler<IndexType>* cycle_handler)
       : cycle_handler_(cycle_handler) {}
+
+  // This type is neither copyable nor movable.
+  PermutationApplier(const PermutationApplier&) = delete;
+  PermutationApplier& operator=(const PermutationApplier&) = delete;
 
   void Apply(IndexType permutation[], int permutation_start,
              int permutation_end) {
@@ -210,8 +210,6 @@ class PermutationApplier {
 
  private:
   PermutationCycleHandler<IndexType>* cycle_handler_;
-
-  DISALLOW_COPY_AND_ASSIGN(PermutationApplier);
 };
 }  // namespace operations_research
-#endif  // OR_TOOLS_UTIL_PERMUTATION_H_
+#endif  // ORTOOLS_UTIL_PERMUTATION_H_

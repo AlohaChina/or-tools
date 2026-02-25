@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,10 +15,14 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <set>
+#include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
+#include "absl/types/span.h"
 #include "ortools/base/commandlineflags.h"
 #include "ortools/base/map_util.h"
 #include "ortools/base/stl_util.h"
@@ -32,8 +36,8 @@ class ArcFlowBuilder {
  public:
   // Same arguments as BuildArcFlowGraph(): see the .h.
   ArcFlowBuilder(const std::vector<int>& bin_dimensions,
-                 const std::vector<std::vector<int>>& item_dimensions_by_type,
-                 const std::vector<int>& demand_by_type);
+                 absl::Span<const std::vector<int>> item_dimensions_by_type,
+                 absl::Span<const int> demand_by_type);
 
   // Builds the arc-flow graph.
   ArcFlowGraph BuildVectorBinPackingGraph();
@@ -50,7 +54,7 @@ class ArcFlowBuilder {
     int original_index;
 
     // Used to sort items by relative size.
-    double NormalizedSize(const std::vector<int>& bin_dimensions) const;
+    double NormalizedSize(absl::Span<const int> bin_dimensions) const;
   };
 
   // State of the dynamic programming algorithm.
@@ -74,7 +78,7 @@ class ArcFlowBuilder {
   void ForwardCompressionPass(const std::vector<int>& source_node);
 
   // Can we fit one more item in the bin?
-  bool CanFitNewItem(const std::vector<int>& used_dimensions, int item) const;
+  bool CanFitNewItem(absl::Span<const int> used_dimensions, int item) const;
   // Create a new used_dimensions that is used_dimensions + item dimensions.
   std::vector<int> AddItem(const std::vector<int>& used_dimensions,
                            int item) const;
@@ -106,7 +110,7 @@ class ArcFlowBuilder {
 };
 
 double ArcFlowBuilder::Item::NormalizedSize(
-    const std::vector<int>& bin_dimensions) const {
+    absl::Span<const int> bin_dimensions) const {
   double size = 0.0;
   for (int i = 0; i < bin_dimensions.size(); ++i) {
     size += static_cast<double>(dimensions[i]) / bin_dimensions[i];
@@ -126,8 +130,8 @@ int64_t ArcFlowBuilder::NumDpStates() const {
 
 ArcFlowBuilder::ArcFlowBuilder(
     const std::vector<int>& bin_dimensions,
-    const std::vector<std::vector<int>>& item_dimensions_by_type,
-    const std::vector<int>& demand_by_type)
+    absl::Span<const std::vector<int>> item_dimensions_by_type,
+    absl::Span<const int> demand_by_type)
     : bin_dimensions_(bin_dimensions) {
   // Checks dimensions.
   for (int i = 0; i < bin_dimensions.size(); ++i) {
@@ -147,7 +151,7 @@ ArcFlowBuilder::ArcFlowBuilder(
   });
 }
 
-bool ArcFlowBuilder::CanFitNewItem(const std::vector<int>& used_dimensions,
+bool ArcFlowBuilder::CanFitNewItem(absl::Span<const int> used_dimensions,
                                    int item) const {
   for (int d = 0; d < bin_dimensions_.size(); ++d) {
     if (used_dimensions[d] + items_[item].dimensions[d] > bin_dimensions_[d]) {
@@ -398,8 +402,8 @@ bool ArcFlowGraph::Arc::operator<(const ArcFlowGraph::Arc& other) const {
 
 ArcFlowGraph BuildArcFlowGraph(
     const std::vector<int>& bin_dimensions,
-    const std::vector<std::vector<int>>& item_dimensions_by_type,
-    const std::vector<int>& demand_by_type) {
+    absl::Span<const std::vector<int>> item_dimensions_by_type,
+    absl::Span<const int> demand_by_type) {
   ArcFlowBuilder afb(bin_dimensions, item_dimensions_by_type, demand_by_type);
   return afb.BuildVectorBinPackingGraph();
 }

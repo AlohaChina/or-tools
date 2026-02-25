@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -23,22 +23,20 @@
 // yet. The initial version is closer to Blossom IV since we update the dual
 // values for all trees at once with the same delta.
 
-#ifndef OR_TOOLS_GRAPH_PERFECT_MATCHING_H_
-#define OR_TOOLS_GRAPH_PERFECT_MATCHING_H_
+#ifndef ORTOOLS_GRAPH_PERFECT_MATCHING_H_
+#define ORTOOLS_GRAPH_PERFECT_MATCHING_H_
 
 #include <cstdint>
-#include <limits>
+#include <functional>
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "absl/base/attributes.h"
-#include "absl/strings/str_cat.h"
-#include "absl/strings/str_join.h"
 #include "ortools/base/adjustable_priority_queue-inl.h"
 #include "ortools/base/adjustable_priority_queue.h"
 #include "ortools/base/int_type.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
 #include "ortools/base/strong_vector.h"
 
 namespace operations_research {
@@ -453,16 +451,16 @@ class BlossomGraph {
   bool is_initialized_ = false;
 
   // The set of all edges/nodes of the graph.
-  absl::StrongVector<EdgeIndex, Edge> edges_;
-  absl::StrongVector<NodeIndex, Node> nodes_;
+  util_intops::StrongVector<EdgeIndex, Edge> edges_;
+  util_intops::StrongVector<NodeIndex, Node> nodes_;
 
   // Identity for a non-blossom node, and its top blossom node (in case of many
   // nested blossom) for an internal node.
-  absl::StrongVector<NodeIndex, NodeIndex> root_blossom_node_;
+  util_intops::StrongVector<NodeIndex, NodeIndex> root_blossom_node_;
 
   // The current graph incidence. Note that one EdgeIndex should appear in
   // exactly two places (on its tail and head incidence list).
-  absl::StrongVector<NodeIndex, std::vector<EdgeIndex>> graph_;
+  util_intops::StrongVector<NodeIndex, std::vector<EdgeIndex>> graph_;
 
   // Used by SubNodes().
   std::vector<NodeIndex> subnodes_;
@@ -496,4 +494,4 @@ class BlossomGraph {
 
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_GRAPH_PERFECT_MATCHING_H_
+#endif  // ORTOOLS_GRAPH_PERFECT_MATCHING_H_

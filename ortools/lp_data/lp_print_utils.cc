@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,10 +17,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <string>
 
 #include "absl/strings/str_cat.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/base/logging.h"
+#include "absl/strings/string_view.h"
 #include "ortools/lp_data/lp_types.h"
 #include "ortools/util/rational_approximation.h"
 
@@ -51,7 +51,7 @@ std::string Stringify(const Fractional x, bool fraction) {
 
 // Returns a string that pretty-prints a monomial ax with coefficient
 // a and variable name x
-std::string StringifyMonomial(const Fractional a, const std::string& x,
+std::string StringifyMonomial(const Fractional a, absl::string_view x,
                               bool fraction) {
   if (a == 0.0) return "";
   return a > 0.0

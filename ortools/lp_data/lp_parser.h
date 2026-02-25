@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -71,17 +71,19 @@
 //   take. Similarly, "min x; bin x; x <= 0.5" results in bounding the x
 //   variable between 0.0 and 0.5, despite the only value it can take is 0.
 
-#ifndef OR_TOOLS_LP_DATA_LP_PARSER_H_
-#define OR_TOOLS_LP_DATA_LP_PARSER_H_
+#ifndef ORTOOLS_LP_DATA_LP_PARSER_H_
+#define ORTOOLS_LP_DATA_LP_PARSER_H_
 
 #include <string>
 #include <vector>
 
+#include "absl/base/attributes.h"
 #include "absl/base/port.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "ortools/linear_solver/linear_solver.pb.h"
 #include "ortools/lp_data/lp_data.h"
+#include "ortools/lp_data/lp_types.h"
 
 namespace operations_research {
 
@@ -121,4 +123,4 @@ absl::StatusOr<ParsedConstraint> ParseConstraint(absl::string_view constraint);
 }  // namespace glop
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_LP_DATA_LP_PARSER_H_
+#endif  // ORTOOLS_LP_DATA_LP_PARSER_H_

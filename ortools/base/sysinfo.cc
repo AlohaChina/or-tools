@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,13 +14,15 @@
 #if defined(__GNUC__) && defined(__linux__)
 #include <unistd.h>
 #endif
-#if defined(__APPLE__) && defined(__GNUC__)  // Mac OS X
+#if defined(__APPLE__) && defined(__GNUC__)  // MacOS
 #include <mach/mach_init.h>
 #include <mach/task.h>
-#elif defined(__FreeBSD__)  // FreeBSD
+#elif (defined(__FreeBSD__) || defined(__NetBSD__) || \
+       defined(__OpenBSD__))  // [Free,Net,Open]BSD
 #include <sys/resource.h>
 #include <sys/time.h>
-#elif defined(_MSC_VER)  // WINDOWS
+// Windows
+#elif defined(_MSC_VER) || defined(__MINGW32__) || defined(__MINGW64__)
 // clang-format off
 #include <windows.h>
 #include <psapi.h>
@@ -34,7 +36,7 @@
 namespace operations_research {
 // GetProcessMemoryUsage
 
-#if defined(__APPLE__) && defined(__GNUC__)  // Mac OS X
+#if defined(__APPLE__) && defined(__GNUC__)  // MacOS
 int64_t GetProcessMemoryUsage() {
   task_t task = MACH_PORT_NULL;
   struct task_basic_info t_info;
@@ -47,7 +49,9 @@ int64_t GetProcessMemoryUsage() {
   int64_t resident_memory = t_info.resident_size;
   return resident_memory;
 }
-#elif defined(__GNUC__) && !defined(__FreeBSD__)  // LINUX
+#elif defined(__GNUC__) && !defined(__FreeBSD__) && !defined(__NetBSD__) && \
+    !defined(__OpenBSD__) && !defined(__EMSCRIPTEN__) &&                    \
+    !defined(_WIN32)  // Linux
 int64_t GetProcessMemoryUsage() {
   unsigned size = 0;
   char buf[30];
@@ -57,16 +61,18 @@ int64_t GetProcessMemoryUsage() {
     if (fscanf(pf, "%u", &size) != 1) return 0;
   }
   fclose(pf);
-  return size * int64_t{1024};
+  return int64_t{1024} * size;
 }
-#elif defined(__FreeBSD__)                        // FreeBSD
+#elif (defined(__FreeBSD__) || defined(__NetBSD__) || \
+       defined(__OpenBSD__))  // [Free,Net,Open]BSD
 int64_t GetProcessMemoryUsage() {
   int who = RUSAGE_SELF;
   struct rusage rusage;
   getrusage(who, &rusage);
-  return (int64_t)(rusage.ru_maxrss * int64_t{1024});
+  return (int64_t)(int64_t{1024} * rusage.ru_maxrss);
 }
-#elif defined(_MSC_VER)                           // WINDOWS
+#elif defined(_MSC_VER) || defined(__MINGW32__) || \
+    defined(__MINGW64__)  // Windows
 int64_t GetProcessMemoryUsage() {
   HANDLE hProcess;
   PROCESS_MEMORY_COUNTERS pmc;
@@ -81,7 +87,7 @@ int64_t GetProcessMemoryUsage() {
   }
   return memory;
 }
-#else                                             // Unknown, returning 0.
+#else                     // Unknown, returning 0.
 int64_t GetProcessMemoryUsage() { return 0; }
 #endif
 

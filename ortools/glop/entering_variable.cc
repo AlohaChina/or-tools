@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,9 +13,14 @@
 
 #include "ortools/glop/entering_variable.h"
 
+#include <algorithm>
+#include <cstdlib>
+#include <limits>
 #include <queue>
+#include <vector>
 
 #include "ortools/base/timer.h"
+#include "ortools/lp_data/lp_types.h"
 #include "ortools/lp_data/lp_utils.h"
 #include "ortools/port/proto_utils.h"
 
@@ -35,15 +40,18 @@ Status EnteringVariable::DualChooseEnteringColumn(
     Fractional cost_variation, std::vector<ColIndex>* bound_flip_candidates,
     ColIndex* entering_col) {
   GLOP_RETURN_ERROR_IF_NULL(entering_col);
-  const DenseRow& update_coefficient = update_row.GetCoefficients();
-  const DenseRow& reduced_costs = reduced_costs_->GetReducedCosts();
+  const auto update_coefficients = update_row.GetCoefficients().const_view();
+  const auto reduced_costs = reduced_costs_->GetReducedCosts();
   SCOPED_TIME_STAT(&stats_);
 
   breakpoints_.clear();
   breakpoints_.reserve(update_row.GetNonZeroPositions().size());
-  const DenseBitRow& can_decrease = variables_info_.GetCanDecreaseBitRow();
-  const DenseBitRow& can_increase = variables_info_.GetCanIncreaseBitRow();
-  const DenseBitRow& is_boxed = variables_info_.GetNonBasicBoxedVariables();
+  DenseBitRow::ConstView can_decrease =
+      variables_info_.GetCanDecreaseBitRow().const_view();
+  DenseBitRow::ConstView can_increase =
+      variables_info_.GetCanIncreaseBitRow().const_view();
+  DenseBitRow::ConstView is_boxed =
+      variables_info_.GetNonBasicBoxedVariables().const_view();
 
   // If everything has the best possible precision currently, we ignore
   // low coefficients. This make sure we will never choose a pivot too small. It
@@ -56,6 +64,8 @@ Status EnteringVariable::DualChooseEnteringColumn(
   const Fractional threshold = nothing_to_recompute
                                    ? parameters_.minimum_acceptable_pivot()
                                    : parameters_.ratio_test_zero_threshold();
+
+  Fractional variation_magnitude = std::abs(cost_variation) - threshold;
 
   // Harris ratio test. See below for more explanation. Here this is used to
   // prune the first pass by not enqueueing ColWithRatio for columns that have
@@ -76,34 +86,40 @@ Status EnteringVariable::DualChooseEnteringColumn(
     // We will add ratio * coeff to this column with a ratio positive or zero.
     // cost_variation makes sure the leaving variable will be dual-feasible
     // (its update coeff is sign(cost_variation) * 1.0).
-    const Fractional coeff = (cost_variation > 0.0) ? update_coefficient[col]
-                                                    : -update_coefficient[col];
+    const Fractional coeff = (cost_variation > 0.0) ? update_coefficients[col]
+                                                    : -update_coefficients[col];
 
-    // In this case, at some point the reduced cost will be positive if not
-    // already, and the column will be dual-infeasible.
-    if (can_decrease.IsSet(col) && coeff > threshold) {
-      if (!is_boxed[col]) {
-        if (-reduced_costs[col] > harris_ratio * coeff) continue;
-        harris_ratio = std::min(
-            harris_ratio, (-reduced_costs[col] + harris_tolerance) / coeff);
-        harris_ratio = std::max(minimum_delta / coeff, harris_ratio);
-      }
-      breakpoints_.push_back(ColWithRatio(col, -reduced_costs[col], coeff));
+    ColWithRatio entry;
+    if (can_decrease[col] && coeff > threshold) {
+      // In this case, at some point the reduced cost will be positive if not
+      // already, and the column will be dual-infeasible.
+      if (-reduced_costs[col] > harris_ratio * coeff) continue;
+      entry = ColWithRatio(col, -reduced_costs[col], coeff);
+    } else if (can_increase[col] && coeff < -threshold) {
+      // In this case, at some point the reduced cost will be negative if not
+      // already, and the column will be dual-infeasible.
+      if (reduced_costs[col] > harris_ratio * -coeff) continue;
+      entry = ColWithRatio(col, reduced_costs[col], -coeff);
+    } else {
       continue;
     }
 
-    // In this case, at some point the reduced cost will be negative if not
-    // already, and the column will be dual-infeasible.
-    if (can_increase.IsSet(col) && coeff < -threshold) {
-      if (!is_boxed[col]) {
-        if (reduced_costs[col] > harris_ratio * -coeff) continue;
-        harris_ratio = std::min(
-            harris_ratio, (reduced_costs[col] + harris_tolerance) / -coeff);
-        harris_ratio = std::max(minimum_delta / -coeff, harris_ratio);
+    const Fractional hr =
+        std::max(minimum_delta / entry.coeff_magnitude,
+                 entry.ratio + harris_tolerance / entry.coeff_magnitude);
+    if (hr < harris_ratio) {
+      if (is_boxed[col]) {
+        const Fractional delta =
+            variables_info_.GetBoundDifference(col) * entry.coeff_magnitude;
+        if (delta >= variation_magnitude) {
+          harris_ratio = hr;
+        }
+      } else {
+        harris_ratio = hr;
       }
-      breakpoints_.push_back(ColWithRatio(col, reduced_costs[col], -coeff));
-      continue;
     }
+
+    breakpoints_.push_back(entry);
   }
 
   // Process the breakpoints in priority order as suggested by Maros in
@@ -128,7 +144,6 @@ Status EnteringVariable::DualChooseEnteringColumn(
   bound_flip_candidates->clear();
   Fractional step = 0.0;
   Fractional best_coeff = -1.0;
-  Fractional variation_magnitude = std::abs(cost_variation);
   equivalent_entering_choices_.clear();
   while (!breakpoints_.empty()) {
     const ColWithRatio top = breakpoints_.front();
@@ -145,11 +160,11 @@ Status EnteringVariable::DualChooseEnteringColumn(
     //
     // Note that the actual flipping will be done afterwards by
     // MakeBoxedVariableDualFeasible() in revised_simplex.cc.
-    if (variation_magnitude > threshold) {
+    if (variation_magnitude > 0.0) {
       if (is_boxed[top.col]) {
         variation_magnitude -=
             variables_info_.GetBoundDifference(top.col) * top.coeff_magnitude;
-        if (variation_magnitude > threshold) {
+        if (variation_magnitude > 0.0) {
           bound_flip_candidates->push_back(top.col);
           std::pop_heap(breakpoints_.begin(), breakpoints_.end());
           breakpoints_.pop_back();
@@ -165,15 +180,15 @@ Status EnteringVariable::DualChooseEnteringColumn(
       // Update harris_ratio. Note that because we process ratio in order, the
       // harris ratio can only get smaller if the coeff_magnitude is bigger
       // than the one of the best coefficient.
-      harris_ratio = std::min(
-          harris_ratio, top.ratio + harris_tolerance / top.coeff_magnitude);
-
+      //
       // If the dual infeasibility is too high, the harris_ratio can be
-      // negative. In this case we set it to 0.0, allowing any infeasible
-      // position to enter the basis. This is quite important because its
-      // helps in the choice of a stable pivot.
-      harris_ratio =
-          std::max(harris_ratio, minimum_delta / top.coeff_magnitude);
+      // negative. To avoid this we always allow for a minimum step even if
+      // we push some already infeasible variable further away. This is quite
+      // important because its helps in the choice of a stable pivot.
+      harris_ratio = std::min(
+          harris_ratio,
+          std::max(minimum_delta / top.coeff_magnitude,
+                   top.ratio + harris_tolerance / top.coeff_magnitude));
 
       if (top.coeff_magnitude == best_coeff && top.ratio == step) {
         DCHECK_NE(*entering_col, kInvalidCol);
@@ -215,10 +230,10 @@ Status EnteringVariable::DualChooseEnteringColumn(
     // returned bound_flip_candidates vector.
     for (int i = bound_flip_candidates->size() - 1; i >= 0; --i) {
       const ColIndex col = (*bound_flip_candidates)[i];
-      if (std::abs(update_coefficient[col]) < pivot_limit) continue;
+      if (std::abs(update_coefficients[col]) < pivot_limit) continue;
 
       VLOG(1) << "Used bound flip to avoid bad pivot. Before: " << best_coeff
-              << " now: " << std::abs(update_coefficient[col]);
+              << " now: " << std::abs(update_coefficients[col]);
       *entering_col = col;
       break;
     }
@@ -231,8 +246,8 @@ Status EnteringVariable::DualPhaseIChooseEnteringColumn(
     bool nothing_to_recompute, const UpdateRow& update_row,
     Fractional cost_variation, ColIndex* entering_col) {
   GLOP_RETURN_ERROR_IF_NULL(entering_col);
-  const DenseRow& update_coefficient = update_row.GetCoefficients();
-  const DenseRow& reduced_costs = reduced_costs_->GetReducedCosts();
+  const auto update_coefficients = update_row.GetCoefficients().const_view();
+  const auto reduced_costs = reduced_costs_->GetReducedCosts();
   SCOPED_TIME_STAT(&stats_);
 
   // List of breakpoints where a variable change from feasibility to
@@ -250,8 +265,10 @@ Status EnteringVariable::DualPhaseIChooseEnteringColumn(
   const Fractional minimum_delta =
       parameters_.degenerate_ministep_factor() * dual_feasibility_tolerance;
 
-  const DenseBitRow& can_decrease = variables_info_.GetCanDecreaseBitRow();
-  const DenseBitRow& can_increase = variables_info_.GetCanIncreaseBitRow();
+  const DenseBitRow::ConstView can_decrease =
+      variables_info_.GetCanDecreaseBitRow().const_view();
+  const DenseBitRow::ConstView can_increase =
+      variables_info_.GetCanIncreaseBitRow().const_view();
   const VariableTypeRow& variable_type = variables_info_.GetTypeRow();
   num_operations_ += 10 * update_row.GetNonZeroPositions().size();
   for (const ColIndex col : update_row.GetNonZeroPositions()) {
@@ -263,7 +280,7 @@ Status EnteringVariable::DualPhaseIChooseEnteringColumn(
     DCHECK_NE(variable_type[col], VariableType::FIXED_VARIABLE);
 
     // Skip if the coeff is too small to be a numerically stable pivot.
-    if (std::abs(update_coefficient[col]) < threshold) continue;
+    if (std::abs(update_coefficients[col]) < threshold) continue;
 
     // We will add ratio * coeff to this column. cost_variation makes sure
     // the leaving variable will be dual-feasible (its update coeff is
@@ -271,15 +288,15 @@ Status EnteringVariable::DualPhaseIChooseEnteringColumn(
     //
     // TODO(user): This is the same in DualChooseEnteringColumn(), remove
     // duplication?
-    const Fractional coeff = (cost_variation > 0.0) ? update_coefficient[col]
-                                                    : -update_coefficient[col];
+    const Fractional coeff = (cost_variation > 0.0) ? update_coefficients[col]
+                                                    : -update_coefficients[col];
 
     // Only proceed if there is a transition, note that if reduced_costs[col]
     // is close to zero, then the variable is counted as dual-feasible.
     if (std::abs(reduced_costs[col]) <= dual_feasibility_tolerance) {
       // Continue if the variation goes in the dual-feasible direction.
-      if (coeff > 0 && !can_decrease.IsSet(col)) continue;
-      if (coeff < 0 && !can_increase.IsSet(col)) continue;
+      if (coeff > 0 && !can_decrease[col]) continue;
+      if (coeff < 0 && !can_increase[col]) continue;
 
       // For an already dual-infeasible variable, we allow to push it until
       // the harris_tolerance. But if it is past that or close to it, we also
@@ -331,7 +348,7 @@ Status EnteringVariable::DualPhaseIChooseEnteringColumn(
     // If the variable is free, then not only do we loose the infeasibility
     // improvment, we also render it worse if we keep going in the same
     // direction.
-    if (can_decrease.IsSet(top.col) && can_increase.IsSet(top.col) &&
+    if (can_decrease[top.col] && can_increase[top.col] &&
         std::abs(reduced_costs[top.col]) > threshold) {
       improvement -= top.coeff_magnitude;
     }

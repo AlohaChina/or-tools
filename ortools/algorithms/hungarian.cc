@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,10 +14,13 @@
 #include "ortools/algorithms/hungarian.h"
 
 #include <algorithm>
-#include <cstdio>
+#include <cmath>
+#include <cstdint>
 #include <limits>
+#include <vector>
 
 #include "absl/strings/str_format.h"
+#include "absl/types/span.h"
 #include "ortools/base/logging.h"
 
 namespace operations_research {
@@ -35,7 +38,7 @@ class HungarianOptimizer {
   // be square (i.e. we can have different numbers of agents and tasks), but it
   // must be regular (i.e. there must be the same number of entries in each row
   // of the matrix).
-  explicit HungarianOptimizer(const std::vector<std::vector<double>>& costs);
+  explicit HungarianOptimizer(absl::Span<const std::vector<double>> costs);
 
   // Find an assignment which maximizes the total cost.
   // Returns the assignment in the two vectors passed as argument.
@@ -48,7 +51,7 @@ class HungarianOptimizer {
  private:
   typedef void (HungarianOptimizer::*Step)();
 
-  typedef enum { NONE, PRIME, STAR } Mark;
+  typedef enum : uint8_t { NONE, PRIME, STAR } Mark;
 
   // Convert the final cost matrix into a set of assignments of preimage->image.
   // Returns the assignment in the two vectors passed as argument, the same as
@@ -202,7 +205,7 @@ class HungarianOptimizer {
 };
 
 HungarianOptimizer::HungarianOptimizer(
-    const std::vector<std::vector<double>>& costs)
+    absl::Span<const std::vector<double>> costs)
     : matrix_size_(0),
       costs_(),
       max_cost_(0),
@@ -637,7 +640,7 @@ void HungarianOptimizer::AugmentPath() {
   state_ = &HungarianOptimizer::PrimeZeroes;
 }
 
-bool InputContainsNan(const std::vector<std::vector<double>>& input) {
+bool InputContainsNan(absl::Span<const std::vector<double>> input) {
   for (const auto& subvector : input) {
     for (const auto& num : subvector) {
       if (std::isnan(num)) {
@@ -650,7 +653,7 @@ bool InputContainsNan(const std::vector<std::vector<double>>& input) {
 }
 
 void MinimizeLinearAssignment(
-    const std::vector<std::vector<double>>& cost,
+    absl::Span<const std::vector<double>> cost,
     absl::flat_hash_map<int, int>* direct_assignment,
     absl::flat_hash_map<int, int>* reverse_assignment) {
   if (InputContainsNan(cost)) {
@@ -668,7 +671,7 @@ void MinimizeLinearAssignment(
 }
 
 void MaximizeLinearAssignment(
-    const std::vector<std::vector<double>>& cost,
+    absl::Span<const std::vector<double>> cost,
     absl::flat_hash_map<int, int>* direct_assignment,
     absl::flat_hash_map<int, int>* reverse_assignment) {
   if (InputContainsNan(cost)) {

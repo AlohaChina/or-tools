@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,22 +16,18 @@
 // "Effective Preprocessing in SAT through Variable and Clause Elimination",
 // Niklas Een and Armin Biere, published in the SAT 2005 proceedings.
 
-#ifndef OR_TOOLS_SAT_SIMPLIFICATION_H_
-#define OR_TOOLS_SAT_SIMPLIFICATION_H_
+#ifndef ORTOOLS_SAT_SIMPLIFICATION_H_
+#define ORTOOLS_SAT_SIMPLIFICATION_H_
 
 #include <cstdint>
 #include <deque>
-#include <memory>
-#include <set>
+#include <utility>
 #include <vector>
 
+#include "absl/container/btree_set.h"
 #include "absl/types/span.h"
 #include "ortools/base/adjustable_priority_queue.h"
-#include "ortools/base/int_type.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/base/macros.h"
 #include "ortools/base/strong_vector.h"
-#include "ortools/sat/drat_proof_handler.h"
 #include "ortools/sat/sat_base.h"
 #include "ortools/sat/sat_parameters.pb.h"
 #include "ortools/sat/sat_solver.h"
@@ -50,10 +46,14 @@ class SatPostsolver {
  public:
   explicit SatPostsolver(int num_variables);
 
+  // This type is neither copyable nor movable.
+  SatPostsolver(const SatPostsolver&) = delete;
+  SatPostsolver& operator=(const SatPostsolver&) = delete;
+
   // The postsolver will process the Add() calls in reverse order. If the given
   // clause has all its literals at false, it simply sets the literal x to true.
   // Note that x must be a literal of the given clause.
-  void Add(Literal x, const absl::Span<const Literal> clause);
+  void Add(Literal x, absl::Span<const Literal> clause);
 
   // Tells the postsolver that the given literal must be true in any solution.
   // We currently check that the variable is not already fixed.
@@ -70,8 +70,8 @@ class SatPostsolver {
   //
   // This can be called more than once. But each call must refer to the current
   // variables set (after all the previous mapping have been applied).
-  void ApplyMapping(
-      const absl::StrongVector<BooleanVariable, BooleanVariable>& mapping);
+  void ApplyMapping(const util_intops::StrongVector<BooleanVariable,
+                                                    BooleanVariable>& mapping);
 
   // Extracts the current assignment of the given solver and postsolve it.
   //
@@ -85,14 +85,15 @@ class SatPostsolver {
   int NumClauses() const { return clauses_start_.size(); }
   std::vector<Literal> Clause(int i) const {
     // TODO(user): we could avoid the copy here, but because clauses_literals_
-    // is a deque, we do need a special return class and cannot juste use
+    // is a deque, we do need a special return class and cannot just use
     // absl::Span<Literal> for instance.
-    const int begin = clauses_start_[i];
-    const int end = i + 1 < clauses_start_.size() ? clauses_start_[i + 1]
-                                                  : clauses_literals_.size();
+    const int64_t begin = clauses_start_[i];
+    const int64_t end = i + 1 < clauses_start_.size()
+                            ? clauses_start_[i + 1]
+                            : clauses_literals_.size();
     std::vector<Literal> result(clauses_literals_.begin() + begin,
                                 clauses_literals_.begin() + end);
-    for (int j = 0; j < result.size(); ++j) {
+    for (int64_t j = 0; j < result.size(); ++j) {
       if (result[j] == associated_literal_[i]) {
         std::swap(result[0], result[j]);
         break;
@@ -100,6 +101,10 @@ class SatPostsolver {
     }
     return result;
   }
+
+  // This will initially contains the Fixed variable.
+  // If PostsolveSolution() is called, it will contain the final solution.
+  const VariablesAssignment& assignment() { return assignment_; }
 
  private:
   Literal ApplyReverseMapping(Literal l);
@@ -113,20 +118,18 @@ class SatPostsolver {
 
   // Stores the arguments of the Add() calls: clauses_start_[i] is the index of
   // the first literal of the clause #i in the clauses_literals_ deque.
-  std::vector<int> clauses_start_;
+  std::vector<int64_t> clauses_start_;
   std::deque<Literal> clauses_literals_;
   std::vector<Literal> associated_literal_;
 
   // All the added clauses will be mapped back to the initial variables using
   // this reverse mapping. This way, clauses_ and associated_literal_ are only
   // in term of the initial problem.
-  absl::StrongVector<BooleanVariable, BooleanVariable> reverse_mapping_;
+  util_intops::StrongVector<BooleanVariable, BooleanVariable> reverse_mapping_;
 
   // This will stores the fixed variables value and later the postsolved
   // assignment.
   VariablesAssignment assignment_;
-
-  DISALLOW_COPY_AND_ASSIGN(SatPostsolver);
 };
 
 // This class holds a SAT problem (i.e. a set of clauses) and the logic to
@@ -148,10 +151,11 @@ class SatPresolver {
   typedef int32_t ClauseIndex;
 
   explicit SatPresolver(SatPostsolver* postsolver, SolverLogger* logger)
-      : postsolver_(postsolver),
-        num_trivial_clauses_(0),
-        drat_proof_handler_(nullptr),
-        logger_(logger) {}
+      : postsolver_(postsolver), num_trivial_clauses_(0), logger_(logger) {}
+
+  // This type is neither copyable nor movable.
+  SatPresolver(const SatPresolver&) = delete;
+  SatPresolver& operator=(const SatPresolver&) = delete;
 
   void SetParameters(const SatParameters& params) { parameters_ = params; }
   void SetTimeLimit(TimeLimit* time_limit) { time_limit_ = time_limit; }
@@ -159,7 +163,7 @@ class SatPresolver {
   // Registers a mapping to encode equivalent literals.
   // See ProbeAndFindEquivalentLiteral().
   void SetEquivalentLiteralMapping(
-      const absl::StrongVector<LiteralIndex, LiteralIndex>& mapping) {
+      const util_intops::StrongVector<LiteralIndex, LiteralIndex>& mapping) {
     equiv_mapping_ = mapping;
   }
 
@@ -194,7 +198,8 @@ class SatPresolver {
   // clause pointing to them. This return a mapping that maps this interval to
   // [0, new_size) such that now all variables are used. The unused variable
   // will be mapped to BooleanVariable(-1).
-  absl::StrongVector<BooleanVariable, BooleanVariable> VariableMapping() const;
+  util_intops::StrongVector<BooleanVariable, BooleanVariable> VariableMapping()
+      const;
 
   // Loads the current presolved problem in to the given sat solver.
   // Note that the variables will be re-indexed according to the mapping given
@@ -221,10 +226,6 @@ class SatPresolver {
   // Visible for testing. Just applies the BVA step of the presolve.
   void PresolveWithBva();
 
-  void SetDratProofHandler(DratProofHandler* drat_proof_handler) {
-    drat_proof_handler_ = drat_proof_handler;
-  }
-
  private:
   // Internal function used by ProcessClauseToSimplifyOthers().
   bool ProcessClauseToSimplifyOthersUsingLiteral(ClauseIndex clause_index,
@@ -235,10 +236,14 @@ class SatPresolver {
   // after this call.
   void AddClauseInternal(std::vector<Literal>* clause);
 
+  // Since we only cleanup the list lazily, literal_to_clauses_ memory usage
+  // can get out of hand, we clean it up periodically.
+  void RebuildLiteralToClauses();
+
   // Clause removal function.
   void Remove(ClauseIndex ci);
   void RemoveAndRegisterForPostsolve(ClauseIndex ci, Literal x);
-  void RemoveAndRegisterForPostsolveAllClauseContaining(Literal x);
+  void RemoveAllClauseContaining(Literal x, bool register_for_postsolve);
 
   // Call ProcessClauseToSimplifyOthers() on all the clauses in
   // clause_to_process_ and empty the list afterwards. Note that while some
@@ -249,7 +254,7 @@ class SatPresolver {
   // Finds the literal from the clause that occur the less in the clause
   // database.
   Literal FindLiteralWithShortestOccurrenceList(
-      const std::vector<Literal>& clause);
+      absl::Span<const Literal> clause);
   LiteralIndex FindLiteralWithShortestOccurrenceListExcluding(
       const std::vector<Literal>& clause, Literal to_exclude);
 
@@ -295,7 +300,7 @@ class SatPresolver {
     BooleanVariable variable;
     double weight;
   };
-  absl::StrongVector<BooleanVariable, PQElement> var_pq_elements_;
+  util_intops::StrongVector<BooleanVariable, PQElement> var_pq_elements_;
   AdjustablePriorityQueue<PQElement> var_pq_;
 
   // Literal priority queue for BVA. The literals are ordered by descending
@@ -324,9 +329,9 @@ class SatPresolver {
   AdjustablePriorityQueue<BvaPqElement> bva_pq_;
 
   // Temporary data for SimpleBva().
-  std::set<LiteralIndex> m_lit_;
+  absl::btree_set<LiteralIndex> m_lit_;
   std::vector<ClauseIndex> m_cls_;
-  absl::StrongVector<LiteralIndex, int> literal_to_p_size_;
+  util_intops::StrongVector<LiteralIndex, int> literal_to_p_size_;
   std::vector<std::pair<LiteralIndex, ClauseIndex>> flattened_p_;
   std::vector<Literal> tmp_new_clause_;
 
@@ -346,26 +351,27 @@ class SatPresolver {
 
   // Occurrence list. For each literal, contains the ClauseIndex of the clause
   // that contains it (ordered by clause index).
-  absl::StrongVector<LiteralIndex, std::vector<ClauseIndex>>
+  //
+  // This is cleaned up lazily, or when num_deleted_literals_since_last_cleanup_
+  // becomes big.
+  int64_t num_deleted_literals_since_last_cleanup_ = 0;
+  util_intops::StrongVector<LiteralIndex, std::vector<ClauseIndex>>
       literal_to_clauses_;
 
   // Because we only lazily clean the occurrence list after clause deletions,
   // we keep the size of the occurrence list (without the deleted clause) here.
-  absl::StrongVector<LiteralIndex, int> literal_to_clause_sizes_;
+  util_intops::StrongVector<LiteralIndex, int> literal_to_clause_sizes_;
 
   // Used for postsolve.
   SatPostsolver* postsolver_;
 
   // Equivalent literal mapping.
-  absl::StrongVector<LiteralIndex, LiteralIndex> equiv_mapping_;
+  util_intops::StrongVector<LiteralIndex, LiteralIndex> equiv_mapping_;
 
   int num_trivial_clauses_;
   SatParameters parameters_;
-  DratProofHandler* drat_proof_handler_;
   TimeLimit* time_limit_ = nullptr;
   SolverLogger* logger_;
-
-  DISALLOW_COPY_AND_ASSIGN(SatPresolver);
 };
 
 // Visible for testing. Returns true iff:
@@ -424,26 +430,10 @@ int ComputeResolvantSize(Literal x, const std::vector<Literal>& a,
 // constraints.
 void ProbeAndFindEquivalentLiteral(
     SatSolver* solver, SatPostsolver* postsolver,
-    DratProofHandler* drat_proof_handler,
-    absl::StrongVector<LiteralIndex, LiteralIndex>* mapping);
-
-// Given a 'solver' with a problem already loaded, this will try to simplify the
-// problem (i.e. presolve it) before calling solver->Solve(). In the process,
-// because of the way the presolve is implemented, the underlying SatSolver may
-// change (it is why we use this unique_ptr interface). In particular, the final
-// variables and 'solver' state may have nothing to do with the problem
-// originaly present in the solver. That said, if the problem is shown to be
-// SAT, then the returned solution will be in term of the original variables.
-//
-// Note that the full presolve is only executed if the problem is a pure SAT
-// problem with only clauses.
-SatSolver::Status SolveWithPresolve(
-    std::unique_ptr<SatSolver>* solver, TimeLimit* time_limit,
-    std::vector<bool>* solution /* only filled if SAT */,
-    DratProofHandler* drat_proof_handler /* can be nullptr */,
-    SolverLogger* logger);
+    util_intops::StrongVector<LiteralIndex, LiteralIndex>* mapping,
+    SolverLogger* = nullptr);
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_SIMPLIFICATION_H_
+#endif  // ORTOOLS_SAT_SIMPLIFICATION_H_

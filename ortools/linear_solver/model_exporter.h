@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,24 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_LINEAR_SOLVER_MODEL_EXPORTER_H_
-#define OR_TOOLS_LINEAR_SOLVER_MODEL_EXPORTER_H_
+#ifndef ORTOOLS_LINEAR_SOLVER_MODEL_EXPORTER_H_
+#define ORTOOLS_LINEAR_SOLVER_MODEL_EXPORTER_H_
 
 #include <string>
-#include <vector>
 
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/str_format.h"
-#include "ortools/base/hash.h"
-#include "ortools/base/macros.h"
+#include "absl/strings/string_view.h"
 #include "ortools/linear_solver/linear_solver.pb.h"
 
 namespace operations_research {
 
 /// Export options.
 struct MPModelExportOptions {
-  MPModelExportOptions() {}
-
   /// Obfuscates variable and constraint names.
   bool obfuscate = false;
   /// Whether to log invalid variable and constraint names.
@@ -65,7 +61,7 @@ struct MPModelExportOptions {
  * http://lpsolve.sourceforge.net/5.5/lp-format.htm
  * The following give a reasonable idea of the CPLEX LP file format:
  * http://lpsolve.sourceforge.net/5.5/CPLEX-format.htm
- * http://tinyurl.com/cplex-lp-format
+ * https://www.ibm.com/docs/en/icos/12.8.0.0?topic=cplex-lp-file-format-algebraic-representation
  * http://www.gurobi.com/documentation/5.1/reference-manual/node871
  */
 absl::StatusOr<std::string> ExportModelAsLpFormat(
@@ -101,6 +97,16 @@ absl::StatusOr<std::string> ExportModelAsMpsFormat(
     const MPModelProto& model,
     const MPModelExportOptions& options = MPModelExportOptions());
 
+/**
+ * Write the current model (variables, constraints, objective) to a file in MPS
+ * file format, using the "free" MPS format.
+ *
+ * See ExportModelAsMpsFormat().
+ */
+absl::Status WriteModelToMpsFile(
+    absl::string_view filename, const MPModelProto& model,
+    const MPModelExportOptions& options = MPModelExportOptions());
+
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_LINEAR_SOLVER_MODEL_EXPORTER_H_
+#endif  // ORTOOLS_LINEAR_SOLVER_MODEL_EXPORTER_H_

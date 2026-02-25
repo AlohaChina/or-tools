@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,21 +13,41 @@
 
 #include "ortools/bop/bop_portfolio.h"
 
+#include <stddef.h>
+
+#include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "absl/memory/memory.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/log/vlog_is_on.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
+#include "ortools/algorithms/sparse_permutation.h"
 #include "ortools/base/stl_util.h"
 #include "ortools/base/strong_vector.h"
+#include "ortools/bop/bop_base.h"
 #include "ortools/bop/bop_fs.h"
 #include "ortools/bop/bop_lns.h"
 #include "ortools/bop/bop_ls.h"
+#include "ortools/bop/bop_parameters.pb.h"
+#include "ortools/bop/bop_solution.h"
+#include "ortools/bop/bop_types.h"
 #include "ortools/bop/bop_util.h"
 #include "ortools/bop/complete_optimizer.h"
+#include "ortools/lp_data/lp_types.h"
 #include "ortools/sat/boolean_problem.h"
 #include "ortools/sat/boolean_problem.pb.h"
+#include "ortools/sat/sat_solver.h"
 #include "ortools/sat/symmetry.h"
+#include "ortools/util/random_engine.h"
+#include "ortools/util/strong_integers.h"
+#include "ortools/util/time_limit.h"
 
 namespace operations_research {
 namespace bop {
@@ -61,7 +81,7 @@ void BuildObjectiveTerms(const LinearBooleanProblem& problem,
 //------------------------------------------------------------------------------
 PortfolioOptimizer::PortfolioOptimizer(
     const ProblemState& problem_state, const BopParameters& parameters,
-    const BopSolverOptimizerSet& optimizer_set, const std::string& name)
+    const BopSolverOptimizerSet& optimizer_set, absl::string_view name)
     : BopOptimizerBase(name),
       random_(parameters.random_seed()),
       state_update_stamp_(ProblemState::kInitialStampValue),
@@ -327,14 +347,15 @@ void PortfolioOptimizer::CreateOptimizers(
     AddOptimizer(problem, parameters, optimizer_method);
   }
 
-  selector_ = absl::make_unique<OptimizerSelector>(optimizers_);
+  selector_ = std::make_unique<OptimizerSelector>(optimizers_);
 }
 
 //------------------------------------------------------------------------------
 // OptimizerSelector
 //------------------------------------------------------------------------------
 OptimizerSelector::OptimizerSelector(
-    const absl::StrongVector<OptimizerIndex, BopOptimizerBase*>& optimizers)
+    const util_intops::StrongVector<OptimizerIndex, BopOptimizerBase*>&
+        optimizers)
     : run_infos_(), selected_index_(optimizers.size()) {
   for (OptimizerIndex i(0); i < optimizers.size(); ++i) {
     info_positions_.push_back(run_infos_.size());

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -24,18 +24,25 @@
 // complete SAT solver provided that we keep running it after it has found a
 // first solution. This is the default behavior of the kNotGuided policy.
 
-#ifndef OR_TOOLS_BOP_COMPLETE_OPTIMIZER_H_
-#define OR_TOOLS_BOP_COMPLETE_OPTIMIZER_H_
+#ifndef ORTOOLS_BOP_COMPLETE_OPTIMIZER_H_
+#define ORTOOLS_BOP_COMPLETE_OPTIMIZER_H_
 
 #include <cstdint>
 #include <deque>
+#include <string>
+#include <vector>
 
+#include "absl/strings/string_view.h"
 #include "ortools/bop/bop_base.h"
+#include "ortools/bop/bop_parameters.pb.h"
 #include "ortools/bop/bop_solution.h"
 #include "ortools/bop/bop_types.h"
 #include "ortools/sat/boolean_problem.pb.h"
 #include "ortools/sat/encoding.h"
+#include "ortools/sat/model.h"
+#include "ortools/sat/pb_constraint.h"
 #include "ortools/sat/sat_solver.h"
+#include "ortools/util/time_limit.h"
 
 namespace operations_research {
 namespace bop {
@@ -43,7 +50,7 @@ namespace bop {
 // TODO(user): Merge this with the code in sat/optimization.cc
 class SatCoreBasedOptimizer : public BopOptimizerBase {
  public:
-  explicit SatCoreBasedOptimizer(const std::string& name);
+  explicit SatCoreBasedOptimizer(absl::string_view name);
   ~SatCoreBasedOptimizer() override;
 
  protected:
@@ -57,19 +64,20 @@ class SatCoreBasedOptimizer : public BopOptimizerBase {
       const ProblemState& problem_state);
   sat::SatSolver::Status SolveWithAssumptions();
 
+  sat::Model model_;
+  sat::SatSolver* sat_solver_;
+  sat::ObjectiveEncoder encoder_;
+
   int64_t state_update_stamp_;
   bool initialized_;
   bool assumptions_already_added_;
-  sat::SatSolver solver_;
   sat::Coefficient offset_;
   sat::Coefficient lower_bound_;
   sat::Coefficient upper_bound_;
   sat::Coefficient stratified_lower_bound_;
-  std::deque<sat::EncodingNode> repository_;
-  std::vector<sat::EncodingNode*> nodes_;
 };
 
 }  // namespace bop
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_BOP_COMPLETE_OPTIMIZER_H_
+#endif  // ORTOOLS_BOP_COMPLETE_OPTIMIZER_H_

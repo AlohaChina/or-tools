@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,16 +15,22 @@
 
 #include <cmath>
 #include <cstdint>
+#include <string>
+#include <vector>
 
+#include "absl/base/attributes.h"
+#include "absl/flags/flag.h"
+#include "absl/log/check.h"
+#include "absl/strings/match.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
 #include "google/protobuf/wrappers.pb.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/filelineiter.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
+#include "ortools/base/path.h"
 #include "ortools/scheduling/jobshop_scheduling.pb.h"
+#include "ortools/util/filelineiter.h"
 
 ABSL_FLAG(int64_t, jssp_scaling_up_factor, 100000L,
           "Scaling factor for floating point penalties.");
@@ -51,11 +57,12 @@ void JsspParser::SetMachines(int machine_count) {
   }
 }
 
-bool JsspParser::ParseFile(const std::string& filename) {
+bool JsspParser::ParseFile(absl::string_view filename) {
   problem_.Clear();
   // Try to detect the type of the data file.
   //  - fjs suffix -> Flexible Jobshop
   //  - txt suffix -> Taillard or time dependent scheduling.
+
   if (absl::EndsWith(filename, "fjs")) {
     problem_type_ = FLEXIBLE;
   } else if (absl::EndsWith(filename, ".txt")) {
@@ -63,6 +70,12 @@ bool JsspParser::ParseFile(const std::string& filename) {
   } else {
     problem_type_ = JSSP;
   }
+
+  // We use a temporary string as open source protobufs do not accept
+  // set(string_view).
+  const std::string problem_name(file::Stem(filename));
+  problem_.set_name(problem_name);
+
   for (const std::string& line : FileLines(filename)) {
     if (line.empty()) {
       continue;
@@ -528,13 +541,13 @@ void JsspParser::ProcessEarlyTardyLine(const std::string& line) {
   }
 }
 
-int JsspParser::strtoint32(const std::string& word) {
+int JsspParser::strtoint32(absl::string_view word) {
   int result;
   CHECK(absl::SimpleAtoi(word, &result));
   return result;
 }
 
-int64_t JsspParser::strtoint64(const std::string& word) {
+int64_t JsspParser::strtoint64(absl::string_view word) {
   int64_t result;
   CHECK(absl::SimpleAtoi(word, &result));
   return result;

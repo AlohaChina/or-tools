@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,8 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_GLOP_LU_FACTORIZATION_H_
-#define OR_TOOLS_GLOP_LU_FACTORIZATION_H_
+#ifndef ORTOOLS_GLOP_LU_FACTORIZATION_H_
+#define ORTOOLS_GLOP_LU_FACTORIZATION_H_
+
+#include <string>
+#include <vector>
 
 #include "ortools/glop/markowitz.h"
 #include "ortools/glop/parameters.pb.h"
@@ -34,6 +37,10 @@ namespace glop {
 class LuFactorization {
  public:
   LuFactorization();
+
+  // This type is neither copyable nor movable.
+  LuFactorization(const LuFactorization&) = delete;
+  LuFactorization& operator=(const LuFactorization&) = delete;
 
   // Returns true if the LuFactorization is a factorization of the identity
   // matrix. In this state, all the Solve() functions will work for any
@@ -295,10 +302,8 @@ class LuFactorization {
 
   // The class doing the Markowitz LU factorization.
   Markowitz markowitz_;
-
-  DISALLOW_COPY_AND_ASSIGN(LuFactorization);
 };
 
 }  // namespace glop
 }  // namespace operations_research
-#endif  // OR_TOOLS_GLOP_LU_FACTORIZATION_H_
+#endif  // ORTOOLS_GLOP_LU_FACTORIZATION_H_

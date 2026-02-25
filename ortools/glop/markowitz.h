@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -70,11 +70,13 @@
 //   29:1363-1381, January 2008.
 // - http://perso.ens-lyon.fr/~bucar/papers/kauc.pdf
 
-#ifndef OR_TOOLS_GLOP_MARKOWITZ_H_
-#define OR_TOOLS_GLOP_MARKOWITZ_H_
+#ifndef ORTOOLS_GLOP_MARKOWITZ_H_
+#define ORTOOLS_GLOP_MARKOWITZ_H_
 
 #include <cstdint>
 #include <queue>
+#include <string>
+#include <vector>
 
 #include "absl/container/inlined_vector.h"
 #include "ortools/base/logging.h"
@@ -99,7 +101,11 @@ namespace glop {
 // given step will only correspond to a subset of the initial indices.
 class MatrixNonZeroPattern {
  public:
-  MatrixNonZeroPattern() {}
+  MatrixNonZeroPattern() = default;
+
+  // This type is neither copyable nor movable.
+  MatrixNonZeroPattern(const MatrixNonZeroPattern&) = delete;
+  MatrixNonZeroPattern& operator=(const MatrixNonZeroPattern&) = delete;
 
   // Releases the memory used by this class.
   void Clear();
@@ -110,11 +116,12 @@ class MatrixNonZeroPattern {
   // Resets the pattern to the one of the given matrix but only for the
   // rows/columns whose given permutation is kInvalidRow or kInvalidCol.
   // This also fills the singleton columns/rows with the corresponding entries.
-  void InitializeFromMatrixSubset(const CompactSparseMatrixView& basis_matrix,
-                                  const RowPermutation& row_perm,
-                                  const ColumnPermutation& col_perm,
-                                  std::vector<ColIndex>* singleton_columns,
-                                  std::vector<RowIndex>* singleton_rows);
+  void InitializeFromMatrixSubset(
+      const CompactSparseMatrixView& basis_matrix,
+      StrictITISpan<RowIndex, const RowIndex> row_perm,
+      StrictITISpan<ColIndex, const ColIndex> col_perm,
+      std::vector<ColIndex>* singleton_columns,
+      std::vector<RowIndex>* singleton_rows);
 
   // Adds a non-zero entry to the matrix. There should be no duplicates.
   void AddEntry(RowIndex row, ColIndex col);
@@ -188,15 +195,14 @@ class MatrixNonZeroPattern {
   //
   // TODO(user): We could be even more efficient since a size of int32_t is
   // enough for us and we could store in common the inlined/not-inlined size.
-  absl::StrongVector<RowIndex, absl::InlinedVector<ColIndex, 6>> row_non_zero_;
+  util_intops::StrongVector<RowIndex, absl::InlinedVector<ColIndex, 6>>
+      row_non_zero_;
   StrictITIVector<RowIndex, int32_t> row_degree_;
   StrictITIVector<ColIndex, int32_t> col_degree_;
   DenseBooleanRow deleted_columns_;
   DenseBooleanRow bool_scratchpad_;
   std::vector<ColIndex> col_scratchpad_;
   ColIndex num_non_deleted_columns_;
-
-  DISALLOW_COPY_AND_ASSIGN(MatrixNonZeroPattern);
 };
 
 // Adjustable priority queue of columns. Pop() returns a column with the
@@ -204,10 +210,11 @@ class MatrixNonZeroPattern {
 // Empty columns (i.e. with degree 0) are not stored in the queue.
 class ColumnPriorityQueue {
  public:
-  ColumnPriorityQueue() {}
+  ColumnPriorityQueue() = default;
 
-  // Releases the memory used by this class.
-  void Clear();
+  // This type is neither copyable nor movable.
+  ColumnPriorityQueue(const ColumnPriorityQueue&) = delete;
+  ColumnPriorityQueue& operator=(const ColumnPriorityQueue&) = delete;
 
   // Clears the queue and prepares it to store up to num_cols column indices
   // with a degree from 1 to max_degree included.
@@ -223,11 +230,19 @@ class ColumnPriorityQueue {
   ColIndex Pop();
 
  private:
-  StrictITIVector<ColIndex, int32_t> col_index_;
-  StrictITIVector<ColIndex, int32_t> col_degree_;
-  std::vector<std::vector<ColIndex>> col_by_degree_;
+  void Remove(ColIndex col, int32_t old_degree);
+  void Insert(ColIndex col, int32_t degree);
+
+  // A degree of zero means not present.
   int32_t min_degree_;
-  DISALLOW_COPY_AND_ASSIGN(ColumnPriorityQueue);
+  StrictITIVector<ColIndex, int32_t> degree_;
+
+  // Pointer in the form of the prev/next column, kInvalidCol means "nil".
+  // We use double linked list for each degree, with col_by_degree_ pointing to
+  // the first element.
+  StrictITIVector<ColIndex, ColIndex> prev_;
+  StrictITIVector<ColIndex, ColIndex> next_;
+  std::vector<ColIndex> col_by_degree_;
 };
 
 // Contains a set of columns indexed by ColIndex. This is like a SparseMatrix
@@ -236,7 +251,13 @@ class ColumnPriorityQueue {
 // reuses the memory of the columns that are no longer needed.
 class SparseMatrixWithReusableColumnMemory {
  public:
-  SparseMatrixWithReusableColumnMemory() {}
+  SparseMatrixWithReusableColumnMemory() = default;
+
+  // This type is neither copyable nor movable.
+  SparseMatrixWithReusableColumnMemory(
+      const SparseMatrixWithReusableColumnMemory&) = delete;
+  SparseMatrixWithReusableColumnMemory& operator=(
+      const SparseMatrixWithReusableColumnMemory&) = delete;
 
   // Resets the repository to num_cols empty columns.
   void Reset(ColIndex num_cols);
@@ -261,10 +282,9 @@ class SparseMatrixWithReusableColumnMemory {
   // mutable_column(col) is stored in columns_[mapping_[col]].
   // The columns_ that can be reused have their index stored in free_columns_.
   const SparseColumn empty_column_;
-  absl::StrongVector<ColIndex, int> mapping_;
+  util_intops::StrongVector<ColIndex, int> mapping_;
   std::vector<int> free_columns_;
   std::vector<SparseColumn> columns_;
-  DISALLOW_COPY_AND_ASSIGN(SparseMatrixWithReusableColumnMemory);
 };
 
 // The class that computes either the actual L.U decomposition, or the
@@ -272,7 +292,11 @@ class SparseMatrixWithReusableColumnMemory {
 // decomposition.
 class Markowitz {
  public:
-  Markowitz() {}
+  Markowitz() = default;
+
+  // This type is neither copyable nor movable.
+  Markowitz(const Markowitz&) = delete;
+  Markowitz& operator=(const Markowitz&) = delete;
 
   // Computes the full factorization with P, Q, L and U.
   //
@@ -335,8 +359,8 @@ class Markowitz {
   // column permutation that move these columns in order to form an identity
   // sub-matrix on the upper left.
   //
-  // Note(user): Linear programming bases usually have a resonable percentage of
-  // slack columns in them, so this gives a big speedup.
+  // Note(user): Linear programming bases usually have a reasonable percentage
+  // of slack columns in them, so this gives a big speedup.
   void ExtractSingletonColumns(const CompactSparseMatrixView& basis_matrix,
                                RowPermutation* row_perm,
                                ColumnPermutation* col_perm, int* index);
@@ -354,8 +378,9 @@ class Markowitz {
 
   // Helper function for determining if a column is a residual singleton column.
   // If it is, RowIndex* row contains the index of the single residual edge.
-  bool IsResidualSingletonColumn(const ColumnView& column,
-                                 const RowPermutation& row_perm, RowIndex* row);
+  bool IsResidualSingletonColumn(
+      const ColumnView& column,
+      StrictITISpan<RowIndex, const RowIndex> row_perm, RowIndex* row);
 
   // Returns the column of the current residual matrix with an index 'col' in
   // the initial matrix. We compute it by solving a linear system with the
@@ -395,6 +420,18 @@ class Markowitz {
   // residual matrix can be updated more efficiently by calling one of the
   // Remove...() functions above.
   void UpdateResidualMatrix(RowIndex pivot_row, ColIndex pivot_col);
+
+  // Temporary memory.
+  struct MatrixEntry {
+    RowIndex row;
+    ColIndex col;
+    Fractional coefficient;
+    MatrixEntry() = default;
+    MatrixEntry(RowIndex r, ColIndex c, Fractional coeff)
+        : row(r), col(c), coefficient(coeff) {}
+    bool operator<(const MatrixEntry& o) const { return row < o.row; }
+  };
+  std::vector<MatrixEntry> tmp_singleton_entries_;
 
   // Pointer to the matrix to factorize.
   CompactSparseMatrixView const* basis_matrix_;
@@ -446,11 +483,9 @@ class Markowitz {
 
   // Number of floating point operations of the last factorization.
   int64_t num_fp_operations_;
-
-  DISALLOW_COPY_AND_ASSIGN(Markowitz);
 };
 
 }  // namespace glop
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_GLOP_MARKOWITZ_H_
+#endif  // ORTOOLS_GLOP_MARKOWITZ_H_

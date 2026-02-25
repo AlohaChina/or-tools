@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2010-2021 Google LLC
+# Copyright 2010-2025 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -11,14 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 # [START program]
 """Nurse scheduling problem with shift requests."""
 # [START import]
+from typing import Union
+
 from ortools.sat.python import cp_model
+
 # [END import]
 
 
-def main():
+def main() -> None:
     # This program tries to find an optimal assignment of nurses to shifts
     # (3 shifts per day, for 7 days), subject to some constraints (see below).
     # Each nurse can request to be assigned to specific shifts.
@@ -30,16 +34,13 @@ def main():
     all_nurses = range(num_nurses)
     all_shifts = range(num_shifts)
     all_days = range(num_days)
-    shift_requests = [[[0, 0, 1], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 1],
-                       [0, 1, 0], [0, 0, 1]],
-                      [[0, 0, 0], [0, 0, 0], [0, 1, 0], [0, 1, 0], [1, 0, 0],
-                       [0, 0, 0], [0, 0, 1]],
-                      [[0, 1, 0], [0, 1, 0], [0, 0, 0], [1, 0, 0], [0, 0, 0],
-                       [0, 1, 0], [0, 0, 0]],
-                      [[0, 0, 1], [0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 0],
-                       [1, 0, 0], [0, 0, 0]],
-                      [[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 0, 0], [1, 0, 0],
-                       [0, 1, 0], [0, 0, 0]]]
+    shift_requests = [
+        [[0, 0, 1], [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 0, 1]],
+        [[0, 0, 0], [0, 0, 0], [0, 1, 0], [0, 1, 0], [1, 0, 0], [0, 0, 0], [0, 0, 1]],
+        [[0, 1, 0], [0, 1, 0], [0, 0, 0], [1, 0, 0], [0, 0, 0], [0, 1, 0], [0, 0, 0]],
+        [[0, 0, 1], [0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 0], [1, 0, 0], [0, 0, 0]],
+        [[0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 0]],
+    ]
     # [END data]
 
     # Creates the model.
@@ -54,22 +55,21 @@ def main():
     for n in all_nurses:
         for d in all_days:
             for s in all_shifts:
-                shifts[(n, d,
-                        s)] = model.NewBoolVar('shift_n%id%is%i' % (n, d, s))
+                shifts[(n, d, s)] = model.new_bool_var(f"shift_n{n}_d{d}_s{s}")
     # [END variables]
 
     # Each shift is assigned to exactly one nurse in .
     # [START exactly_one_nurse]
     for d in all_days:
         for s in all_shifts:
-            model.Add(sum(shifts[(n, d, s)] for n in all_nurses) == 1)
+            model.add_exactly_one(shifts[(n, d, s)] for n in all_nurses)
     # [END exactly_one_nurse]
 
     # Each nurse works at most one shift per day.
     # [START at_most_one_shift]
     for n in all_nurses:
         for d in all_days:
-            model.Add(sum(shifts[(n, d, s)] for s in all_shifts) <= 1)
+            model.add_at_most_one(shifts[(n, d, s)] for s in all_shifts)
     # [END at_most_one_shift]
 
     # [START assign_nurses_evenly]
@@ -83,56 +83,61 @@ def main():
     else:
         max_shifts_per_nurse = min_shifts_per_nurse + 1
     for n in all_nurses:
-        num_shifts_worked = 0
+        num_shifts_worked: Union[cp_model.LinearExpr, int] = 0
         for d in all_days:
             for s in all_shifts:
                 num_shifts_worked += shifts[(n, d, s)]
-        model.Add(min_shifts_per_nurse <= num_shifts_worked)
-        model.Add(num_shifts_worked <= max_shifts_per_nurse)
+        model.add(min_shifts_per_nurse <= num_shifts_worked)
+        model.add(num_shifts_worked <= max_shifts_per_nurse)
     # [END assign_nurses_evenly]
 
     # [START objective]
-    # pylint: disable=g-complex-comprehension
-    model.Maximize(
-        sum(shift_requests[n][d][s] * shifts[(n, d, s)] for n in all_nurses
-            for d in all_days for s in all_shifts))
+    model.maximize(
+        sum(
+            shift_requests[n][d][s] * shifts[(n, d, s)]
+            for n in all_nurses
+            for d in all_days
+            for s in all_shifts
+        )
+    )
     # [END objective]
 
     # Creates the solver and solve.
     # [START solve]
     solver = cp_model.CpSolver()
-    status = solver.Solve(model)
+    status = solver.solve(model)
     # [END solve]
 
     # [START print_solution]
     if status == cp_model.OPTIMAL:
-        print('Solution:')
+        print("Solution:")
         for d in all_days:
-            print('Day', d)
+            print("Day", d)
             for n in all_nurses:
                 for s in all_shifts:
-                    if solver.Value(shifts[(n, d, s)]) == 1:
+                    if solver.value(shifts[(n, d, s)]) == 1:
                         if shift_requests[n][d][s] == 1:
-                            print('Nurse', n, 'works shift', s, '(requested).')
+                            print("Nurse", n, "works shift", s, "(requested).")
                         else:
-                            print('Nurse', n, 'works shift', s,
-                                  '(not requested).')
+                            print("Nurse", n, "works shift", s, "(not requested).")
             print()
-        print(f'Number of shift requests met = {solver.ObjectiveValue()}',
-              f'(out of {num_nurses * min_shifts_per_nurse})')
+        print(
+            f"Number of shift requests met = {solver.objective_value}",
+            f"(out of {num_nurses * min_shifts_per_nurse})",
+        )
     else:
-        print('No optimal solution found !')
+        print("No optimal solution found !")
     # [END print_solution]
 
     # Statistics.
     # [START statistics]
-    print('\nStatistics')
-    print('  - conflicts: %i' % solver.NumConflicts())
-    print('  - branches : %i' % solver.NumBranches())
-    print('  - wall time: %f s' % solver.WallTime())
+    print("\nStatistics")
+    print(f"  - conflicts: {solver.num_conflicts}")
+    print(f"  - branches : {solver.num_branches}")
+    print(f"  - wall time: {solver.wall_time}s")
     # [END statistics]
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 # [END program]

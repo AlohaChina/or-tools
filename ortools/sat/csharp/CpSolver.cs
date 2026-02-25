@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,180 +17,176 @@ using System.Runtime.CompilerServices;
 
 namespace Google.OrTools.Sat
 {
-public class CpSolver
+/**
+ * <summary>
+ * Wrapper around the SAT solver.
+ * </summary>
+ *
+ * <remarks>This class proposes a <c>Solve()</c> method, as well as accessors to get the values of
+ * variables in the best solution, as well as general statistics of the search.
+ * </remarks>
+ */
+public class CpSolver : IDisposable
 {
-    public CpSolverStatus Solve(CpModel model, SolutionCallback cb = null)
+    private LogCallback? _log_callback;
+    private BestBoundCallback? _best_bound_callback;
+    private SolveWrapper? _solve_wrapper;
+    private Queue<Term> _terms;
+    private bool _disposed = false;
+
+    public double ObjectiveValue => Response!.ObjectiveValue;
+
+    public double BestObjectiveBound => Response!.BestObjectiveBound;
+
+    public string? StringParameters { get; set; }
+
+    public CpSolverResponse? Response { get; private set; }
+
+    public CpSolverStatus Solve(CpModel model, SolutionCallback? cb = null)
     {
         // Setup search.
         CreateSolveWrapper();
-        if (string_parameters_ != null)
+        if (StringParameters is not null)
         {
-            solve_wrapper_.SetStringParameters(string_parameters_);
-        }
-        if (log_callback_ != null)
-        {
-            solve_wrapper_.AddLogCallbackFromClass(log_callback_);
-        }
-        if (cb != null)
-        {
-            solve_wrapper_.AddSolutionCallback(cb);
+            _solve_wrapper!.SetStringParameters(StringParameters);
         }
 
-        response_ = solve_wrapper_.Solve(model.Model);
+        if (_log_callback is not null)
+        {
+            _solve_wrapper!.AddLogCallbackFromClass(_log_callback);
+        }
+
+        if (_best_bound_callback is not null)
+        {
+            _solve_wrapper!.AddBestBoundCallbackFromClass(_best_bound_callback);
+        }
+
+        if (cb is not null)
+        {
+            _solve_wrapper!.AddSolutionCallback(cb);
+        }
+
+        Response = _solve_wrapper!.Solve(model.Model);
 
         // Cleanup search.
-        if (cb != null)
+        if (cb is not null)
         {
-            solve_wrapper_.ClearSolutionCallback(cb);
+            _solve_wrapper.ClearSolutionCallback(cb);
         }
+
         ReleaseSolveWrapper();
 
-        return response_.Status;
+        return Response.Status;
     }
 
-    [ObsoleteAttribute("This method is obsolete. Call Solve instead.", false)]
-    public CpSolverStatus SolveWithSolutionCallback(CpModel model, SolutionCallback cb)
-    {
-        return Solve(model, cb);
-    }
-
-    public CpSolverStatus SearchAllSolutions(CpModel model, SolutionCallback cb)
-    {
-        string old_parameters = string_parameters_;
-        string_parameters_ += " enumerate_all_solutions:true";
-        Solve(model, cb);
-        string_parameters_ = old_parameters;
-        return response_.Status;
-    }
-
+    /** <summary>Stops the search asynchronously.</summary> */
     [MethodImpl(MethodImplOptions.Synchronized)]
-    public void StopSearch()
-    {
-        if (solve_wrapper_ != null)
-        {
-            solve_wrapper_.StopSearch();
-        }
-    }
+    public void StopSearch() => _solve_wrapper?.StopSearch();
 
-    [MethodImpl(MethodImplOptions.Synchronized)]
-    private void CreateSolveWrapper()
-    {
-        solve_wrapper_ = new SolveWrapper();
-    }
-
-    [MethodImpl(MethodImplOptions.Synchronized)]
-    private void ReleaseSolveWrapper()
-    {
-        solve_wrapper_ = null;
-    }
-
-    public String ResponseStats()
-    {
-        return CpSatHelper.SolverResponseStats(response_);
-    }
-
-    public double ObjectiveValue
-    {
-        get {
-            return response_.ObjectiveValue;
-        }
-    }
-
-    public double BestObjectiveBound
-    {
-        get {
-            return response_.BestObjectiveBound;
-        }
-    }
-
-    public string StringParameters
-    {
-        get {
-            return string_parameters_;
-        }
-        set {
-            string_parameters_ = value;
-        }
-    }
+    public string ResponseStats() => CpSatHelper.SolverResponseStats(Response);
 
     public void SetLogCallback(StringToVoidDelegate del)
     {
-        log_callback_ = new LogCallbackDelegate(del);
+        _log_callback?.Dispose();
+        _log_callback = new LogCallbackDelegate(del);
     }
 
-    public CpSolverResponse Response
+    public void ClearLogCallback()
     {
-        get {
-            return response_;
-        }
+        _log_callback?.Dispose();
+        _log_callback = null;
+    }
+
+    public void SetBestBoundCallback(DoubleToVoidDelegate del)
+    {
+        _best_bound_callback?.Dispose();
+        _best_bound_callback = new BestBoundCallbackDelegate(del);
+    }
+
+    public void ClearBestBoundCallback()
+    {
+        _best_bound_callback?.Dispose();
+        _best_bound_callback = null;
+    }
+
+    public long Value(IntVar intVar)
+    {
+        var index = intVar.GetIndex();
+        var value = index >= 0 ? Response!.Solution[index] : -Response!.Solution[-index - 1];
+        return value;
     }
 
     public long Value(LinearExpr e)
     {
-        List<LinearExpr> exprs = new List<LinearExpr>();
-        List<long> coeffs = new List<long>();
-        exprs.Add(e);
-        coeffs.Add(1L);
         long constant = 0;
-
-        while (exprs.Count > 0)
+        long coefficient = 1;
+        var expr = e;
+        if (_terms is null)
         {
-            LinearExpr expr = exprs[0];
-            exprs.RemoveAt(0);
-            long coeff = coeffs[0];
-            coeffs.RemoveAt(0);
-            if (coeff == 0)
-                continue;
-
-            if (expr is ProductCst)
-            {
-                ProductCst p = (ProductCst)expr;
-                if (p.Coeff != 0)
-                {
-                    exprs.Add(p.Expr);
-                    coeffs.Add(p.Coeff * coeff);
-                }
-            }
-            else if (expr is SumArray)
-            {
-                SumArray a = (SumArray)expr;
-                constant += coeff * a.Offset;
-                foreach (LinearExpr sub in a.Expressions)
-                {
-                    exprs.Add(sub);
-                    coeffs.Add(coeff);
-                }
-            }
-            else if (expr is IntVar)
-            {
-                int index = expr.Index;
-                long value = index >= 0 ? response_.Solution[index] : -response_.Solution[-index - 1];
-                constant += coeff * value;
-            }
-            else if (expr is NotBooleanVariable)
-            {
-                throw new ArgumentException("Cannot evaluate a literal in an integer expression.");
-            }
-            else
-            {
-                throw new ArgumentException("Cannot evaluate '" + expr.ToString() + "' in an integer expression");
-            }
+            _terms = new Queue<Term>();
         }
+        else
+        {
+            _terms.Clear();
+        }
+
+        do
+        {
+            switch (expr)
+            {
+            case LinearExprBuilder a:
+                constant += coefficient * a.Offset;
+                if (coefficient == 1)
+                {
+                    foreach (var sub in a.Terms)
+                    {
+                        _terms.Enqueue(sub);
+                    }
+                }
+                else
+                {
+                    foreach (var sub in a.Terms)
+                    {
+                        _terms.Enqueue(new Term(sub.expr, sub.coefficient * coefficient));
+                    }
+                }
+
+                break;
+            case IntVar intVar:
+                var index = intVar.GetIndex();
+                var value = index >= 0 ? Response!.Solution[index] : -Response!.Solution[-index - 1];
+                constant += coefficient * value;
+                break;
+            case NotBoolVar:
+                throw new ArgumentException("Cannot evaluate a literal in an integer expression.");
+            default:
+                throw new ArgumentException("Cannot evaluate '" + expr + "' in an integer expression");
+            }
+
+            if (!_terms.TryDequeue(out var term))
+            {
+                break;
+            }
+
+            expr = term.expr;
+            coefficient = term.coefficient;
+        } while (true);
+
         return constant;
     }
 
-    public Boolean BooleanValue(ILiteral literal)
+    public bool BooleanValue(ILiteral literal)
     {
-        if (literal is IntVar || literal is NotBooleanVariable)
+        if (literal is BoolVar || literal is NotBoolVar)
         {
-            int index = literal.GetIndex();
+            var index = literal.GetIndex();
             if (index >= 0)
             {
-                return response_.Solution[index] != 0;
+                return Response!.Solution[index] != 0;
             }
             else
             {
-                return response_.Solution[-index - 1] == 0;
+                return Response!.Solution[-index - 1] == 0;
             }
         }
         else
@@ -199,50 +195,80 @@ public class CpSolver
         }
     }
 
-    public long NumBranches()
+    public long NumBranches() => Response!.NumBranches;
+
+    public long NumConflicts() => Response!.NumConflicts;
+
+    public double WallTime() => Response!.WallTime;
+
+    public string SolveLog() => Response!.SolveLog;
+
+    public IList<int> SufficientAssumptionsForInfeasibility() => Response!.SufficientAssumptionsForInfeasibility;
+
+    public string SolutionInfo() => Response!.SolutionInfo;
+
+    /// <summary>
+    /// Releases unmanaged resources and optionally releases managed resources.
+    /// </summary>
+    /// <param name="disposing">true to release both managed and unmanaged resources; false to release only unmanaged
+    /// resources.</param>
+    protected virtual void Dispose(bool disposing)
     {
-        return response_.NumBranches;
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (disposing)
+        {
+            _best_bound_callback?.Dispose();
+            _log_callback?.Dispose();
+            ReleaseSolveWrapper();
+        }
+
+        _disposed = true;
     }
 
-    public long NumConflicts()
+    /// <summary>
+    /// Releases all resources used by the CpSolver.
+    /// </summary>
+    public void Dispose()
     {
-        return response_.NumConflicts;
+        Dispose(true);
+        GC.SuppressFinalize(this);
     }
 
-    public double WallTime()
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    private void CreateSolveWrapper()
     {
-        return response_.WallTime;
+        _solve_wrapper?.Dispose();
+        _solve_wrapper = new SolveWrapper();
     }
 
-    public IList<int> SufficientAssumptionsForInfeasibility()
+    [MethodImpl(MethodImplOptions.Synchronized)]
+    private void ReleaseSolveWrapper()
     {
-        return response_.SufficientAssumptionsForInfeasibility;
+        _solve_wrapper?.Dispose();
+        _solve_wrapper = null;
     }
-
-    public String SolutionInfo()
-    {
-        return response_.SolutionInfo;
-    }
-
-    private CpSolverResponse response_;
-    private LogCallback log_callback_;
-    private string string_parameters_;
-    private SolveWrapper solve_wrapper_;
 }
 
 class LogCallbackDelegate : LogCallback
 {
-    public LogCallbackDelegate(StringToVoidDelegate del)
-    {
-        this.delegate_ = del;
-    }
+    private readonly StringToVoidDelegate _delegate_;
 
-    public override void NewMessage(string message)
-    {
-        delegate_(message);
-    }
+    public LogCallbackDelegate(StringToVoidDelegate del) => _delegate_ = del;
 
-    private StringToVoidDelegate delegate_;
+    public override void NewMessage(string message) => _delegate_(message);
+}
+
+class BestBoundCallbackDelegate : BestBoundCallback
+{
+    private readonly DoubleToVoidDelegate _delegate;
+
+    public BestBoundCallbackDelegate(DoubleToVoidDelegate del) => _delegate = del;
+
+    public override void NewBestBound(double bound) => _delegate(bound);
 }
 
 } // namespace Google.OrTools.Sat

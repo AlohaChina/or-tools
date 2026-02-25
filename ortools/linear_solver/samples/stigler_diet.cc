@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,14 +15,17 @@
 // The Stigler diet problem.
 // [START import]
 #include <array>
+#include <cstddef>
+#include <cstdlib>
+#include <memory>
 #include <string>
 #include <utility>  // std::pair
 #include <vector>
 
-#include "absl/flags/flag.h"
-#include "absl/flags/parse.h"
-#include "absl/flags/usage.h"
-#include "ortools/base/logging.h"
+#include "absl/base/log_severity.h"
+#include "absl/log/globals.h"
+#include "absl/log/log.h"
+#include "ortools/base/init_google.h"
 #include "ortools/linear_solver/linear_solver.h"
 // [END import]
 
@@ -240,6 +243,7 @@ void StiglerDiet() {
   // [START variables]
   std::vector<MPVariable*> foods;
   const double infinity = solver->infinity();
+  foods.reserve(data.size());
   for (const Commodity& commodity : data) {
     foods.push_back(solver->MakeNumVar(0.0, infinity, commodity.name));
   }
@@ -318,9 +322,8 @@ void StiglerDiet() {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  google::InitGoogleLogging(argv[0]);
-  absl::ParseCommandLine(argc, argv);
-  absl::SetFlag(&FLAGS_logtostderr, true);
+  InitGoogle(argv[0], &argc, &argv, true);
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
   operations_research::StiglerDiet();
   return EXIT_SUCCESS;
 }

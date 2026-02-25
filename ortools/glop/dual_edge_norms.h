@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,8 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_GLOP_DUAL_EDGE_NORMS_H_
-#define OR_TOOLS_GLOP_DUAL_EDGE_NORMS_H_
+#ifndef ORTOOLS_GLOP_DUAL_EDGE_NORMS_H_
+#define ORTOOLS_GLOP_DUAL_EDGE_NORMS_H_
+
+#include <string>
 
 #include "ortools/glop/basis_representation.h"
 #include "ortools/glop/parameters.pb.h"
@@ -21,6 +23,7 @@
 #include "ortools/lp_data/permutation.h"
 #include "ortools/lp_data/scattered_vector.h"
 #include "ortools/util/stats.h"
+#include "ortools/util/time_limit.h"
 
 namespace operations_research {
 namespace glop {
@@ -49,6 +52,10 @@ class DualEdgeNorms {
   // Takes references to the linear program data we need.
   explicit DualEdgeNorms(const BasisFactorization& basis_factorization);
 
+  // This type is neither copyable nor movable.
+  DualEdgeNorms(const DualEdgeNorms&) = delete;
+  DualEdgeNorms& operator=(const DualEdgeNorms&) = delete;
+
   // Clears, i.e. reset the object to its initial value. This will trigger a
   // full norm recomputation on the next GetEdgeSquaredNorms().
   void Clear();
@@ -69,10 +76,17 @@ class DualEdgeNorms {
   // Returns the dual edge squared norms. This is only valid if the caller
   // properly called UpdateBeforeBasisPivot() before each basis pivot, or just
   // called Clear().
-  const DenseColumn& GetEdgeSquaredNorms();
+  DenseColumn::ConstView GetEdgeSquaredNorms();
 
   // Updates the norms if the columns of the basis where permuted.
   void UpdateDataOnBasisPermutation(const ColumnPermutation& col_perm);
+
+  // Computes exactly the norm of the given leaving row, and returns true if it
+  // is good enough compared to our current norm. In both case update the
+  // current norm with its precise version and decide if we should recompute
+  // norms on the next GetEdgeSquaredNorms().
+  bool TestPrecision(RowIndex leaving_row,
+                     const ScatteredRow& unit_row_left_inverse);
 
   // Updates the norms just before a basis pivot is applied:
   // - The column at leaving_row will leave the basis and the column at
@@ -88,6 +102,8 @@ class DualEdgeNorms {
   void SetParameters(const GlopParameters& parameters) {
     parameters_ = parameters;
   }
+
+  void SetTimeLimit(TimeLimit* time_limit) { time_limit_ = time_limit; }
 
   // Stats related functions.
   std::string StatString() const { return stats_.StatString(); }
@@ -117,20 +133,20 @@ class DualEdgeNorms {
 
   // Parameters.
   GlopParameters parameters_;
+  TimeLimit* time_limit_ = nullptr;
 
   // Problem data that should be updated from outside.
   const BasisFactorization& basis_factorization_;
 
   // The dual edge norms.
   DenseColumn edge_squared_norms_;
+  DenseColumn tmp_edge_squared_norms_;
 
   // Whether we should recompute the norm from scratch.
   bool recompute_edge_squared_norms_;
-
-  DISALLOW_COPY_AND_ASSIGN(DualEdgeNorms);
 };
 
 }  // namespace glop
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_GLOP_DUAL_EDGE_NORMS_H_
+#endif  // ORTOOLS_GLOP_DUAL_EDGE_NORMS_H_

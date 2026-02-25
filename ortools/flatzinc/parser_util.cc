@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,12 +15,15 @@
 // Included in parser.tab.cc.
 #include "ortools/flatzinc/parser_util.h"
 
+#include <cmath>
 #include <string>
+#include <vector>
 
-#include "ortools/base/integral_types.h"
+#include "absl/strings/string_view.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/mathutil.h"
 #include "ortools/base/stl_util.h"
+#include "ortools/base/types.h"
 #include "ortools/flatzinc/model.h"
 #include "ortools/flatzinc/parser.tab.hh"
 #include "ortools/util/string_array.h"
@@ -40,7 +43,7 @@ namespace operations_research {
 namespace fz {
 // Whether the given list of annotations contains the given identifier
 // (or function call).
-bool ContainsId(std::vector<Annotation>* annotations, const std::string& id) {
+bool ContainsId(std::vector<Annotation>* annotations, absl::string_view id) {
   if (annotations != nullptr) {
     for (int i = 0; i < annotations->size(); ++i) {
       if (((*annotations)[i].type == Annotation::IDENTIFIER ||

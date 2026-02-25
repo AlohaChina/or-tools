@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,11 +13,13 @@
 
 // [START program]
 package com.google.ortools.sat.samples;
+
 // [START import]
 import com.google.ortools.Loader;
 import com.google.ortools.sat.CpModel;
 import com.google.ortools.sat.CpSolver;
 import com.google.ortools.sat.CpSolverSolutionCallback;
+import com.google.ortools.sat.CpSolverStatus;
 import com.google.ortools.sat.IntVar;
 import com.google.ortools.sat.LinearExpr;
 // [END import]
@@ -68,6 +70,8 @@ public final class NQueensSat {
 
     // [START variables]
     int boardSize = 8;
+    // There are `BoardSize` number of variables, one for a queen in each column of the board. The
+    // value of each variable is the row that the queen is in.
     IntVar[] queens = new IntVar[boardSize];
     for (int i = 0; i < boardSize; ++i) {
       queens[i] = model.newIntVar(0, boardSize - 1, "x" + i);
@@ -79,13 +83,12 @@ public final class NQueensSat {
     // All rows must be different.
     model.addAllDifferent(queens);
 
-    // All columns must be different because the indices of queens are all different.
     // No two queens can be on the same diagonal.
     LinearExpr[] diag1 = new LinearExpr[boardSize];
     LinearExpr[] diag2 = new LinearExpr[boardSize];
     for (int i = 0; i < boardSize; ++i) {
-      diag1[i] = LinearExpr.affine(queens[i], /*coefficient=*/1, /*offset=*/i);
-      diag2[i] = LinearExpr.affine(queens[i], /*coefficient=*/1, /*offset=*/-i);
+      diag1[i] = LinearExpr.newBuilder().add(queens[i]).add(i).build();
+      diag2[i] = LinearExpr.newBuilder().add(queens[i]).add(-i).build();
     }
     model.addAllDifferent(diag1);
     model.addAllDifferent(diag2);
@@ -98,7 +101,7 @@ public final class NQueensSat {
     // Tell the solver to enumerate all solutions.
     solver.getParameters().setEnumerateAllSolutions(true);
     // And solve.
-    solver.solve(model, cb);
+    CpSolverStatus unusedStatus = solver.solve(model, cb);
     // [END solve]
 
     // Statistics.

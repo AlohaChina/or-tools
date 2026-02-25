@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,10 +13,17 @@
 
 // [START program]
 // [START import]
+#include <algorithm>
 #include <cstdint>
+#include <cstdlib>
+#include <sstream>
 #include <vector>
 
+#include "google/protobuf/duration.pb.h"
+#include "ortools/base/logging.h"
+#include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/routing.h"
+#include "ortools/constraint_solver/routing_enums.pb.h"
 #include "ortools/constraint_solver/routing_index_manager.h"
 #include "ortools/constraint_solver/routing_parameters.h"
 // [END import]
@@ -81,15 +88,19 @@ struct DataModel {
 // [START solution_printer]
 void PrintSolution(const DataModel& data, const RoutingIndexManager& manager,
                    const RoutingModel& routing, const Assignment& solution) {
+  LOG(INFO) << "Objective: " << solution.ObjectiveValue();
   int64_t max_route_distance{0};
   for (int vehicle_id = 0; vehicle_id < data.num_vehicles; ++vehicle_id) {
+    if (!routing.IsVehicleUsed(solution, vehicle_id)) {
+      continue;
+    }
     int64_t index = routing.Start(vehicle_id);
     LOG(INFO) << "Route for Vehicle " << vehicle_id << ":";
     int64_t route_distance{0};
     std::stringstream route;
-    while (routing.IsEnd(index) == false) {
+    while (!routing.IsEnd(index)) {
       route << manager.IndexToNode(index).value() << " -> ";
-      int64_t previous_index = index;
+      const int64_t previous_index = index;
       index = solution.Value(routing.NextVar(index));
       route_distance += routing.GetArcCostForVehicle(previous_index, index,
                                                      int64_t{vehicle_id});
@@ -124,10 +135,11 @@ void VrpInitialRoutes() {
   // Create and register a transit callback.
   // [START transit_callback]
   const int transit_callback_index = routing.RegisterTransitCallback(
-      [&data, &manager](int64_t from_index, int64_t to_index) -> int64_t {
+      [&data, &manager](const int64_t from_index,
+                        const int64_t to_index) -> int64_t {
         // Convert from routing variable Index to distance matrix NodeIndex.
-        auto from_node = manager.IndexToNode(from_index).value();
-        auto to_node = manager.IndexToNode(to_index).value();
+        const int from_node = manager.IndexToNode(from_index).value();
+        const int to_node = manager.IndexToNode(to_index).value();
         return data.distance_matrix[from_node][to_node];
       });
   // [END transit_callback]
@@ -145,7 +157,21 @@ void VrpInitialRoutes() {
   routing.GetMutableDimension("Distance")->SetGlobalSpanCostCoefficient(100);
   // [END distance_constraint]
 
-  // Get initial solution from routes.
+  // Close model with the custom search parameters
+  // [START parameters]
+  RoutingSearchParameters searchParameters = DefaultRoutingSearchParameters();
+  searchParameters.set_first_solution_strategy(
+      FirstSolutionStrategy::PATH_CHEAPEST_ARC);
+  searchParameters.set_local_search_metaheuristic(
+      LocalSearchMetaheuristic::GUIDED_LOCAL_SEARCH);
+  searchParameters.mutable_time_limit()->set_seconds(5);
+  // When an initial solution is given for search, the model will be closed with
+  // the default search parameters unless it is explicitly closed with the
+  // custom search parameters.
+  routing.CloseModelWithParameters(searchParameters);
+  // [END parameters]
+
+  // Get initial solution from routes after closing the model.
   // [START print_initial_solution]
   const Assignment* initial_solution =
       routing.ReadAssignmentFromRoutes(data.initial_routes, true);
@@ -153,16 +179,12 @@ void VrpInitialRoutes() {
   LOG(INFO) << "Initial solution: ";
   PrintSolution(data, manager, routing, *initial_solution);
   // [END print_initial_solution]
-  // Setting first solution heuristic.
-  // [START parameters]
-  RoutingSearchParameters searchParameters = DefaultRoutingSearchParameters();
-  // [END parameters]
 
   // Solve from initial solution.
   // [START solve]
   const Assignment* solution = routing.SolveFromAssignmentWithParameters(
       initial_solution, searchParameters);
-  // [START solve]
+  // [END solve]
 
   // Print solution on console.
   // [START print_solution]
@@ -173,7 +195,7 @@ void VrpInitialRoutes() {
 }
 }  // namespace operations_research
 
-int main(int argc, char** argv) {
+int main(int /*argc*/, char* /*argv*/[]) {
   operations_research::VrpInitialRoutes();
   return EXIT_SUCCESS;
 }

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,24 +13,28 @@
 
 #include "ortools/bop/bop_solver.h"
 
+#include <cstdlib>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/strings/str_format.h"
 #include "google/protobuf/text_format.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/stl_util.h"
-#include "ortools/bop/bop_fs.h"
-#include "ortools/bop/bop_lns.h"
-#include "ortools/bop/bop_ls.h"
+#include "ortools/base/threadpool.h"
+#include "ortools/bop/bop_base.h"
+#include "ortools/bop/bop_parameters.pb.h"
 #include "ortools/bop/bop_portfolio.h"
-#include "ortools/bop/bop_util.h"
-#include "ortools/bop/complete_optimizer.h"
-#include "ortools/glop/lp_solver.h"
-#include "ortools/lp_data/lp_print_utils.h"
+#include "ortools/bop/bop_solution.h"
+#include "ortools/bop/bop_types.h"
+#include "ortools/lp_data/lp_types.h"
 #include "ortools/sat/boolean_problem.h"
-#include "ortools/sat/lp_utils.h"
-#include "ortools/sat/sat_solver.h"
-#include "ortools/util/bitset.h"
+#include "ortools/sat/boolean_problem.pb.h"
+#include "ortools/sat/pb_constraint.h"
+#include "ortools/util/stats.h"
+#include "ortools/util/time_limit.h"
 
 namespace operations_research {
 namespace bop {
@@ -41,27 +45,6 @@ namespace {
 
 using ::operations_research::glop::ColIndex;
 using ::operations_research::glop::DenseRow;
-
-// Updates the problem_state when the solution is proved optimal or the problem
-// is proved infeasible.
-// Returns true when the problem_state has been changed.
-bool UpdateProblemStateBasedOnStatus(BopOptimizerBase::Status status,
-                                     ProblemState* problem_state) {
-  CHECK(nullptr != problem_state);
-
-  if (BopOptimizerBase::OPTIMAL_SOLUTION_FOUND == status) {
-    problem_state->MarkAsOptimal();
-    return true;
-  }
-
-  if (BopOptimizerBase::INFEASIBLE == status) {
-    problem_state->MarkAsInfeasible();
-    return true;
-  }
-
-  return false;
-}
-
 }  // anonymous namespace
 
 //------------------------------------------------------------------------------
@@ -164,6 +147,7 @@ BopSolveStatus BopSolver::SolveWithTimeLimit(const BopSolution& first_solution,
     VLOG(1)
         << "First solution is infeasible. Using it as assignment preference.";
     std::vector<bool> assignment_preference;
+    assignment_preference.reserve(first_solution.Size());
     for (int i = 0; i < first_solution.Size(); ++i) {
       assignment_preference.push_back(first_solution.Value(VariableIndex(i)));
     }

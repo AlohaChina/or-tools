@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,13 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_PACKING_BINPACKING_2D_PARSER_H_
-#define OR_TOOLS_PACKING_BINPACKING_2D_PARSER_H_
+#ifndef ORTOOLS_PACKING_BINPACKING_2D_PARSER_H_
+#define ORTOOLS_PACKING_BINPACKING_2D_PARSER_H_
 
 #include <string>
 #include <vector>
 
-#include "ortools/base/integral_types.h"
+#include "absl/strings/string_view.h"
+#include "ortools/base/types.h"
 #include "ortools/packing/multiple_dimensions_bin_packing.pb.h"
 
 namespace operations_research {
@@ -50,7 +51,7 @@ class BinPacking2dParser {
   // file. The instance are 1 based (first is 1).
   // Only one call to a Load*() function is supported. All the subsequent
   // calls will do nothing and return false.
-  bool Load2BPFile(const std::string& file_name, int instance);
+  bool Load2BPFile(absl::string_view file_name, int instance);
   MultipleDimensionsBinPackingProblem problem() const { return problem_; }
 
  private:
@@ -70,4 +71,4 @@ class BinPacking2dParser {
 }  // namespace packing
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_PACKING_BINPACKING_2D_PARSER_H_
+#endif  // ORTOOLS_PACKING_BINPACKING_2D_PARSER_H_

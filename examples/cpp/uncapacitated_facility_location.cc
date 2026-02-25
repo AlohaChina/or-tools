@@ -1,4 +1,4 @@
-// Copyright 2020 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//
 // Uncapacitated Facility Location Problem.
 // A description of the problem can be found here:
 // https://en.wikipedia.org/wiki/Facility_location_problem.
@@ -21,13 +20,22 @@
 // sake of simplicity, facilities and demands are randomly located. Distances
 // are assumed to be in meters and times in seconds.
 
+#include <cassert>
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <iostream>
+#include <string>
 #include <vector>
 
+#include "absl/base/log_severity.h"
+#include "absl/flags/flag.h"
+#include "absl/flags/parse.h"
+#include "absl/flags/usage.h"
+#include "absl/log/globals.h"
+#include "absl/log/initialize.h"
 #include "absl/random/random.h"
-#include "google/protobuf/text_format.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/linear_solver/linear_solver.h"
 #include "ortools/util/random_engine.h"
@@ -137,13 +145,15 @@ static void UncapacitatedFacilityLocation(
   // display on screen LP if small enough
   if (clients <= 10 && facilities <= 10) {
     std::string lp_string{};
-    solver.ExportModelAsLpFormat(/* obfuscate */ false, &lp_string);
+    const bool obfuscate = false;
+    solver.ExportModelAsLpFormat(obfuscate, &lp_string);
     std::cout << "LP-Model:\n" << lp_string << std::endl;
   }
   // Set options and solve
   if (optimization_problem_type != MPSolver::SCIP_MIXED_INTEGER_PROGRAMMING) {
     if (!solver.SetNumThreads(8).ok()) {
-      LOG(INFO) << "Could not set parallelism for " << optimization_problem_type;
+      LOG(INFO) << "Could not set parallelism for "
+                << optimization_problem_type;
     }
   }
   solver.EnableOutput();
@@ -161,7 +171,7 @@ static void UncapacitatedFacilityLocation(
       }
       std::cout << "\tSolution:\n";
       for (int f = 0; f < facilities; ++f) {
-        if (solution[f].size() < 1) continue;
+        if (solution[f].empty()) continue;
         assert(xf[f]->solution_value() > 0.5);
         snprintf(name_buffer, kStrLen, "\t  Facility[%d](%g,%g):", f,
                  facility[f].x, facility[f].y);
@@ -224,7 +234,7 @@ void RunAllExamples(int32_t facilities, int32_t clients, double fix_cost) {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  google::InitGoogleLogging(argv[0]);
+  absl::InitializeLog();
   absl::SetProgramUsageMessage(
       std::string("This program solve a (randomly generated)\n") +
       std::string("Uncapacitated Facility Location Problem. Sample Usage:\n"));
@@ -235,7 +245,7 @@ int main(int argc, char** argv) {
       << "Specify a non-null client size.";
   CHECK_LT(0, absl::GetFlag(FLAGS_fix_cost))
       << "Specify a non-null client size.";
-  absl::SetFlag(&FLAGS_logtostderr, 1);
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
   operations_research::RunAllExamples(absl::GetFlag(FLAGS_facilities),
                                       absl::GetFlag(FLAGS_clients),
                                       absl::GetFlag(FLAGS_fix_cost));

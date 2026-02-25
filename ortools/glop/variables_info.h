@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_GLOP_VARIABLES_INFO_H_
-#define OR_TOOLS_GLOP_VARIABLES_INFO_H_
+#ifndef ORTOOLS_GLOP_VARIABLES_INFO_H_
+#define ORTOOLS_GLOP_VARIABLES_INFO_H_
 
 #include "ortools/lp_data/lp_types.h"
 #include "ortools/lp_data/sparse.h"
@@ -56,6 +56,10 @@ class VariablesInfo {
  public:
   // Takes references to the linear program data we need.
   explicit VariablesInfo(const CompactSparseMatrix& matrix);
+
+  // This type is neither copyable nor movable.
+  VariablesInfo(const VariablesInfo&) = delete;
+  VariablesInfo& operator=(const VariablesInfo&) = delete;
 
   // Updates the internal bounds and recomputes the variable types from the
   // bounds (this is the only function that changes them).
@@ -127,7 +131,7 @@ class VariablesInfo {
   const DenseRow& GetVariableLowerBounds() const { return lower_bounds_; }
   const DenseRow& GetVariableUpperBounds() const { return upper_bounds_; }
 
-  const ColIndex GetNumberOfColumns() const { return matrix_.num_cols(); }
+  ColIndex GetNumberOfColumns() const { return matrix_.num_cols(); }
 
   // Changes whether or not a non-basic boxed variable is 'relevant' and will be
   // returned as such by GetIsRelevantBitRow().
@@ -166,9 +170,15 @@ class VariablesInfo {
   // TODO(user): Shall we re-add the bound when the variable is moved out of
   // the base? it is not needed, but might allow for more bound flips?
   void TransformToDualPhaseIProblem(Fractional dual_feasibility_tolerance,
-                                    const DenseRow& reduced_costs);
+                                    DenseRow::ConstView reduced_costs);
   void EndDualPhaseI(Fractional dual_feasibility_tolerance,
-                     const DenseRow& reduced_costs);
+                     DenseRow::ConstView reduced_costs);
+
+  // Advanced incremental API to reuse directly the internal storage.
+  // This saves two copy per solves, and only matter on large easy problems.
+  void InitializeFromMutatedState();
+  DenseRow* MutableLowerBounds() { return &lower_bounds_; }
+  DenseRow* MutableUpperBounds() { return &upper_bounds_; }
 
  private:
   // Computes the initial/default variable status from its type. A constrained
@@ -236,11 +246,9 @@ class VariablesInfo {
   // Whether we are between the calls TransformToDualPhaseIProblem() and
   // EndDualPhaseI().
   bool in_dual_phase_one_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(VariablesInfo);
 };
 
 }  // namespace glop
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_GLOP_VARIABLES_INFO_H_
+#endif  // ORTOOLS_GLOP_VARIABLES_INFO_H_

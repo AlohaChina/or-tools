@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,11 +13,15 @@
 
 #include "ortools/lp_data/lp_parser.h"
 
+#include <algorithm>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "absl/base/attributes.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
@@ -25,10 +29,9 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
-#include "absl/strings/strip.h"
-#include "ortools/base/case.h"
-#include "ortools/base/map_util.h"
 #include "ortools/linear_solver/linear_solver.pb.h"
+#include "ortools/lp_data/lp_data.h"
+#include "ortools/lp_data/lp_types.h"
 #include "ortools/lp_data/proto_utils.h"
 #include "re2/re2.h"
 
@@ -37,6 +40,7 @@ namespace glop {
 
 namespace {
 
+using StringPiece = ::re2::StringPiece;
 using ::absl::StatusOr;
 
 enum class TokenType {
@@ -68,11 +72,11 @@ class LPParser {
   ABSL_MUST_USE_RESULT bool Parse(absl::string_view model, LinearProgram* lp);
 
  private:
-  bool ParseEmptyLine(absl::string_view line);
-  bool ParseObjective(absl::string_view objective);
-  bool ParseIntegerVariablesList(absl::string_view line);
-  bool ParseConstraint(absl::string_view constraint);
-  TokenType ConsumeToken(absl::string_view* sp);
+  bool ParseEmptyLine(StringPiece line);
+  bool ParseObjective(StringPiece objective);
+  bool ParseIntegerVariablesList(StringPiece line);
+  bool ParseConstraint(StringPiece constraint);
+  TokenType ConsumeToken(StringPiece* sp);
   bool SetVariableBounds(ColIndex col, Fractional lb, Fractional ub);
 
   // Linear program populated by the Parse() method. Not owned.
@@ -92,11 +96,11 @@ bool LPParser::Parse(absl::string_view model, LinearProgram* lp) {
   bounded_variables_.clear();
   lp_->Clear();
 
-  std::vector<absl::string_view> lines =
+  std::vector<StringPiece> lines =
       absl::StrSplit(model, ';', absl::SkipEmpty());
   bool has_objective = false;
 
-  for (absl::string_view line : lines) {
+  for (StringPiece line : lines) {
     if (!has_objective && ParseObjective(line)) {
       has_objective = true;
     } else if (!ParseConstraint(line) && !ParseIntegerVariablesList(line) &&
@@ -118,12 +122,12 @@ bool LPParser::Parse(absl::string_view model, LinearProgram* lp) {
   return true;
 }
 
-bool LPParser::ParseEmptyLine(absl::string_view line) {
+bool LPParser::ParseEmptyLine(StringPiece line) {
   if (ConsumeToken(&line) == TokenType::END) return true;
   return false;
 }
 
-bool LPParser::ParseObjective(absl::string_view objective) {
+bool LPParser::ParseObjective(StringPiece objective) {
   // Get the required optimization direction.
   if (ConsumeToken(&objective) != TokenType::NAME) return false;
   if (absl::EqualsIgnoreCase(consumed_name_, "min")) {
@@ -153,7 +157,7 @@ bool LPParser::ParseObjective(absl::string_view objective) {
   return token_type == TokenType::END;
 }
 
-bool LPParser::ParseIntegerVariablesList(absl::string_view line) {
+bool LPParser::ParseIntegerVariablesList(StringPiece line) {
   // Get the required "int" or "bin" keyword.
   bool binary_list = false;
   if (ConsumeToken(&line) != TokenType::NAME) return false;
@@ -181,7 +185,7 @@ bool LPParser::ParseIntegerVariablesList(absl::string_view line) {
   return true;
 }
 
-bool LPParser::ParseConstraint(absl::string_view constraint) {
+bool LPParser::ParseConstraint(StringPiece constraint) {
   const StatusOr<ParsedConstraint> parsed_constraint_or_status =
       ::operations_research::glop::ParseConstraint(constraint);
   if (!parsed_constraint_or_status.ok()) return false;
@@ -231,6 +235,24 @@ bool LPParser::ParseConstraint(absl::string_view constraint) {
   return true;
 }
 
+namespace {
+
+template <class>
+constexpr bool dependent_false = false;  // workaround before CWG2518/P2593R1
+
+template <typename T>
+bool SimpleAtoFractional(absl::string_view str, T* value) {
+  if constexpr (std::is_same_v<T, double>) {
+    return absl::SimpleAtod(str, value);
+  } else if constexpr (std::is_same_v<T, float>) {
+    return absl::SimpleAtof(str, value);
+  } else {
+    static_assert(dependent_false<T>, "Unsupported fractional type");
+    return false;
+  }
+}
+}  // namespace
+
 bool LPParser::SetVariableBounds(ColIndex col, Fractional lb, Fractional ub) {
   if (bounded_variables_.find(col) == bounded_variables_.end()) {
     // The variable was not bounded yet, thus reset its bounds.
@@ -245,8 +267,8 @@ bool LPParser::SetVariableBounds(ColIndex col, Fractional lb, Fractional ub) {
   return true;
 }
 
-TokenType ConsumeToken(absl::string_view* sp, std::string* consumed_name,
-                       double* consumed_coeff) {
+TokenType ConsumeToken(StringPiece* sp, std::string* consumed_name,
+                       Fractional* consumed_coeff) {
   DCHECK(consumed_name != nullptr);
   DCHECK(consumed_coeff != nullptr);
   // We use LazyRE2 everywhere so that all the patterns are just compiled once
@@ -301,7 +323,7 @@ TokenType ConsumeToken(absl::string_view* sp, std::string* consumed_name,
   static const LazyRE2 kValuePattern = {
       R"(\s*([0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?))"};
   if (RE2::Consume(sp, *kValuePattern, &coeff)) {
-    if (!absl::SimpleAtod(coeff, consumed_coeff)) {
+    if (!SimpleAtoFractional(coeff, consumed_coeff)) {
       // Note: If absl::SimpleAtod(), Consume(), and kValuePattern are correct,
       // this should never happen.
       LOG(ERROR) << "Text: " << coeff << " was matched by RE2 to be "
@@ -333,7 +355,7 @@ TokenType ConsumeToken(absl::string_view* sp, std::string* consumed_name,
   return TokenType::ERROR;
 }
 
-TokenType LPParser::ConsumeToken(absl::string_view* sp) {
+TokenType LPParser::ConsumeToken(StringPiece* sp) {
   using ::operations_research::glop::ConsumeToken;
   return ConsumeToken(sp, &consumed_name_, &consumed_coeff_);
 }
@@ -343,7 +365,7 @@ TokenType LPParser::ConsumeToken(absl::string_view* sp) {
 StatusOr<ParsedConstraint> ParseConstraint(absl::string_view constraint) {
   ParsedConstraint parsed_constraint;
   // Get the name, if present.
-  absl::string_view constraint_copy(constraint);
+  StringPiece constraint_copy{constraint};
   std::string consumed_name;
   Fractional consumed_coeff;
   if (ConsumeToken(&constraint_copy, &consumed_name, &consumed_coeff) ==

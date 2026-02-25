@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -27,14 +27,15 @@
 // code is responsible for using this class properly. A few DCHECKs() will help
 // catch bugs, though.
 
-#ifndef OR_TOOLS_ALGORITHMS_DYNAMIC_PARTITION_H_
-#define OR_TOOLS_ALGORITHMS_DYNAMIC_PARTITION_H_
+#ifndef ORTOOLS_ALGORITHMS_DYNAMIC_PARTITION_H_
+#define ORTOOLS_ALGORITHMS_DYNAMIC_PARTITION_H_
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include "ortools/base/logging.h"
+#include "absl/log/check.h"
+#include "absl/types/span.h"
 
 namespace operations_research {
 
@@ -59,7 +60,7 @@ class DynamicPartition {
 
   // Accessors.
   int NumElements() const { return element_.size(); }
-  const int NumParts() const { return part_.size(); }
+  int NumParts() const { return part_.size(); }
 
   // To iterate over the elements in part #i:
   // for (int element : partition.ElementsInPart(i)) { ... }
@@ -106,23 +107,17 @@ class DynamicPartition {
   // keeping track of one additional bit of information for each part that
   // remains unchanged by a Refine() operation: was that part entirely *in*
   // the distinguished subset or entirely *out*?
-  void Refine(const std::vector<int>& distinguished_subset);
+  void Refine(absl::Span<const int> distinguished_subset);
 
   // Undo one or several Refine() operations, until the number of parts
   // becomes equal to "original_num_parts".
   // Prerequisite: NumParts() >= original_num_parts.
   void UndoRefineUntilNumPartsEqual(int original_num_parts);
 
-  // Dump the partition to a string. There might be different conventions for
-  // sorting the parts and the elements inside them.
-  enum DebugStringSorting {
-    // Elements are sorted within parts, and parts are then sorted
-    // lexicographically.
-    SORT_LEXICOGRAPHICALLY,
-    // Elements are sorted within parts, and parts are kept in order.
-    SORT_BY_PART,
-  };
-  std::string DebugString(DebugStringSorting sorting) const;
+  // Converts the current partition to a string, like "3 | 1 2 | 0 4 5". Within
+  // each part, elements are sorted. And if sort_parts_lexicographically=true,
+  // the parts are sorted lexicographically instead of by their natural order.
+  std::string DebugString(bool sort_parts_lexicographically) const;
 
   // ADVANCED USAGE:
   // All elements (0..n-1) of the partition, sorted in a way that's compatible
@@ -189,7 +184,7 @@ struct DynamicPartition::IterablePart {
 
   int size() const { return end_ - begin_; }
 
-  IterablePart() {}
+  IterablePart() = default;
   IterablePart(const std::vector<int>::const_iterator& b,
                const std::vector<int>::const_iterator& e)
       : begin_(b), end_(e) {}
@@ -272,6 +267,37 @@ class MergingPartition {
   std::vector<bool> tmp_part_bit_;
 };
 
+// A subset of the API of DynamicPartition without backtrack support. The
+// Refine() here is about twice as fast, but we have limited query support until
+// a batch ComputeElementsByPart() is called.
+class SimpleDynamicPartition {
+ public:
+  explicit SimpleDynamicPartition(int num_elements)
+      : part_of_(num_elements, 0),
+        size_of_part_(num_elements > 0 ? 1 : 0, num_elements) {}
+
+  int NumElements() const { return part_of_.size(); }
+  int NumParts() const { return size_of_part_.size(); }
+  int PartOf(int element) const { return part_of_[element]; }
+  int SizeOfPart(int part) const { return size_of_part_[part]; }
+
+  void Refine(absl::Span<const int> distinguished_subset);
+
+  // This is meant to be called once after a bunch of Refine(). The returned
+  // Span<> points into the given buffer which is re-initialized. To handle
+  // strongly typed int, we actually call T(int) as we fill the buffer.
+  template <typename T>
+  std::vector<absl::Span<const T>> GetParts(std::vector<T>* buffer);
+
+ private:
+  std::vector<int> part_of_;
+  std::vector<int> size_of_part_;
+
+  // Temp data. Always empty or all zero.
+  std::vector<int> temp_to_clean_;
+  std::vector<int> temp_data_by_part_;
+};
+
 // *** Implementation of inline methods of the above classes. ***
 
 inline DynamicPartition::IterablePart DynamicPartition::ElementsInPart(
@@ -344,6 +370,35 @@ inline void MergingPartition::ResetNode(int node) {
   part_size_[node] = 1;
 }
 
+template <typename T>
+inline std::vector<absl::Span<const T>> SimpleDynamicPartition::GetParts(
+    std::vector<T>* buffer) {
+  const int num_elements = part_of_.size();
+  const int num_parts = size_of_part_.size();
+  buffer->resize(num_elements);
+
+  std::vector<absl::Span<const T>> result(num_parts);
+  if (result.empty()) return result;
+
+  // Compute start of each part in buffer.
+  std::vector<int>& starts = temp_data_by_part_;
+  starts.resize(num_parts, 0);
+  for (int i = 1; i < num_parts; ++i) {
+    starts[i] = starts[i - 1] + size_of_part_[i - 1];
+  }
+
+  // Fill result.
+  for (int i = 0; i < num_parts; ++i) {
+    result[i] = absl::MakeSpan(&(*buffer)[starts[i]], size_of_part_[i]);
+  }
+
+  // Copy elements in order and at their place.
+  for (int element = 0; element < num_elements; ++element) {
+    (*buffer)[starts[part_of_[element]]++] = T(element);
+  }
+  starts.clear();
+  return result;
+}
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_ALGORITHMS_DYNAMIC_PARTITION_H_
+#endif  // ORTOOLS_ALGORITHMS_DYNAMIC_PARTITION_H_

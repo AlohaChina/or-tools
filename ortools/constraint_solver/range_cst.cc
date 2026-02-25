@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//
 //  Range constraints
 
 #include <stddef.h>
@@ -71,7 +70,7 @@ class RangeEquality : public Constraint {
 
 class RangeLessOrEqual : public Constraint {
  public:
-  RangeLessOrEqual(Solver* const s, IntExpr* const l, IntExpr* const r);
+  RangeLessOrEqual(Solver* s, IntExpr* l, IntExpr* r);
   ~RangeLessOrEqual() override {}
   void Post() override;
   void InitialPropagate() override;
@@ -120,7 +119,7 @@ std::string RangeLessOrEqual::DebugString() const {
 
 class RangeLess : public Constraint {
  public:
-  RangeLess(Solver* const s, IntExpr* const l, IntExpr* const r);
+  RangeLess(Solver* s, IntExpr* l, IntExpr* r);
   ~RangeLess() override {}
   void Post() override;
   void InitialPropagate() override;
@@ -150,7 +149,9 @@ void RangeLess::Post() {
 }
 
 void RangeLess::InitialPropagate() {
+  if (right_->Max() == kint64min) solver()->Fail();
   left_->SetMax(right_->Max() - 1);
+  if (left_->Min() == kint64max) solver()->Fail();
   right_->SetMin(left_->Min() + 1);
   if (left_->Max() < right_->Min()) {
     demon_->inhibit(solver());
@@ -166,7 +167,7 @@ std::string RangeLess::DebugString() const {
 
 class DiffVar : public Constraint {
  public:
-  DiffVar(Solver* const s, IntVar* const l, IntVar* const r);
+  DiffVar(Solver* s, IntVar* l, IntVar* r);
   ~DiffVar() override {}
   void Post() override;
   void InitialPropagate() override;
@@ -231,7 +232,7 @@ std::string DiffVar::DebugString() const {
 }
 
 // --------------------- Reified API -------------------
-// A reified API transforms an constraint into a status variables.
+// A reified API transforms a constraint into a status variables.
 // For example x == y is transformed into IsEqual(x, y, b) where
 // b is a boolean variable which is true if and only if x is equal to b.
 

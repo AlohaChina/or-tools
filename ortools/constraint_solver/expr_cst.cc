@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,22 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//
 //  Expression constraints
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "ortools/base/commandlineflags.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/stl_util.h"
+#include "ortools/base/types.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/saturated_arithmetic.h"
@@ -44,7 +45,7 @@ namespace operations_research {
 namespace {
 class EqualityExprCst : public Constraint {
  public:
-  EqualityExprCst(Solver* const s, IntExpr* const e, int64_t v);
+  EqualityExprCst(Solver* s, IntExpr* e, int64_t v);
   ~EqualityExprCst() override {}
   void Post() override;
   void InitialPropagate() override;
@@ -119,7 +120,7 @@ Constraint* Solver::MakeEquality(IntExpr* const e, int v) {
 namespace {
 class GreaterEqExprCst : public Constraint {
  public:
-  GreaterEqExprCst(Solver* const s, IntExpr* const e, int64_t v);
+  GreaterEqExprCst(Solver* s, IntExpr* e, int64_t v);
   ~GreaterEqExprCst() override {}
   void Post() override;
   void InitialPropagate() override;
@@ -217,7 +218,7 @@ Constraint* Solver::MakeGreater(IntExpr* const e, int v) {
 namespace {
 class LessEqExprCst : public Constraint {
  public:
-  LessEqExprCst(Solver* const s, IntExpr* const e, int64_t v);
+  LessEqExprCst(Solver* s, IntExpr* e, int64_t v);
   ~LessEqExprCst() override {}
   void Post() override;
   void InitialPropagate() override;
@@ -314,7 +315,7 @@ Constraint* Solver::MakeLess(IntExpr* const e, int v) {
 namespace {
 class DiffCst : public Constraint {
  public:
-  DiffCst(Solver* const s, IntVar* const var, int64_t value);
+  DiffCst(Solver* s, IntVar* var, int64_t value);
   ~DiffCst() override {}
   void Post() override {}
   void InitialPropagate() override;
@@ -358,9 +359,9 @@ void DiffCst::BoundPropagate() {
   if (var_min > value_ || var_max < value_) {
     demon_->inhibit(solver());
   } else if (var_min == value_) {
-    var_->SetMin(value_ + 1);
+    var_->SetMin(CapAdd(value_, 1));
   } else if (var_max == value_) {
-    var_->SetMax(value_ - 1);
+    var_->SetMax(CapSub(value_, 1));
   } else if (!HasLargeDomain(var_)) {
     demon_->inhibit(solver());
     var_->RemoveValue(value_);

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,6 +16,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -23,10 +24,9 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/strings/str_format.h"
 #include "ortools/base/commandlineflags.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
 #include "ortools/base/stl_util.h"
+#include "ortools/base/types.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/cached_log.h"
@@ -69,6 +69,10 @@ class DomainWatcher {
     cached_log_.Init(cache_size);
   }
 
+  // This type is neither copyable nor movable.
+  DomainWatcher(const DomainWatcher&) = delete;
+  DomainWatcher& operator=(const DomainWatcher&) = delete;
+
   double LogSearchSpaceSize() {
     double result = 0.0;
     for (int index = 0; index < vars_.size(); ++index) {
@@ -82,7 +86,6 @@ class DomainWatcher {
  private:
   std::vector<IntVar*> vars_;
   CachedLog cached_log_;
-  DISALLOW_COPY_AND_ASSIGN(DomainWatcher);
 };
 
 // ---------- FindVar decision visitor ---------
@@ -95,13 +98,13 @@ class FindVar : public DecisionVisitor {
 
   ~FindVar() override {}
 
-  void VisitSetVariableValue(IntVar* const var, int64_t value) override {
+  void VisitSetVariableValue(IntVar* var, int64_t value) override {
     var_ = var;
     value_ = value;
     operation_ = ASSIGN;
   }
 
-  void VisitSplitVariableDomain(IntVar* const var, int64_t value,
+  void VisitSplitVariableDomain(IntVar* var, int64_t value,
                                 bool start_with_lower_half) override {
     var_ = var;
     value_ = value;
@@ -123,7 +126,7 @@ class FindVar : public DecisionVisitor {
   void VisitUnknownDecision() override { operation_ = NONE; }
 
   // Returns the current variable.
-  IntVar* const var() const {
+  IntVar* var() const {
     CHECK_NE(operation_, NONE);
     return var_;
   }
@@ -212,6 +215,10 @@ class InitVarImpacts : public DecisionBuilder {
           update_impact_closure_(update_impact_closure) {
       CHECK(update_impact_closure_ != nullptr);
     }
+
+    // This type is neither copyable nor movable.
+    AssignCallFail(const AssignCallFail&) = delete;
+    AssignCallFail& operator=(const AssignCallFail&) = delete;
     ~AssignCallFail() override {}
     void Apply(Solver* const solver) override {
       CHECK(var_ != nullptr);
@@ -227,7 +234,6 @@ class InitVarImpacts : public DecisionBuilder {
 
    private:
     const std::function<void()>& update_impact_closure_;
-    DISALLOW_COPY_AND_ASSIGN(AssignCallFail);
   };
 
   IntVar* var_;
@@ -257,6 +263,10 @@ class InitVarImpactsWithSplits : public DecisionBuilder {
           update_impact_closure_(update_impact_closure) {
       CHECK(update_impact_closure_ != nullptr);
     }
+
+    // This type is neither copyable nor movable.
+    AssignIntervalCallFail(const AssignIntervalCallFail&) = delete;
+    AssignIntervalCallFail& operator=(const AssignIntervalCallFail&) = delete;
     ~AssignIntervalCallFail() override {}
     void Apply(Solver* const solver) override {
       CHECK(var_ != nullptr);
@@ -274,7 +284,6 @@ class InitVarImpactsWithSplits : public DecisionBuilder {
 
    private:
     const std::function<void()>& update_impact_closure_;
-    DISALLOW_COPY_AND_ASSIGN(AssignIntervalCallFail);
   };
 
   // ----- main -----
@@ -385,6 +394,10 @@ class ImpactRecorder : public SearchMonitor {
       var_map_[vars_[i]] = i;
     }
   }
+
+  // This type is neither copyable nor movable.
+  ImpactRecorder(const ImpactRecorder&) = delete;
+  ImpactRecorder& operator=(const ImpactRecorder&) = delete;
 
   void ApplyDecision(Decision* const d) override {
     if (!init_done_) {
@@ -647,8 +660,6 @@ class ImpactRecorder : public SearchMonitor {
   FindVar find_var_;
   absl::flat_hash_map<const IntVar*, int> var_map_;
   bool init_done_;
-
-  DISALLOW_COPY_AND_ASSIGN(ImpactRecorder);
 };
 
 const int ImpactRecorder::kLogCacheSize = 1000;

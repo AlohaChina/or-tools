@@ -37,8 +37,8 @@ predicate array_var_int_element_nonshifted(var int: idx,
                                            array [int] of var int: x,
                                            var int: c);
 
-% Include set redefinitions.
-include "nosets.mzn";
+% We no longer need to include nosets.mzn, but we keep it here for testing.
+% include "nosets.mzn";
 
 % Include strings redefinitions
 % include "nostring.mzn"
@@ -96,3 +96,5 @@ predicate int_lin_lt_imp(array [int] of int: as, array [int] of var int: bs,
                          int: c, var bool: r);
 predicate int_lin_ne_imp(array [int] of int: as, array [int] of var int: bs,
                          int: c, var bool: r);
+
+annotation warm_start_array( array[int] of ann: w );

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -24,8 +24,8 @@
 //
 // This class supports heterogeneous lookups.
 //
-#ifndef OR_TOOLS_BASE_LINKED_HASH_MAP_H_
-#define OR_TOOLS_BASE_LINKED_HASH_MAP_H_
+#ifndef ORTOOLS_BASE_LINKED_HASH_MAP_H_
+#define ORTOOLS_BASE_LINKED_HASH_MAP_H_
 
 #include <list>
 #include <tuple>
@@ -150,7 +150,7 @@ class linked_hash_map {
   using node_type = NodeHandle;
   using insert_return_type = InsertReturnType<iterator, node_type>;
 
-  linked_hash_map() {}
+  linked_hash_map() = default;
 
   explicit linked_hash_map(size_t bucket_count, const hasher& hash = hasher(),
                            const key_equal& eq = key_equal(),
@@ -403,7 +403,6 @@ class linked_hash_map {
 
   template <class K = key_type, K* = nullptr>
   mapped_type& operator[](key_arg<K>&& key) {
-    // K* = nullptr parameter above.
     return LazyEmplaceInternal(std::forward<K>(key)).first->second;
   }
 
@@ -634,4 +633,4 @@ class linked_hash_map {
 
 }  // namespace gtl
 
-#endif  // OR_TOOLS_BASE_LINKED_HASH_MAP_H_
+#endif  // ORTOOLS_BASE_LINKED_HASH_MAP_H_

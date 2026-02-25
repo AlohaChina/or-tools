@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,10 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_UTIL_SORTED_INTERVAL_LIST_H_
-#define OR_TOOLS_UTIL_SORTED_INTERVAL_LIST_H_
+#ifndef ORTOOLS_UTIL_SORTED_INTERVAL_LIST_H_
+#define ORTOOLS_UTIL_SORTED_INTERVAL_LIST_H_
 
+#include <cstddef>
+#include <cstdint>
 #include <iterator>
+#include <ostream>
 #include <set>
 #include <string>
 #include <utility>
@@ -22,7 +25,6 @@
 
 #include "absl/container/inlined_vector.h"
 #include "absl/types/span.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 
 namespace operations_research {
@@ -31,27 +33,57 @@ namespace operations_research {
  * Represents a closed interval [start, end]. We must have start <= end.
  */
 struct ClosedInterval {
+#if !defined(SWIG)
+  /**
+   * An iterator over the values of a ClosedInterval object.
+   *
+   * To iterate over the values, you can use either a range for loop:
+   *
+   * ClosedInterval interval = {0, 100};
+   * for (const int64_t value : interval) { Work(value); }
+   *
+   * or a classical for loop:
+   * for (auto it = begin(interval); it != end(interval); ++it) { Work(*it); }
+   *
+   * The iterator is designed to be very efficient, using just a single counter.
+   * It works correctly for any combination of `start` and `end` except the full
+   * int64_t range (start == INT64_MIN && end == INT64_MAX).
+   */
+  class Iterator;
+#endif  // !defined(SWIG)
+
   ClosedInterval() {}
+  explicit ClosedInterval(int64_t v) : start(v), end(v) {}
   ClosedInterval(int64_t s, int64_t e) : start(s), end(e) {
     DLOG_IF(DFATAL, s > e) << "Invalid ClosedInterval(" << s << ", " << e
                            << ")";
   }
 
   std::string DebugString() const;
-  bool operator==(const ClosedInterval& other) const {
+  constexpr bool operator==(const ClosedInterval& other) const {
     return start == other.start && end == other.end;
   }
 
   // Because we mainly manipulate vector of disjoint intervals, we only need to
   // sort by the start. We do not care about the order in which interval with
   // the same start appear since they will always be merged into one interval.
-  bool operator<(const ClosedInterval& other) const {
+  constexpr bool operator<(const ClosedInterval& other) const {
     return start < other.start;
+  }
+
+  template <typename H>
+  friend H AbslHashValue(H h, const ClosedInterval& interval) {
+    return H::combine(std::move(h), interval.start, interval.end);
   }
 
   int64_t start = 0;  // Inclusive.
   int64_t end = 0;    // Inclusive.
 };
+
+#if !defined(SWIG)
+inline ClosedInterval::Iterator begin(ClosedInterval interval);
+inline ClosedInterval::Iterator end(ClosedInterval interval);
+#endif  // !defined(SWIG)
 
 std::ostream& operator<<(std::ostream& out, const ClosedInterval& interval);
 std::ostream& operator<<(std::ostream& out,
@@ -94,10 +126,10 @@ class Domain {
   }
 
   /// Move constructor.
-  Domain(Domain&& other) : intervals_(std::move(other.intervals_)) {}
+  Domain(Domain&& other) noexcept : intervals_(std::move(other.intervals_)) {}
 
   /// Move operator.
-  Domain& operator=(Domain&& other) {
+  Domain& operator=(Domain&& other) noexcept {
     intervals_ = std::move(other.intervals_);
     return *this;
   }
@@ -117,6 +149,12 @@ class Domain {
    */
   static Domain AllValues();
 
+  /** Returns the domain [int_min, value]. */
+  static Domain LowerOrEqual(int64_t value);
+
+  /** Returns the domain [value., int_max]. */
+  static Domain GreaterOrEqual(int64_t value);
+
   /**
    * Creates a domain from the union of an unsorted list of integer values.
    * Input values may be repeated, with no consequence on the output
@@ -125,12 +163,18 @@ class Domain {
 
   /**
    * Creates a domain from the union of an unsorted list of intervals.
+   *
+   * Note that invalid intervals (start > end) will log a DFATAL error and will
+   * be ignored.
    */
   static Domain FromIntervals(absl::Span<const ClosedInterval> intervals);
 
   /**
    * Same as FromIntervals() for a flattened representation (start, end,
    * start, end, ...).
+   *
+   * Note that invalid intervals (start > end) will log a DFATAL error and will
+   * be ignored.
    */
   static Domain FromFlatSpanOfIntervals(
       absl::Span<const int64_t> flat_intervals);
@@ -138,7 +182,13 @@ class Domain {
   /**
    * This method is available in Python, Java and .NET. It allows
    * building a Domain object from a list of intervals (long[][] in Java and
-   * .NET, [[0, 2], [5, 5], [8, 10]] in python).
+   * .NET, [[0, 2], [5], [8, 10]] in python).
+   *
+   * Note that the intervals can be defined with a single value (i.e. [5]), or
+   * two increasing values (i.e. [8, 10]).
+   *
+   * Invalid intervals (start > end) will log a DFATAL error and will be
+   * ignored.
    */
   static Domain FromVectorIntervals(
       const std::vector<std::vector<int64_t> >& intervals);
@@ -147,6 +197,9 @@ class Domain {
    * This method is available in Python, Java and .NET. It allows
    * building a Domain object from a flattened list of intervals
    * (long[] in Java and .NET, [0, 2, 5, 5, 8, 10] in python).
+   *
+   * Note that invalid intervals (start > end) will log a DFATAL error and will
+   * be ignored.
    */
   static Domain FromFlatIntervals(const std::vector<int64_t>& flat_intervals);
 
@@ -227,6 +280,20 @@ class Domain {
   int64_t Size() const;
 
   /**
+   * Returns true if the domain has just two values. This often mean a non-fixed
+   * Boolean variable.
+   */
+  bool HasTwoValues() const {
+    if (intervals_.size() == 1) {
+      return intervals_[0].end == intervals_[0].start + 1;
+    } else if (intervals_.size() == 2) {
+      return intervals_[0].end == intervals_[0].start &&
+             intervals_[1].end == intervals_[1].start;
+    }
+    return false;
+  }
+
+  /**
    * Returns the min value of the domain.
    * The domain must not be empty.
    */
@@ -242,6 +309,25 @@ class Domain {
    * Returns the value closest to zero. If there is a tie, pick positive one.
    */
   int64_t SmallestValue() const;
+
+  /**
+   * Returns the value closest to the given point.
+   * If there is a tie, pick larger one.
+   */
+  int64_t ClosestValue(int64_t wanted) const;
+
+  /**
+   * Returns the closest value in the domain that is <= (resp. >=) to the input.
+   * Do not change the input if there is no such value.
+   */
+  int64_t ValueAtOrBefore(int64_t input) const;
+  int64_t ValueAtOrAfter(int64_t input) const;
+
+  /**
+   * If the domain contains zero, this return the simple interval around it.
+   * Otherwise, this returns an empty domain.
+   */
+  Domain PartAroundZero() const;
 
   /**
    * Returns true iff the domain is reduced to a single value.
@@ -262,9 +348,20 @@ class Domain {
   bool Contains(int64_t value) const;
 
   /**
+   * Returns the distance from the value to the domain.
+   */
+  int64_t Distance(int64_t value) const;
+
+  /**
    * Returns true iff D is included in the given domain.
    */
   bool IsIncludedIn(const Domain& domain) const;
+
+  /**
+   * Returns true iff D overlaps with the given domain, that is, the
+   * intersection of the two domains is not empty.
+   */
+  bool OverlapsWith(const Domain& domain) const;
 
   /**
    * Returns the set Int64 ∖ D.
@@ -352,7 +449,7 @@ class Domain {
    *
    * For instance Domain(1, 7).InverseMultiplicationBy(2) == Domain(1, 3).
    */
-  Domain InverseMultiplicationBy(const int64_t coeff) const;
+  Domain InverseMultiplicationBy(int64_t coeff) const;
 
   /**
    * Returns a superset of {x ∈ Int64, ∃ e ∈ D, ∃ m ∈ modulo, x = e % m }.
@@ -371,6 +468,16 @@ class Domain {
    * For now we just intersect with the min/max possible value.
    */
   Domain PositiveDivisionBySuperset(const Domain& divisor) const;
+
+  /**
+   * Returns a superset of {x ∈ Int64, ∃ y ∈ D, x = y * y }.
+   */
+  Domain SquareSuperset() const;
+
+  /**
+   * Returns a superset of {x ∈ Int64, ∃ y ∈ D, x = (a*y + b)*(c*y + d) }.
+   */
+  Domain QuadraticSuperset(int64_t a, int64_t b, int64_t c, int64_t d) const;
 
   /**
    * Advanced usage. Given some \e implied information on this domain that is
@@ -412,6 +519,11 @@ class Domain {
     return intervals_ != other.intervals_;
   }
 
+  template <typename H>
+  friend H AbslHashValue(H h, const Domain& domain) {
+    return H::combine(std::move(h), domain.intervals_);
+  }
+
   /**
    * Basic read-only std::vector<> wrapping to view a Domain as a sorted list of
    * non-adjacent intervals. Note that we don't expose size() which might be
@@ -426,14 +538,6 @@ class Domain {
   }
   absl::InlinedVector<ClosedInterval, 1>::const_iterator end() const {
     return intervals_.end();
-  }
-
-  // Deprecated.
-  //
-  // TODO(user): remove, this makes a copy and is of a different type that our
-  // internal InlinedVector() anyway.
-  std::vector<ClosedInterval> intervals() const {
-    return {intervals_.begin(), intervals_.end()};
   }
 
  private:
@@ -513,17 +617,6 @@ class SortedDisjointIntervalList {
   Iterator InsertInterval(int64_t start, int64_t end);
 
   /**
-   * If value is in an interval, increase its end by one, otherwise insert the
-   * interval [value, value]. In both cases, this returns an iterator to the
-   * new/modified interval (possibly merged with others) and fills newly_covered
-   * with the new value that was just added in the union of all the intervals.
-   *
-   * If this causes an interval ending at kint64max to grow, it will die with a
-   * CHECK fail.
-   */
-  Iterator GrowRightByOne(int64_t value, int64_t* newly_covered);
-
-  /**
    * Adds all intervals [starts[i]..ends[i]].
    *
    * Same behavior as InsertInterval() upon invalid intervals. There's a version
@@ -571,7 +664,7 @@ class SortedDisjointIntervalList {
   const ClosedInterval& last() const { return *intervals_.rbegin(); }
 
   void clear() { intervals_.clear(); }
-  void swap(SortedDisjointIntervalList& other) {
+  void swap(SortedDisjointIntervalList& other) noexcept {
     intervals_.swap(other.intervals_);
   }
 
@@ -582,6 +675,69 @@ class SortedDisjointIntervalList {
   IntervalSet intervals_;
 };
 
+// Implementation details.
+
+#if !defined(SWIG)
+class ClosedInterval::Iterator {
+ public:
+  using value_type = int64_t;
+  using difference_type = std::ptrdiff_t;
+
+  Iterator(const Iterator&) = default;
+
+  int64_t operator*() const { return static_cast<int64_t>(current_); }
+
+  Iterator& operator++() {
+    ++current_;
+    return *this;
+  }
+  void operator++(int) { ++current_; }
+
+  bool operator==(Iterator other) const { return current_ == other.current_; }
+  bool operator!=(Iterator other) const { return current_ != other.current_; }
+
+  Iterator& operator=(const Iterator&) = default;
+
+  static Iterator Begin(ClosedInterval interval) {
+    AssertNotFullInt64Range(interval);
+    return Iterator(static_cast<uint64_t>(interval.start));
+  }
+  static Iterator End(ClosedInterval interval) {
+    AssertNotFullInt64Range(interval);
+    return Iterator(static_cast<uint64_t>(interval.end) + 1);
+  }
+
+ private:
+  explicit Iterator(uint64_t current) : current_(current) {}
+
+  // Triggers a DCHECK-failure when `interval` represents the full int64_t
+  // range.
+  static void AssertNotFullInt64Range(ClosedInterval interval) {
+    DCHECK_NE(static_cast<uint64_t>(interval.start),
+              static_cast<uint64_t>(interval.end) + 1)
+        << "Iteration over the full int64_t range is not supported.";
+  }
+
+  // Implementation note: In C++, integer overflow is well-defined only for
+  // unsigned integers. To avoid any compilation issues or UBSan failures, the
+  // iterator uses uint64_t internally and relies on the fact that since C++20
+  // unsigned->signed conversion is well-defined for all values using modulo
+  // arithmetic.
+  uint64_t current_;
+};
+#if __cplusplus >= 202002L
+static_assert(std::input_iterator<ClosedInterval::Iterator>);
+#endif
+// begin()/end() are required for iteration over ClosedInterval in a range for
+// loop.
+inline ClosedInterval::Iterator begin(ClosedInterval interval) {
+  return ClosedInterval::Iterator::Begin(interval);
+}
+inline ClosedInterval::Iterator end(ClosedInterval interval) {
+  return ClosedInterval::Iterator::End(interval);
+}
+#endif  // !defined(SWIG)
+
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_UTIL_SORTED_INTERVAL_LIST_H_
+#endif  // ORTOOLS_UTIL_SORTED_INTERVAL_LIST_H_

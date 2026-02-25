@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,18 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_BASE_ADJUSTABLE_PRIORITY_QUEUE_H_
-#define OR_TOOLS_BASE_ADJUSTABLE_PRIORITY_QUEUE_H_
+#ifndef ORTOOLS_BASE_ADJUSTABLE_PRIORITY_QUEUE_H_
+#define ORTOOLS_BASE_ADJUSTABLE_PRIORITY_QUEUE_H_
 
 #include <stddef.h>
 
 #include <functional>
 #include <list>
 #include <vector>
-
-#include "ortools/base/basictypes.h"
-#include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
 
 template <typename T, typename Comparator>
 class LowerPriorityThan {
@@ -39,8 +35,8 @@ class AdjustablePriorityQueue {
  public:
   // The objects references 'c' and 'm' are not required to be alive for the
   // lifetime of this object.
-  AdjustablePriorityQueue() {}
-  AdjustablePriorityQueue(const Comp& c) : c_(c) {}
+  AdjustablePriorityQueue() = default;
+  explicit AdjustablePriorityQueue(const Comp& c) : c_(c) {}
   AdjustablePriorityQueue(const AdjustablePriorityQueue&) = delete;
   AdjustablePriorityQueue& operator=(const AdjustablePriorityQueue&) = delete;
   AdjustablePriorityQueue(AdjustablePriorityQueue&&) = default;
@@ -193,4 +189,4 @@ class AdjustablePriorityQueue {
   std::vector<T*> elems_;
 };
 
-#endif  // OR_TOOLS_BASE_ADJUSTABLE_PRIORITY_QUEUE_H_
+#endif  // ORTOOLS_BASE_ADJUSTABLE_PRIORITY_QUEUE_H_

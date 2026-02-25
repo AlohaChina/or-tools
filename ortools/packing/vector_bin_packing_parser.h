@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -17,14 +17,15 @@
 //   - vector packing solver: (.vbp files)
 //         http://www.dcc.fc.up.pt/~fdabrandao/Vector_Packing_Solver
 
-#ifndef OR_TOOLS_PACKING_VECTOR_BIN_PACKING_PARSER_H_
-#define OR_TOOLS_PACKING_VECTOR_BIN_PACKING_PARSER_H_
+#ifndef ORTOOLS_PACKING_VECTOR_BIN_PACKING_PARSER_H_
+#define ORTOOLS_PACKING_VECTOR_BIN_PACKING_PARSER_H_
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include "ortools/base/integral_types.h"
+#include "absl/strings/string_view.h"
+#include "ortools/base/types.h"
 #include "ortools/packing/vector_bin_packing.pb.h"
 
 namespace operations_research {
@@ -35,7 +36,7 @@ class VbpParser {
  public:
   // Return true iff there were no error, in which case problem() can be
   // called to retrieve the parsed problem.
-  bool ParseFile(const std::string& data_filename);
+  bool ParseFile(absl::string_view data_filename);
 
   // We keep the fully qualified name for SWIG.
   ::operations_research::packing::vbp::VectorBinPackingProblem problem() const {
@@ -54,8 +55,8 @@ class VbpParser {
 
   void ProcessLine(const std::string& line);
   void ReportError(const std::string& line);
-  int strtoint32(const std::string& word);
-  int64_t strtoint64(const std::string& word);
+  int strtoint32(absl::string_view word);
+  int64_t strtoint64(absl::string_view word);
 
   LoadStatus load_status_ = NOT_STARTED;
   int num_declared_items_ = -1;
@@ -68,4 +69,4 @@ class VbpParser {
 }  // namespace packing
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_PACKING_VECTOR_BIN_PACKING_PARSER_H_
+#endif  // ORTOOLS_PACKING_VECTOR_BIN_PACKING_PARSER_H_

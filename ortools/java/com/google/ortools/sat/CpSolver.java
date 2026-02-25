@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -30,12 +30,13 @@ public final class CpSolver {
   public CpSolver() {
     this.solveParameters = SatParameters.newBuilder();
     this.logCallback = null;
+    this.bestBoundCallback = null;
     this.solveWrapper = null;
   }
 
   /** Solves the given model, and returns the solve status. */
   public CpSolverStatus solve(CpModel model) {
-    return solveWithSolutionCallback(model, null);
+    return solve(model, null);
   }
 
   /**
@@ -52,6 +53,9 @@ public final class CpSolver {
     if (logCallback != null) {
       solveWrapper.addLogCallback(logCallback);
     }
+    if (bestBoundCallback != null) {
+      solveWrapper.addBestBoundCallback(bestBoundCallback);
+    }
 
     solveResponse = solveWrapper.solve(model.model());
 
@@ -61,40 +65,6 @@ public final class CpSolver {
     }
     releaseSolveWrapper(); // Synchronized.
 
-    return solveResponse.getStatus();
-  }
-
-  /**
-   * Solves the given model, passes each incumber solution to the solution callback if not null, and
-   * returns the solve status.
-   *
-   * @deprecated Use the solve() method with the same signature.
-   */
-  @Deprecated
-  public CpSolverStatus solveWithSolutionCallback(CpModel model, CpSolverSolutionCallback cb) {
-    return solve(model, cb);
-  }
-
-  /**
-   * Searches for all solutions of a satisfiability problem.
-   *
-   * <p>This method searches for all feasible solutions of a given model. Then it feeds the
-   * solutions to the callback.
-   *
-   * <p>Note that the model cannot have an objective.
-   *
-   * @param model the model to solve
-   * @param cb the callback that will be called at each solution
-   * @return the status of the solve (FEASIBLE, INFEASIBLE...)
-   * @deprecated Use the solve() method with the same signature, after setting the
-   *     enumerate_all_solution parameter to true.
-   */
-  @Deprecated
-  public CpSolverStatus searchAllSolutions(CpModel model, CpSolverSolutionCallback cb) {
-    boolean oldValue = solveParameters.getEnumerateAllSolutions();
-    solveParameters.setEnumerateAllSolutions(true);
-    solve(model, cb);
-    solveParameters.setEnumerateAllSolutions(oldValue);
     return solveResponse.getStatus();
   }
 
@@ -127,10 +97,11 @@ public final class CpSolver {
   }
 
   /** Returns the value of a linear expression in the last solution found. */
-  public long value(LinearExpr expr) {
-    long result = expr.getOffset();
-    for (int i = 0; i < expr.numElements(); ++i) {
-      result += solveResponse.getSolution(expr.getVariable(i).getIndex()) * expr.getCoefficient(i);
+  public long value(LinearArgument expr) {
+    final LinearExpr e = expr.build();
+    long result = e.getOffset();
+    for (int i = 0; i < e.numElements(); ++i) {
+      result += solveResponse.getSolution(e.getVariableIndex(i)) * e.getCoefficient(i);
     }
     return result;
   }
@@ -184,6 +155,21 @@ public final class CpSolver {
     this.logCallback = cb;
   }
 
+  /** Clears the log callback. */
+  public void clearLogCallback() {
+    this.logCallback = null;
+  }
+
+  /** Sets the best bound callback for the solver. */
+  public void setBestBoundCallback(Consumer<Double> cb) {
+    this.bestBoundCallback = cb;
+  }
+
+  /** Clears the best bound callback. */
+  public void clearBestBoundCallback() {
+    this.bestBoundCallback = null;
+  }
+
   /** Returns some statistics on the solution found as a string. */
   public String responseStats() {
     return CpSatHelper.solverResponseStats(solveResponse);
@@ -193,12 +179,26 @@ public final class CpSolver {
    * Returns some information on how the solution was found, or the reason why the model or the
    * parameters are invalid.
    */
+  public String solutionInfo() {
+    return solveResponse.getSolutionInfo();
+  }
+
+  /** Returns the solution info. @Deprecated */
   public String getSolutionInfo() {
     return solveResponse.getSolutionInfo();
+  }
+
+  /**
+   * Returns the solve log. You need to set the parameters log_to_response to true to get the solve
+   * log.
+   */
+  public String solveLog() {
+    return solveResponse.getSolveLog();
   }
 
   private CpSolverResponse solveResponse;
   private final SatParameters.Builder solveParameters;
   private Consumer<String> logCallback;
+  private Consumer<Double> bestBoundCallback;
   private SolveWrapper solveWrapper;
 }

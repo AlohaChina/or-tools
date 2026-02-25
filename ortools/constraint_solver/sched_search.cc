@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,14 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
 #include "absl/strings/str_format.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
@@ -811,7 +814,7 @@ class RankFirstIntervalVars : public DecisionBuilder {
     }
     const int chosen = s->Rand32(all_candidates.size());
     *best_sequence = all_candidates[chosen];
-    best_possible_firsts_ = all_possible_firsts[chosen];
+    best_possible_firsts_ = std::move(all_possible_firsts[chosen]);
     return true;
   }
 

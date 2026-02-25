@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -20,21 +20,27 @@
 // This problem has 72 different solutions in base 10.
 // [START import]
 #include <cstdint>
+#include <cstdlib>
 #include <vector>
 
+#include "absl/base/log_severity.h"
+#include "absl/log/check.h"
+#include "absl/log/globals.h"
+#include "absl/log/log.h"
+#include "ortools/base/init_google.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 // [END import]
 
 namespace operations_research {
 
 // Helper functions.
-IntVar* const MakeBaseLine2(Solver* s, IntVar* const v1, IntVar* const v2,
-                            const int64_t base) {
+IntVar* MakeBaseLine2(Solver* s, IntVar* const v1, IntVar* const v2,
+                      const int64_t base) {
   return s->MakeSum(s->MakeProd(v1, base), v2)->Var();
 }
 
-IntVar* const MakeBaseLine3(Solver* s, IntVar* const v1, IntVar* const v2,
-                            IntVar* const v3, const int64_t base) {
+IntVar* MakeBaseLine3(Solver* s, IntVar* const v1, IntVar* const v2,
+                      IntVar* const v3, const int64_t base) {
   std::vector<IntVar*> tmp_vars;
   std::vector<int64_t> coefficients;
   tmp_vars.push_back(v1);
@@ -47,9 +53,8 @@ IntVar* const MakeBaseLine3(Solver* s, IntVar* const v1, IntVar* const v2,
   return s->MakeScalProd(tmp_vars, coefficients)->Var();
 }
 
-IntVar* const MakeBaseLine4(Solver* s, IntVar* const v1, IntVar* const v2,
-                            IntVar* const v3, IntVar* const v4,
-                            const int64_t base) {
+IntVar* MakeBaseLine4(Solver* s, IntVar* const v1, IntVar* const v2,
+                      IntVar* const v3, IntVar* const v4, const int64_t base) {
   std::vector<IntVar*> tmp_vars;
   std::vector<int64_t> coefficients;
   tmp_vars.push_back(v1);
@@ -87,17 +92,7 @@ void CPIsFunCp() {
 
   // We need to group variables in a vector to be able to use
   // the global constraint AllDifferent
-  std::vector<IntVar*> letters;
-  letters.push_back(c);
-  letters.push_back(p);
-  letters.push_back(i);
-  letters.push_back(s);
-  letters.push_back(f);
-  letters.push_back(u);
-  letters.push_back(n);
-  letters.push_back(t);
-  letters.push_back(r);
-  letters.push_back(e);
+  std::vector<IntVar*> letters{c, p, i, s, f, u, n, t, r, e};
 
   // Check if we have enough digits
   CHECK_GE(kBase, letters.size());
@@ -153,6 +148,8 @@ void CPIsFunCp() {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
+  InitGoogle(argv[0], &argc, &argv, true);
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
   operations_research::CPIsFunCp();
   return EXIT_SUCCESS;
 }

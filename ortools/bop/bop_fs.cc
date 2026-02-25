@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,25 +13,44 @@
 
 #include "ortools/bop/bop_fs.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "absl/memory/memory.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/random/bit_gen_ref.h"
+#include "absl/random/distributions.h"
 #include "absl/strings/str_format.h"
-#include "google/protobuf/text_format.h"
+#include "absl/strings/string_view.h"
 #include "ortools/algorithms/sparse_permutation.h"
-#include "ortools/base/commandlineflags.h"
-#include "ortools/base/stl_util.h"
+#include "ortools/base/strong_vector.h"
+#include "ortools/bop/bop_base.h"
+#include "ortools/bop/bop_parameters.pb.h"
+#include "ortools/bop/bop_solution.h"
+#include "ortools/bop/bop_types.h"
+#include "ortools/bop/bop_util.h"
 #include "ortools/glop/lp_solver.h"
-#include "ortools/lp_data/lp_print_utils.h"
+#include "ortools/glop/parameters.pb.h"
+#include "ortools/lp_data/lp_data.h"
+#include "ortools/lp_data/lp_types.h"
 #include "ortools/sat/boolean_problem.h"
+#include "ortools/sat/boolean_problem.pb.h"
+#include "ortools/sat/clause.h"
 #include "ortools/sat/lp_utils.h"
+#include "ortools/sat/pb_constraint.h"
+#include "ortools/sat/sat_base.h"
+#include "ortools/sat/sat_parameters.pb.h"
 #include "ortools/sat/sat_solver.h"
 #include "ortools/sat/symmetry.h"
 #include "ortools/sat/util.h"
-#include "ortools/util/bitset.h"
+#include "ortools/util/strong_integers.h"
+#include "ortools/util/time_limit.h"
 
 namespace operations_research {
 namespace bop {
@@ -77,14 +96,14 @@ void DenseRowToBopSolution(const DenseRow& values, BopSolution* solution) {
 //------------------------------------------------------------------------------
 
 GuidedSatFirstSolutionGenerator::GuidedSatFirstSolutionGenerator(
-    const std::string& name, Policy policy)
+    absl::string_view name, Policy policy)
     : BopOptimizerBase(name),
       policy_(policy),
       abort_(false),
       state_update_stamp_(ProblemState::kInitialStampValue),
       sat_solver_() {}
 
-GuidedSatFirstSolutionGenerator::~GuidedSatFirstSolutionGenerator() {}
+GuidedSatFirstSolutionGenerator::~GuidedSatFirstSolutionGenerator() = default;
 
 BopOptimizerBase::Status GuidedSatFirstSolutionGenerator::SynchronizeIfNeeded(
     const ProblemState& problem_state) {
@@ -95,7 +114,7 @@ BopOptimizerBase::Status GuidedSatFirstSolutionGenerator::SynchronizeIfNeeded(
 
   // Create the sat_solver if not already done.
   if (!sat_solver_) {
-    sat_solver_ = absl::make_unique<sat::SatSolver>();
+    sat_solver_ = std::make_unique<sat::SatSolver>();
 
     // Add in symmetries.
     if (problem_state.GetParameters()
@@ -211,13 +230,13 @@ BopOptimizerBase::Status GuidedSatFirstSolutionGenerator::Optimize(
 // BopRandomFirstSolutionGenerator
 //------------------------------------------------------------------------------
 BopRandomFirstSolutionGenerator::BopRandomFirstSolutionGenerator(
-    const std::string& name, const BopParameters& parameters,
+    absl::string_view name, const BopParameters& parameters,
     sat::SatSolver* sat_propagator, absl::BitGenRef random)
     : BopOptimizerBase(name),
       random_(random),
       sat_propagator_(sat_propagator) {}
 
-BopRandomFirstSolutionGenerator::~BopRandomFirstSolutionGenerator() {}
+BopRandomFirstSolutionGenerator::~BopRandomFirstSolutionGenerator() = default;
 
 // Only run the RandomFirstSolution when there is an objective to minimize.
 bool BopRandomFirstSolutionGenerator::ShouldBeRun(
@@ -234,7 +253,7 @@ BopOptimizerBase::Status BopRandomFirstSolutionGenerator::Optimize(
 
   // Save the current solver heuristics.
   const sat::SatParameters saved_params = sat_propagator_->parameters();
-  const std::vector<std::pair<sat::Literal, double>> saved_prefs =
+  const std::vector<std::pair<sat::Literal, float>> saved_prefs =
       sat_propagator_->AllPreferences();
 
   const int kMaxNumConflicts = 10;
@@ -318,12 +337,15 @@ BopOptimizerBase::Status BopRandomFirstSolutionGenerator::Optimize(
   // to do any extra work in these cases since the sat_propagator_ will not be
   // used anymore.
   CHECK_EQ(0, sat_propagator_->AssumptionLevel());
-  sat_propagator_->RestoreSolverToAssumptionLevel();
+  (void)sat_propagator_->ResetToLevelZero();
   sat_propagator_->SetParameters(saved_params);
-  sat_propagator_->ResetDecisionHeuristicAndSetAllPreferences(saved_prefs);
+  sat_propagator_->ResetDecisionHeuristic();
+  for (const auto [literal, weight] : saved_prefs) {
+    sat_propagator_->SetAssignmentPreference(literal, weight);
+  }
 
-  // This can be proved during the call to RestoreSolverToAssumptionLevel().
-  if (sat_propagator_->IsModelUnsat()) {
+  // This can be proved during the call to ResetToLevelZero().
+  if (sat_propagator_->ModelIsUnsat()) {
     // The solution is proved optimal (if any).
     learned_info->lower_bound = best_cost;
     return best_cost == std::numeric_limits<int64_t>::max()
@@ -341,7 +363,7 @@ BopOptimizerBase::Status BopRandomFirstSolutionGenerator::Optimize(
 // LinearRelaxation
 //------------------------------------------------------------------------------
 LinearRelaxation::LinearRelaxation(const BopParameters& parameters,
-                                   const std::string& name)
+                                   absl::string_view name)
     : BopOptimizerBase(name),
       parameters_(parameters),
       state_update_stamp_(ProblemState::kInitialStampValue),
@@ -355,7 +377,7 @@ LinearRelaxation::LinearRelaxation(const BopParameters& parameters,
       problem_already_solved_(false),
       scaled_solution_cost_(glop::kInfinity) {}
 
-LinearRelaxation::~LinearRelaxation() {}
+LinearRelaxation::~LinearRelaxation() = default;
 
 BopOptimizerBase::Status LinearRelaxation::SynchronizeIfNeeded(
     const ProblemState& problem_state) {

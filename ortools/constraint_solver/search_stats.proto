@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -44,9 +44,18 @@ message LocalSearchStatistics {
     int64 num_accepted_neighbors = 4;
     // Time spent in the operator.
     double duration_seconds = 5;
+    // Time spent in creating neighbors (calling MakeNextNeighbor).
+    double make_next_neighbor_duration_seconds = 6;
+    // Time spent in accepting a neighbor (restoration and storage, not
+    // including filtering).
+    double accept_neighbor_duration_seconds = 7;
   }
   // Statistics for each operator called during the search.
   repeated LocalSearchOperatorStatistics local_search_operator_statistics = 1;
+  // Total number of (filtered/accepted) neighbors created during the search.
+  int64 total_num_neighbors = 3;
+  int64 total_num_filtered_neighbors = 4;
+  int64 total_num_accepted_neighbors = 5;
   // Statistics on local search filters called during the search.
   message LocalSearchFilterStatistics {
     // Name of the filter.
@@ -57,13 +66,13 @@ message LocalSearchStatistics {
     int64 num_rejects = 3;
     // Time spent in the filter.
     double duration_seconds = 4;
+    // Number of rejects per second.
+    double num_rejects_per_second = 5;
+    // Context within which the filter was called.
+    string context = 6;
   }
   // Statistics for each filter called during the search.
   repeated LocalSearchFilterStatistics local_search_filter_statistics = 2;
-  // Total number of (filtered/accepted) neighbors created during the search.
-  int64 total_num_neighbors = 3;
-  int64 total_num_filtered_neighbors = 4;
-  int64 total_num_accepted_neighbors = 5;
 }
 
 // Statistics on the search in the constraint solver.
@@ -80,10 +89,22 @@ message ConstraintSolverStatistics {
   double duration_seconds = 5;
 }
 
+// Statistics on sub-solvers.
+message SubSolverStatistics {
+  // Number of calls to Glop in LP scheduling.
+  int64 num_glop_calls_in_lp_scheduling = 1;
+  // Number of calls to CP-SAT in LP scheduling.
+  int64 num_cp_sat_calls_in_lp_scheduling = 2;
+  // Number of calls to min cost flow.
+  int64 num_min_cost_flow_calls = 3;
+}
+
 // Search statistics.
 message SearchStatistics {
-  // Local search statistics.
-  LocalSearchStatistics local_search_statistics = 1;
+  // Local search statistics for each solver context.
+  repeated LocalSearchStatistics local_search_statistics = 1;
   // Constraint solver statistics.
-  ConstraintSolverStatistics constraint_solver_statistics = 2;
+  repeated ConstraintSolverStatistics constraint_solver_statistics = 2;
+  // Sub-solver statistics.
+  repeated SubSolverStatistics sub_solver_statistics = 3;
 }

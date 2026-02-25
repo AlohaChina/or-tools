@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,12 +13,18 @@
 
 #include "ortools/lp_data/lp_decomposer.h"
 
+#include <algorithm>
 #include <vector>
 
+#include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/types/span.h"
 #include "ortools/algorithms/dynamic_partition.h"
 #include "ortools/lp_data/lp_data.h"
-#include "ortools/lp_data/lp_utils.h"
+#include "ortools/lp_data/lp_types.h"
+#include "ortools/lp_data/sparse.h"
+#include "ortools/lp_data/sparse_column.h"
+#include "ortools/util/bitset.h"
 
 namespace operations_research {
 namespace glop {
@@ -30,7 +36,7 @@ LPDecomposer::LPDecomposer()
     : original_problem_(nullptr), clusters_(), mutex_() {}
 
 void LPDecomposer::Decompose(const LinearProgram* linear_problem) {
-  absl::MutexLock mutex_lock(&mutex_);
+  absl::MutexLock mutex_lock(mutex_);
   original_problem_ = linear_problem;
   clusters_.clear();
 
@@ -63,12 +69,12 @@ void LPDecomposer::Decompose(const LinearProgram* linear_problem) {
 }
 
 int LPDecomposer::GetNumberOfProblems() const {
-  absl::MutexLock mutex_lock(&mutex_);
+  absl::MutexLock mutex_lock(mutex_);
   return clusters_.size();
 }
 
 const LinearProgram& LPDecomposer::original_problem() const {
-  absl::MutexLock mutex_lock(&mutex_);
+  absl::MutexLock mutex_lock(mutex_);
   return *original_problem_;
 }
 
@@ -79,7 +85,7 @@ void LPDecomposer::ExtractLocalProblem(int problem_index, LinearProgram* lp) {
 
   lp->Clear();
 
-  absl::MutexLock mutex_lock(&mutex_);
+  absl::MutexLock mutex_lock(mutex_);
   const std::vector<ColIndex>& cluster = clusters_[problem_index];
   StrictITIVector<ColIndex, ColIndex> global_to_local(
       original_problem_->num_variables(), kInvalidCol);
@@ -134,10 +140,10 @@ void LPDecomposer::ExtractLocalProblem(int problem_index, LinearProgram* lp) {
 }
 
 DenseRow LPDecomposer::AggregateAssignments(
-    const std::vector<DenseRow>& assignments) const {
+    absl::Span<const DenseRow> assignments) const {
   CHECK_EQ(assignments.size(), clusters_.size());
 
-  absl::MutexLock mutex_lock(&mutex_);
+  absl::MutexLock mutex_lock(mutex_);
   DenseRow global_assignment(original_problem_->num_variables(),
                              Fractional(0.0));
   for (int problem = 0; problem < assignments.size(); ++problem) {
@@ -157,7 +163,7 @@ DenseRow LPDecomposer::ExtractLocalAssignment(int problem_index,
   CHECK_LT(problem_index, clusters_.size());
   CHECK_EQ(assignment.size(), original_problem_->num_variables());
 
-  absl::MutexLock mutex_lock(&mutex_);
+  absl::MutexLock mutex_lock(mutex_);
   const std::vector<ColIndex>& cluster = clusters_[problem_index];
   DenseRow local_assignment(ColIndex(cluster.size()), Fractional(0.0));
   for (int i = 0; i < cluster.size(); ++i) {

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,11 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_BOP_BOP_PORTFOLIO_H_
-#define OR_TOOLS_BOP_BOP_PORTFOLIO_H_
+#ifndef ORTOOLS_BOP_BOP_PORTFOLIO_H_
+#define ORTOOLS_BOP_BOP_PORTFOLIO_H_
 
 #include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
 
+#include "absl/strings/string_view.h"
 #include "ortools/base/strong_vector.h"
 #include "ortools/bop/bop_base.h"
 #include "ortools/bop/bop_lns.h"
@@ -27,12 +31,13 @@
 #include "ortools/sat/sat_solver.h"
 #include "ortools/util/random_engine.h"
 #include "ortools/util/stats.h"
+#include "ortools/util/strong_integers.h"
 #include "ortools/util/time_limit.h"
 
 namespace operations_research {
 namespace bop {
 
-DEFINE_INT_TYPE(OptimizerIndex, int);
+DEFINE_STRONG_INDEX_TYPE(OptimizerIndex);
 const OptimizerIndex kInvalidOptimizerIndex(-1);
 
 // Forward declaration.
@@ -51,7 +56,6 @@ class OptimizerSelector;
 //   - LP_FIRST_SOLUTION
 //   - OBJECTIVE_FIRST_SOLUTION
 //   - USER_GUIDED_FIRST_SOLUTION
-//   - FEASIBILITY_PUMP_FIRST_SOLUTION
 //   - RANDOM_CONSTRAINT_LNS_GUIDED_BY_LP
 //   - RANDOM_VARIABLE_LNS_GUIDED_BY_LP
 //   - RELATION_GRAPH_LNS
@@ -66,7 +70,7 @@ class PortfolioOptimizer : public BopOptimizerBase {
   PortfolioOptimizer(const ProblemState& problem_state,
                      const BopParameters& parameters,
                      const BopSolverOptimizerSet& optimizer_set,
-                     const std::string& name);
+                     absl::string_view name);
   ~PortfolioOptimizer() override;
 
   bool ShouldBeRun(const ProblemState& problem_state) const override {
@@ -90,7 +94,7 @@ class PortfolioOptimizer : public BopOptimizerBase {
   int64_t state_update_stamp_;
   BopConstraintTerms objective_terms_;
   std::unique_ptr<OptimizerSelector> selector_;
-  absl::StrongVector<OptimizerIndex, BopOptimizerBase*> optimizers_;
+  util_intops::StrongVector<OptimizerIndex, BopOptimizerBase*> optimizers_;
   sat::SatSolver sat_propagator_;
   BopParameters parameters_;
   double lower_bound_;
@@ -105,7 +109,8 @@ class OptimizerSelector {
   // Note that the list of optimizers is only used to get the names for
   // debug purposes, the ownership of the optimizers is not transferred.
   explicit OptimizerSelector(
-      const absl::StrongVector<OptimizerIndex, BopOptimizerBase*>& optimizers);
+      const util_intops::StrongVector<OptimizerIndex, BopOptimizerBase*>&
+          optimizers);
 
   // Selects the next optimizer to run based on the user defined order and
   // history of success. Returns kInvalidOptimizerIndex if no optimizer is
@@ -170,7 +175,7 @@ class OptimizerSelector {
   void UpdateOrder();
 
   struct RunInfo {
-    RunInfo(OptimizerIndex i, const std::string& n)
+    RunInfo(OptimizerIndex i, absl::string_view n)
         : optimizer_index(i),
           name(n),
           num_successes(0),
@@ -197,10 +202,10 @@ class OptimizerSelector {
   };
 
   std::vector<RunInfo> run_infos_;
-  absl::StrongVector<OptimizerIndex, int> info_positions_;
+  util_intops::StrongVector<OptimizerIndex, int> info_positions_;
   int selected_index_;
 };
 
 }  // namespace bop
 }  // namespace operations_research
-#endif  // OR_TOOLS_BOP_BOP_PORTFOLIO_H_
+#endif  // ORTOOLS_BOP_BOP_PORTFOLIO_H_

@@ -1,15 +1,24 @@
 name: Check Format
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - main
+      - v99bugfix
+  workflow_dispatch:
+
+concurrency:
+  group: ${{github.workflow}}-${{github.ref}}
+  cancel-in-progress: true
 
 jobs:
   # Building using the github runner environement directly.
   clang-format:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - name: Fetch origin/master
-      run: git fetch origin master
+    - uses: actions/checkout@v6
+    - name: Fetch origin/main
+      run: git fetch origin main
     - name: List of changed file(s)
       run: git diff --name-only FETCH_HEAD
 

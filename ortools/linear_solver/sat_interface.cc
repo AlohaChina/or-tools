@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,42 +14,40 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/base/attributes.h"
 #include "absl/status/status.h"
-#include "absl/status/statusor.h"
-#include "ortools/base/hash.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/linear_solver/linear_solver.h"
 #include "ortools/linear_solver/linear_solver.pb.h"
-#include "ortools/linear_solver/sat_proto_solver.h"
+#include "ortools/linear_solver/proto_solver/proto_utils.h"
+#include "ortools/linear_solver/proto_solver/sat_proto_solver.h"
 #include "ortools/port/proto_utils.h"
 #include "ortools/sat/cp_model.pb.h"
 #include "ortools/sat/cp_model_solver.h"
-#include "ortools/sat/lp_utils.h"
-#include "ortools/sat/model.h"
-#include "ortools/util/time_limit.h"
+#include "ortools/util/lazy_mutable_copy.h"
 
 namespace operations_research {
 
-#if defined(PROTOBUF_INTERNAL_IMPL)
-using google::protobuf::Message;
-#else
-using google::protobuf::Message;
-#endif
-
 class SatInterface : public MPSolverInterface {
  public:
-  explicit SatInterface(MPSolver* const solver);
+  explicit SatInterface(MPSolver* solver);
   ~SatInterface() override;
 
   // ----- Solve -----
   MPSolver::ResultStatus Solve(const MPSolverParameters& param) override;
-  absl::optional<MPSolutionResponse> DirectlySolveProto(
-      const MPModelRequest& request, std::atomic<bool>* interrupt) override;
   bool InterruptSolve() override;
+
+  // ----- Directly solve proto is supported ---
+  bool SupportsDirectlySolveProto(std::atomic<bool>* interrupt) const override {
+    return true;
+  }
+  MPSolutionResponse DirectlySolveProto(LazyMutableCopy<MPModelRequest> request,
+                                        std::atomic<bool>* interrupt) override {
+    return SatSolveProto(std::move(request), interrupt);
+  }
 
   // ----- Model modifications and extraction -----
   void Reset() override;
@@ -57,13 +55,12 @@ class SatInterface : public MPSolverInterface {
   void SetVariableBounds(int index, double lb, double ub) override;
   void SetVariableInteger(int index, bool integer) override;
   void SetConstraintBounds(int index, double lb, double ub) override;
-  void AddRowConstraint(MPConstraint* const ct) override;
-  void AddVariable(MPVariable* const var) override;
-  void SetCoefficient(MPConstraint* const constraint,
-                      const MPVariable* const variable, double new_value,
-                      double old_value) override;
-  void ClearConstraint(MPConstraint* const constraint) override;
-  void SetObjectiveCoefficient(const MPVariable* const variable,
+  void AddRowConstraint(MPConstraint* ct) override;
+  void AddVariable(MPVariable* var) override;
+  void SetCoefficient(MPConstraint* constraint, const MPVariable* variable,
+                      double new_value, double old_value) override;
+  void ClearConstraint(MPConstraint* constraint) override;
+  void SetObjectiveCoefficient(const MPVariable* variable,
                                double coefficient) override;
   void SetObjectiveOffset(double value) override;
   void ClearObjective() override;
@@ -140,14 +137,11 @@ MPSolver::ResultStatus SatInterface::Solve(const MPSolverParameters& param) {
 
   MPModelRequest request;
   solver_->ExportModelToProto(request.mutable_model());
-  request.set_solver_specific_parameters(
-      EncodeSatParametersAsString(parameters_));
+  request.set_solver_specific_parameters(EncodeParametersAsString(parameters_));
   request.set_enable_internal_solver_output(!quiet_);
-  const absl::StatusOr<MPSolutionResponse> status_or =
-      SatSolveProto(std::move(request), &interrupt_solve_);
 
-  if (!status_or.ok()) return MPSolver::ABNORMAL;
-  const MPSolutionResponse& response = status_or.value();
+  const MPSolutionResponse response =
+      SatSolveProto(std::move(request), &interrupt_solve_);
 
   // The solution must be marked as synchronized even when no solution exists.
   sync_status_ = SOLUTION_SYNCHRONIZED;
@@ -162,26 +156,6 @@ MPSolver::ResultStatus SatInterface::Solve(const MPSolverParameters& param) {
   }
 
   return result_status_;
-}
-
-absl::optional<MPSolutionResponse> SatInterface::DirectlySolveProto(
-    const MPModelRequest& request, std::atomic<bool>* interrupt) {
-  absl::StatusOr<MPSolutionResponse> status_or =
-      SatSolveProto(request, interrupt);
-  if (status_or.ok()) return std::move(status_or).value();
-  if (request.enable_internal_solver_output()) {
-    LOG(INFO) << "Failed SAT solve: " << status_or.status();
-  }
-  MPSolutionResponse response;
-  // As of 2021-08, the sole non-OK status returned by SatSolveProto is an
-  // INVALID_ARGUMENT error caused by invalid solver parameters.
-  // TODO(user): Move that conversion to SatSolveProto, which should always
-  // return a MPSolutionResponse, even for errors.
-  response.set_status(absl::IsInvalidArgument(status_or.status())
-                          ? MPSOLVER_MODEL_INVALID_SOLVER_PARAMETERS
-                          : MPSOLVER_ABNORMAL);
-  response.set_status_str(status_or.status().ToString());
-  return response;
 }
 
 bool SatInterface::InterruptSolve() {
@@ -253,7 +227,7 @@ bool SatInterface::IsLP() const { return false; }
 bool SatInterface::IsMIP() const { return true; }
 
 std::string SatInterface::SolverVersion() const {
-  return "SAT Based MIP Solver";
+  return sat::CpSatSolverVersion();
 }
 
 void* SatInterface::underlying_solver() { return nullptr; }
@@ -265,7 +239,8 @@ void SatInterface::ExtractNewConstraints() { NonIncrementalChange(); }
 void SatInterface::ExtractObjective() { NonIncrementalChange(); }
 
 void SatInterface::SetParameters(const MPSolverParameters& param) {
-  parameters_.set_num_search_workers(num_threads_);
+  parameters_.Clear();
+  parameters_.set_num_workers(num_threads_);
   SetCommonParameters(param);
 }
 
@@ -294,9 +269,16 @@ void SatInterface::NonIncrementalChange() {
   sync_status_ = MUST_RELOAD;
 }
 
-// Register Sat in the global linear solver factory.
-MPSolverInterface* BuildSatInterface(MPSolver* const solver) {
-  return new SatInterface(solver);
-}
+namespace {
+
+// See MpSolverInterfaceFactoryRepository for details.
+const void* const kRegisterSat ABSL_ATTRIBUTE_UNUSED = [] {
+  MPSolverInterfaceFactoryRepository::GetInstance()->Register(
+      [](MPSolver* const solver) { return new SatInterface(solver); },
+      MPSolver::SAT_INTEGER_PROGRAMMING);
+  return nullptr;
+}();
+
+}  // namespace
 
 }  // namespace operations_research

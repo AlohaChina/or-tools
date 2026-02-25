@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,21 +11,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_CP_MODEL_UTILS_H_
-#define OR_TOOLS_SAT_CP_MODEL_UTILS_H_
+#ifndef ORTOOLS_SAT_CP_MODEL_UTILS_H_
+#define ORTOOLS_SAT_CP_MODEL_UTILS_H_
 
 #include <algorithm>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <string>
 #include <vector>
 
-#include "absl/container/flat_hash_set.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/base/logging.h"
+#if !defined(__PORTABLE_PLATFORM__)
+#include "ortools/base/helpers.h"
+#endif  // !defined(__PORTABLE_PLATFORM__)
+#include "absl/flags/declare.h"
+#include "absl/functional/function_ref.h"
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/strings/match.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "google/protobuf/message.h"
+#include "google/protobuf/text_format.h"
+#include "ortools/base/base_export.h"
+#include "ortools/base/hash.h"
+#include "ortools/base/options.h"
 #include "ortools/sat/cp_model.pb.h"
+#include "ortools/util/bitset.h"
 #include "ortools/util/sorted_interval_list.h"
+
+#ifndef SWIG
+OR_DLL ABSL_DECLARE_FLAG(bool, cp_model_dump_models);
+OR_DLL ABSL_DECLARE_FLAG(std::string, cp_model_dump_prefix);
+OR_DLL ABSL_DECLARE_FLAG(bool, cp_model_dump_problematic_lns);
+OR_DLL ABSL_DECLARE_FLAG(bool, cp_model_dump_submodels);
+#endif
 
 namespace operations_research {
 namespace sat {
@@ -43,6 +62,14 @@ inline int EnforcementLiteral(const ConstraintProto& ct) {
   return ct.enforcement_literal(0);
 }
 
+// Returns the gcd of the given LinearExpressionProto.
+// Specifying the second argument will take the gcd with it.
+int64_t LinearExpressionGcd(const LinearExpressionProto& expr, int64_t gcd = 0);
+
+// Divide the expression in place by 'divisor'.
+// It will DCHECK that 'divisor' divides all constants.
+void DivideLinearExpression(int64_t divisor, LinearExpressionProto* expr);
+
 // Fills the target as negated ref.
 void SetToNegatedLinearExpression(const LinearExpressionProto& input_expr,
                                   LinearExpressionProto* output_negated_expr);
@@ -56,20 +83,24 @@ struct IndexReferences {
   std::vector<int> literals;
 };
 IndexReferences GetReferencesUsedByConstraint(const ConstraintProto& ct);
+void GetReferencesUsedByConstraint(const ConstraintProto& ct,
+                                   std::vector<int>* variables,
+                                   std::vector<int>* literals);
 
 // Applies the given function to all variables/literals/intervals indices of the
 // constraint. This function is used in a few places to have a "generic" code
 // dealing with constraints.
-void ApplyToAllVariableIndices(const std::function<void(int*)>& function,
+void ApplyToAllVariableIndices(absl::FunctionRef<void(int*)> function,
                                ConstraintProto* ct);
-void ApplyToAllLiteralIndices(const std::function<void(int*)>& function,
+void ApplyToAllLiteralIndices(absl::FunctionRef<void(int*)> function,
                               ConstraintProto* ct);
-void ApplyToAllIntervalIndices(const std::function<void(int*)>& function,
+void ApplyToAllIntervalIndices(absl::FunctionRef<void(int*)> function,
                                ConstraintProto* ct);
 
 // Returns the name of the ConstraintProto::ConstraintCase oneof enum.
 // Note(user): There is no such function in the proto API as of 16/01/2017.
-std::string ConstraintCaseName(ConstraintProto::ConstraintCase constraint_case);
+absl::string_view ConstraintCaseName(
+    ConstraintProto::ConstraintCase constraint_case);
 
 // Returns the sorted list of variables used by a constraint.
 // Note that this include variable used as a literal.
@@ -77,6 +108,24 @@ std::vector<int> UsedVariables(const ConstraintProto& ct);
 
 // Returns the sorted list of interval used by a constraint.
 std::vector<int> UsedIntervals(const ConstraintProto& ct);
+
+// Insert/Remove variables from an interval constraint into a bitset.
+inline void InsertVariablesFromInterval(const CpModelProto& model_proto,
+                                        int index, Bitset64<int>& output) {
+  const ConstraintProto& ct = model_proto.constraints(index);
+  for (const int ref : ct.enforcement_literal()) output.Set(PositiveRef(ref));
+  for (const int var : ct.interval().start().vars()) output.Set(var);
+  for (const int var : ct.interval().size().vars()) output.Set(var);
+  for (const int var : ct.interval().end().vars()) output.Set(var);
+}
+inline void RemoveVariablesFromInterval(const CpModelProto& model_proto,
+                                        int index, Bitset64<int>& output) {
+  const ConstraintProto& ct = model_proto.constraints(index);
+  for (const int ref : ct.enforcement_literal()) output.Clear(PositiveRef(ref));
+  for (const int var : ct.interval().start().vars()) output.Clear(var);
+  for (const int var : ct.interval().size().vars()) output.Clear(var);
+  for (const int var : ct.interval().end().vars()) output.Clear(var);
+}
 
 // Returns true if a proto.domain() contain the given value.
 // The domain is expected to be encoded as a sorted disjoint interval list.
@@ -92,11 +141,27 @@ bool DomainInProtoContains(const ProtoWithDomain& proto, int64_t value) {
 template <typename ProtoWithDomain>
 void FillDomainInProto(const Domain& domain, ProtoWithDomain* proto) {
   proto->clear_domain();
-  proto->mutable_domain()->Reserve(domain.NumIntervals());
+  proto->mutable_domain()->Reserve(2 * domain.NumIntervals());
   for (const ClosedInterval& interval : domain) {
     proto->add_domain(interval.start);
     proto->add_domain(interval.end);
   }
+}
+
+template <typename ProtoWithDomain>
+void FillDomainInProto(int64_t lb, int64_t ub, ProtoWithDomain* proto) {
+  proto->clear_domain();
+  proto->mutable_domain()->Reserve(2);
+  proto->add_domain(lb);
+  proto->add_domain(ub);
+}
+
+template <typename ProtoWithDomain>
+void FillDomainInProto(int64_t value, ProtoWithDomain* proto) {
+  proto->clear_domain();
+  proto->mutable_domain()->Reserve(2);
+  proto->add_domain(value);
+  proto->add_domain(value);
 }
 
 // Reads a Domain from the domain field of a proto.
@@ -143,9 +208,11 @@ inline double ScaleObjectiveValue(const CpObjectiveProto& proto,
 inline int64_t ScaleInnerObjectiveValue(const CpObjectiveProto& proto,
                                         int64_t value) {
   if (proto.integer_scaling_factor() == 0) {
-    return value + proto.integer_offset();
+    return value + proto.integer_before_offset();
   }
-  return value * proto.integer_scaling_factor() + proto.integer_offset();
+  return (value + proto.integer_before_offset()) *
+             proto.integer_scaling_factor() +
+         proto.integer_after_offset();
 }
 
 // Removes the objective scaling and offset from the given value.
@@ -162,7 +229,7 @@ inline double UnscaleObjectiveValue(const CpObjectiveProto& proto,
 // This is the objective without offset and scaling. Call ScaleObjectiveValue()
 // to get the user facing objective.
 int64_t ComputeInnerObjective(const CpObjectiveProto& objective,
-                              const CpSolverResponse& response);
+                              absl::Span<const int64_t> solution);
 
 // Returns true if a linear expression can be reduced to a single ref.
 bool ExpressionContainsSingleRef(const LinearExpressionProto& expr);
@@ -174,6 +241,29 @@ bool ExpressionIsAffine(const LinearExpressionProto& expr);
 // ExpressionContainsSingleRef(expr) is true.
 int GetSingleRefFromExpression(const LinearExpressionProto& expr);
 
+// Evaluates an affine expression at the given value.
+inline int64_t AffineExpressionValueAt(const LinearExpressionProto& expr,
+                                       int64_t value) {
+  CHECK_EQ(1, expr.vars_size());
+  return expr.offset() + value * expr.coeffs(0);
+}
+
+// Returns the value of the inner variable of an affine expression from the
+// value of the expression. It will DCHECK that the result is valid.
+inline int64_t GetInnerVarValue(const LinearExpressionProto& expr,
+                                int64_t value) {
+  DCHECK_EQ(expr.vars_size(), 1);
+  const int64_t var_value = (value - expr.offset()) / expr.coeffs(0);
+  DCHECK_EQ(value, var_value * expr.coeffs(0) + expr.offset());
+  return var_value;
+}
+
+// Returns true if the expression is a * var + b.
+inline bool AffineExpressionContainsVar(const LinearExpressionProto& expr,
+                                        int var) {
+  return expr.vars_size() == 1 && expr.vars(0) == var;
+}
+
 // Adds a linear expression proto to a linear constraint in place.
 //
 // Important: The domain must already be set, otherwise the offset will be lost.
@@ -183,12 +273,172 @@ void AddLinearExpressionToLinearConstraint(const LinearExpressionProto& expr,
                                            int64_t coefficient,
                                            LinearConstraintProto* linear);
 
+// Same as above, but with a single term (lit, coeff). Note that lit can be
+// negative. The offset is relative to the linear expression (and should be
+// negated when added to the rhs of the linear constraint proto).
+void AddWeightedLiteralToLinearConstraint(int lit, int64_t coeff,
+                                          LinearConstraintProto* linear,
+                                          int64_t* offset);
+
+// Sets `linear` to the constraint "lb <= sum(`literals`) <= ub".
+void LiteralsToLinear(absl::Span<const int> literals, int64_t lb, int64_t ub,
+                      LinearConstraintProto* linear);
+
+// Same method, but returns if the addition was possible without overflowing.
+bool SafeAddLinearExpressionToLinearConstraint(
+    const LinearExpressionProto& expr, int64_t coefficient,
+    LinearConstraintProto* linear);
+
+// Returns if a constraint is of the form y = lin_max(x, -x).
+bool IsAffineIntAbs(const ConstraintProto& ct);
+
 // Returns true iff a == b * b_scaling.
 bool LinearExpressionProtosAreEqual(const LinearExpressionProto& a,
                                     const LinearExpressionProto& b,
                                     int64_t b_scaling = 1);
 
+// Returns true if there exactly one variable appearing in all the expressions.
+template <class ExpressionList>
+bool ExpressionsContainsOnlyOneVar(const ExpressionList& exprs) {
+  int unique_var = -1;
+  for (const LinearExpressionProto& expr : exprs) {
+    for (const int var : expr.vars()) {
+      CHECK(RefIsPositive(var));
+      if (unique_var == -1) {
+        unique_var = var;
+      } else if (var != unique_var) {
+        return false;
+      }
+    }
+  }
+  return unique_var != -1;
+}
+
+// Default seed for fingerprints.
+constexpr uint64_t kDefaultFingerprintSeed = 0xa5b85c5e198ed849;
+
+template <class T>
+inline uint64_t FingerprintRepeatedField(
+    const google::protobuf::RepeatedField<T>& sequence, uint64_t seed) {
+  if (sequence.empty()) return seed;
+  return fasthash64(reinterpret_cast<const char*>(sequence.data()),
+                    sequence.size() * sizeof(T), seed);
+}
+
+template <class T>
+inline uint64_t FingerprintSingleField(const T& field, uint64_t seed) {
+  return fasthash64(reinterpret_cast<const char*>(&field), sizeof(T), seed);
+}
+
+// Returns a stable fingerprint of a linear expression.
+uint64_t FingerprintExpression(const LinearExpressionProto& lin, uint64_t seed);
+
+// Returns a stable fingerprint of a model.
+uint64_t FingerprintModel(const CpModelProto& model,
+                          uint64_t seed = kDefaultFingerprintSeed);
+
+#if !defined(__PORTABLE_PLATFORM__)
+
+// We register a few custom printers to display variables and linear
+// expression on one line. This is especially nice for variables where it is
+// easy to recover their indices from the line number now.
+//
+// ex:
+//
+// variables { domain: [0, 1] }
+// variables { domain: [0, 1] }
+// variables { domain: [0, 1] }
+//
+// constraints {
+//   linear {
+//     vars: [0, 1, 2]
+//     coeffs: [2, 4, 5 ]
+//     domain: [11, 11]
+//   }
+// }
+void SetupTextFormatPrinter(google::protobuf::TextFormat::Printer* printer);
+#endif  // !defined(__PORTABLE_PLATFORM__)
+
+template <class M>
+bool WriteModelProtoToFile(const M& proto, absl::string_view filename) {
+#if defined(__PORTABLE_PLATFORM__)
+  return false;
+#else   // !defined(__PORTABLE_PLATFORM__)
+  if (absl::EndsWith(filename, "txt") ||
+      absl::EndsWith(filename, "textproto")) {
+    std::string proto_string;
+    google::protobuf::TextFormat::Printer printer;
+    SetupTextFormatPrinter(&printer);
+    printer.PrintToString(proto, &proto_string);
+    return file::SetContents(filename, proto_string, file::Defaults()).ok();
+  } else {
+    return file::SetBinaryProto(filename, proto, file::Defaults()).ok();
+  }
+#endif  // !defined(__PORTABLE_PLATFORM__)
+}
+
+// hashing support.
+//
+// Currently limited to a few inner types of ConstraintProto.
+inline bool operator==(const BoolArgumentProto& lhs,
+                       const BoolArgumentProto& rhs) {
+  if (absl::MakeConstSpan(lhs.literals()) !=
+      absl::MakeConstSpan(rhs.literals())) {
+    return false;
+  }
+  if (lhs.literals_size() != rhs.literals_size()) return false;
+  for (int i = 0; i < lhs.literals_size(); ++i) {
+    if (lhs.literals(i) != rhs.literals(i)) return false;
+  }
+  return true;
+}
+
+template <typename H>
+H AbslHashValue(H h, const BoolArgumentProto& m) {
+  for (const int lit : m.literals()) {
+    h = H::combine(std::move(h), lit);
+  }
+  return h;
+}
+
+inline bool operator==(const LinearConstraintProto& lhs,
+                       const LinearConstraintProto& rhs) {
+  if (absl::MakeConstSpan(lhs.vars()) != absl::MakeConstSpan(rhs.vars())) {
+    return false;
+  }
+  if (absl::MakeConstSpan(lhs.coeffs()) != absl::MakeConstSpan(rhs.coeffs())) {
+    return false;
+  }
+  if (absl::MakeConstSpan(lhs.domain()) != absl::MakeConstSpan(rhs.domain())) {
+    return false;
+  }
+  return true;
+}
+
+template <typename H>
+H AbslHashValue(H h, const LinearConstraintProto& m) {
+  for (const int var : m.vars()) {
+    h = H::combine(std::move(h), var);
+  }
+  for (const int64_t coeff : m.coeffs()) {
+    h = H::combine(std::move(h), coeff);
+  }
+  for (const int64_t bound : m.domain()) {
+    h = H::combine(std::move(h), bound);
+  }
+  return h;
+}
+
+bool ConvertCpModelProtoToCnf(const CpModelProto& cp_model, std::string* out);
+
+// This returns a wcnf model in the 2022 (new) format:
+//     https://maxsat-evaluations.github.io/2022/rules.html
+bool ConvertCpModelProtoToWCnf(const CpModelProto& cp_model, std::string* out);
+
+// We assume delta >= 0 and we only use the low bit of delta.
+int CombineSeed(int base_seed, int64_t delta);
+
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_CP_MODEL_UTILS_H_
+#endif  // ORTOOLS_SAT_CP_MODEL_UTILS_H_

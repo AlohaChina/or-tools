@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,9 +16,9 @@
 #include <vector>
 
 #include "ortools/base/commandlineflags.h"
-#include "ortools/base/integral_types.h"
 #include "ortools/base/logging.h"
 #include "ortools/base/stl_util.h"
+#include "ortools/base/types.h"
 #include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 
@@ -101,7 +101,7 @@ void Double(C*** array_ptr, int* size_ptr) {
       (*array_ptr)[position] = to_reinsert;
     }
   }
-  delete[](old_cell_array);
+  delete[] (old_cell_array);
 }
 
 // ----- Cache objects built with 1 object -----
@@ -843,7 +843,7 @@ class NonReversibleCache : public ModelCache {
 };
 }  // namespace
 
-ModelCache* BuildModelCache(Solver* const solver) {
+ModelCache* BuildModelCache(Solver* solver) {
   return new NonReversibleCache(solver);
 }
 

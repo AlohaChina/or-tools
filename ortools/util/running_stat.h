@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,13 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_UTIL_RUNNING_STAT_H_
-#define OR_TOOLS_UTIL_RUNNING_STAT_H_
+#ifndef ORTOOLS_UTIL_RUNNING_STAT_H_
+#define ORTOOLS_UTIL_RUNNING_STAT_H_
 
+#include <cstddef>
 #include <deque>
+#include <vector>
 
 #include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
 
 namespace operations_research {
 
@@ -28,6 +29,10 @@ class RunningAverage {
   // Initialize the class with the maximum window size.
   // It must be positive (this is CHECKed).
   explicit RunningAverage(int window_size = 1);
+
+  // This type is neither copyable nor movable.
+  RunningAverage(const RunningAverage&) = delete;
+  RunningAverage& operator=(const RunningAverage&) = delete;
 
   // Resets the class to the exact same state as if it was just constructed with
   // the given window size.
@@ -57,11 +62,9 @@ class RunningAverage {
   double global_sum_;
   double local_sum_;
   std::deque<int> values_;
-
-  DISALLOW_COPY_AND_ASSIGN(RunningAverage);
 };
 
-// Simple class to compute efficiently the maximum over a fixed size window
+// Simple class to efficiently compute the maximum over a fixed size window
 // of a numeric stream. This works in constant average amortized time.
 template <class Number = double>
 class RunningMax {
@@ -69,12 +72,18 @@ class RunningMax {
   // Takes the size of the running window. The size must be positive.
   explicit RunningMax(int window_size);
 
+  // This type is neither copyable nor movable.
+  RunningMax(const RunningMax&) = delete;
+  RunningMax& operator=(const RunningMax&) = delete;
+
   // Processes a new element from the stream.
   void Add(Number value);
 
   // Returns the current maximum element in the window.
   // An element must have been added before calling this function.
   Number GetCurrentMax();
+
+  void Reset();
 
  private:
   const int window_size_;
@@ -87,8 +96,6 @@ class RunningMax {
 
   // Index of the current maximum element.
   int max_index_;
-
-  DISALLOW_COPY_AND_ASSIGN(RunningMax);
 };
 
 // ################## Implementations below #####################
@@ -113,7 +120,7 @@ inline void RunningAverage::Add(int value) {
   global_sum_ += value;
   local_sum_ += value;
   values_.push_back(value);
-  if (values_.size() > window_size_) {
+  if (static_cast<int>(values_.size()) > window_size_) {
     local_sum_ -= values_.front();
     values_.pop_front();
   }
@@ -134,7 +141,7 @@ inline void RunningAverage::ClearWindow() {
 }
 
 inline bool RunningAverage::IsWindowFull() const {
-  return values_.size() == window_size_;
+  return static_cast<int>(values_.size()) == window_size_;
 }
 
 template <class Number>
@@ -145,7 +152,7 @@ RunningMax<Number>::RunningMax(int window_size)
 
 template <class Number>
 void RunningMax<Number>::Add(Number value) {
-  if (values_.size() < window_size_) {
+  if (static_cast<size_t>(values_.size()) < window_size_) {
     // Starting phase until values_ reaches its final size.
     // Note that last_index_ stays at 0 during this phase.
     if (values_.empty() || value >= GetCurrentMax()) {
@@ -169,7 +176,7 @@ void RunningMax<Number>::Add(Number value) {
       // GetCurrentMax() in the last window_size_ updates.
       max_index_ = 0;
       Number max_value = values_[max_index_];
-      for (int i = 1; i < values_.size(); ++i) {
+      for (int i = 1; i < static_cast<int>(values_.size()); ++i) {
         if (values_[i] > max_value) {
           max_value = values_[i];
           max_index_ = i;
@@ -183,6 +190,13 @@ void RunningMax<Number>::Add(Number value) {
 }
 
 template <class Number>
+void RunningMax<Number>::Reset() {
+  values_.clear();
+  last_index_ = 0;
+  max_index_ = 0;
+}
+
+template <class Number>
 Number RunningMax<Number>::GetCurrentMax() {
   DCHECK(!values_.empty());
   return values_[max_index_];
@@ -190,4 +204,4 @@ Number RunningMax<Number>::GetCurrentMax() {
 
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_UTIL_RUNNING_STAT_H_
+#endif  // ORTOOLS_UTIL_RUNNING_STAT_H_

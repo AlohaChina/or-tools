@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2010-2021 Google LLC
+# Copyright 2010-2025 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -11,10 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """MIP example that uses a variable array."""
+
 # [START program]
 # [START import]
 from ortools.linear_solver import pywraplp
+
 # [END import]
 
 
@@ -23,17 +26,18 @@ from ortools.linear_solver import pywraplp
 def create_data_model():
     """Stores the data for the problem."""
     data = {}
-    data['constraint_coeffs'] = [
+    data["constraint_coeffs"] = [
         [5, 7, 9, 2, 1],
         [18, 4, -9, 10, 12],
         [4, 7, 3, 8, 5],
         [5, 13, 16, 3, -7],
     ]
-    data['bounds'] = [250, 285, 211, 315]
-    data['obj_coeffs'] = [7, 8, 2, 9, 6]
-    data['num_vars'] = 5
-    data['num_constraints'] = 4
+    data["bounds"] = [250, 285, 211, 315]
+    data["obj_coeffs"] = [7, 8, 2, 9, 6]
+    data["num_vars"] = 5
+    data["num_constraints"] = 4
     return data
+
 
 # [END data_model]
 
@@ -45,24 +49,26 @@ def main():
     # [END program_part1]
     # [START solver]
     # Create the mip solver with the SCIP backend.
-    solver = pywraplp.Solver.CreateSolver('SCIP')
+    solver = pywraplp.Solver.CreateSolver("SCIP")
+    if not solver:
+        return
     # [END solver]
 
     # [START program_part2]
     # [START variables]
     infinity = solver.infinity()
     x = {}
-    for j in range(data['num_vars']):
-        x[j] = solver.IntVar(0, infinity, 'x[%i]' % j)
-    print('Number of variables =', solver.NumVariables())
+    for j in range(data["num_vars"]):
+        x[j] = solver.IntVar(0, infinity, "x[%i]" % j)
+    print("Number of variables =", solver.NumVariables())
     # [END variables]
 
     # [START constraints]
-    for i in range(data['num_constraints']):
-        constraint = solver.RowConstraint(0, data['bounds'][i], '')
-        for j in range(data['num_vars']):
-            constraint.SetCoefficient(x[j], data['constraint_coeffs'][i][j])
-    print('Number of constraints =', solver.NumConstraints())
+    for i in range(data["num_constraints"]):
+        constraint = solver.RowConstraint(0, data["bounds"][i], "")
+        for j in range(data["num_vars"]):
+            constraint.SetCoefficient(x[j], data["constraint_coeffs"][i][j])
+    print("Number of constraints =", solver.NumConstraints())
     # In Python, you can also set the constraints as follows.
     # for i in range(data['num_constraints']):
     #  constraint_expr = \
@@ -72,8 +78,8 @@ def main():
 
     # [START objective]
     objective = solver.Objective()
-    for j in range(data['num_vars']):
-        objective.SetCoefficient(x[j], data['obj_coeffs'][j])
+    for j in range(data["num_vars"]):
+        objective.SetCoefficient(x[j], data["obj_coeffs"][j])
     objective.SetMaximization()
     # In Python, you can also set the objective as follows.
     # obj_expr = [data['obj_coeffs'][j] * x[j] for j in range(data['num_vars'])]
@@ -81,24 +87,25 @@ def main():
     # [END objective]
 
     # [START solve]
+    print(f"Solving with {solver.SolverVersion()}")
     status = solver.Solve()
     # [END solve]
 
     # [START print_solution]
     if status == pywraplp.Solver.OPTIMAL:
-        print('Objective value =', solver.Objective().Value())
-        for j in range(data['num_vars']):
-            print(x[j].name(), ' = ', x[j].solution_value())
+        print("Objective value =", solver.Objective().Value())
+        for j in range(data["num_vars"]):
+            print(x[j].name(), " = ", x[j].solution_value())
         print()
-        print('Problem solved in %f milliseconds' % solver.wall_time())
-        print('Problem solved in %d iterations' % solver.iterations())
-        print('Problem solved in %d branch-and-bound nodes' % solver.nodes())
+        print(f"Problem solved in {solver.wall_time():d} milliseconds")
+        print(f"Problem solved in {solver.iterations():d} iterations")
+        print(f"Problem solved in {solver.nodes():d} branch-and-bound nodes")
     else:
-        print('The problem does not have an optimal solution.')
+        print("The problem does not have an optimal solution.")
     # [END print_solution]
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 # [END program_part2]
 # [END program]

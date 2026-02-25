@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,13 +15,15 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-
-#include "ortools/base/basictypes.h"
 %}
 
 %include "typemaps.i"
 %include "stdint.i"
 %include "std_string.i"
+
+// Don't break on ABSL_DEPRECATED macro.
+%define ABSL_DEPRECATED(msg)
+%enddef
 
 #ifdef SWIGPYTHON
 
@@ -44,7 +46,7 @@
 
 #if defined(SWIGJAVA)
 // swig/java/typenames.i and swig/java/java.swg typemap C++ 'long int' as Java 'int'
-// but in C++ 'int64_t' aka 'int64_t' is defined as "long int" and we have
+// but in C++ 'int64_t' is defined as "long int" and we have
 // overload functions int/int64_t in routing...
 // So we need to force C++ 'long int' to map to Java 'long' instead of 'int' reusing the
 // typemap for C++ `long long`
@@ -86,6 +88,10 @@ PRIMITIVE_TYPEMAP(long int, long long);
 PRIMITIVE_TYPEMAP(unsigned long int, unsigned long long);
 #undef PRIMITIVE_TYPEMAP
 #endif // defined(SWIGWORDSIZE64)
+
+%include "exception.i"
+%include "std_common.i"
+%include "std_pair.i"
 
 #endif // defined(SWIGCSHARP)
 

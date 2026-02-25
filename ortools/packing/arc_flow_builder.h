@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -37,15 +37,16 @@
 //     when the cost is not the number of bins, but a function of the capacity
 //     used (useful for fair allocation).
 
-#ifndef OR_TOOLS_PACKING_ARC_FLOW_BUILDER_H_
-#define OR_TOOLS_PACKING_ARC_FLOW_BUILDER_H_
+#ifndef ORTOOLS_PACKING_ARC_FLOW_BUILDER_H_
+#define ORTOOLS_PACKING_ARC_FLOW_BUILDER_H_
 
 #include <cstdint>
 #include <set>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
-#include "ortools/base/integral_types.h"
+#include "absl/types/span.h"
+#include "ortools/base/types.h"
 
 namespace operations_research {
 namespace packing {
@@ -83,10 +84,10 @@ struct ArcFlowGraph {
 //           num_dimensions
 ArcFlowGraph BuildArcFlowGraph(
     const std::vector<int>& bin_dimensions,
-    const std::vector<std::vector<int>>& item_dimensions_by_type,
-    const std::vector<int>& demand_by_type);
+    absl::Span<const std::vector<int>> item_dimensions_by_type,
+    absl::Span<const int> demand_by_type);
 
 }  // namespace packing
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_PACKING_ARC_FLOW_BUILDER_H_
+#endif  // ORTOOLS_PACKING_ARC_FLOW_BUILDER_H_

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,98 +11,214 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// An object oriented wrapper for the linear objective in IndexedModel.
-#ifndef OR_TOOLS_MATH_OPT_CPP_OBJECTIVE_H_
-#define OR_TOOLS_MATH_OPT_CPP_OBJECTIVE_H_
+// IWYU pragma: private, include "ortools/math_opt/cpp/math_opt.h"
+// IWYU pragma: friend "ortools/math_opt/cpp/.*"
+//
+// An object oriented wrapper for objectives in ModelStorage.
+#ifndef ORTOOLS_MATH_OPT_CPP_OBJECTIVE_H_
+#define ORTOOLS_MATH_OPT_CPP_OBJECTIVE_H_
 
-#include "ortools/base/logging.h"
-#include "ortools/math_opt/core/indexed_model.h"
+#include <cstdint>
+#include <optional>
+#include <ostream>
+#include <string>
+
+#include "absl/log/check.h"
+#include "absl/strings/string_view.h"
 #include "ortools/math_opt/cpp/key_types.h"
 #include "ortools/math_opt/cpp/variable_and_expressions.h"
+#include "ortools/math_opt/storage/model_storage.h"
+#include "ortools/math_opt/storage/model_storage_item.h"
+#include "ortools/math_opt/storage/model_storage_types.h"
 
-namespace operations_research {
-namespace math_opt {
+namespace operations_research::math_opt {
 
-// The objective of an optimization problem for an IndexedModel.
+constexpr absl::string_view kDeletedObjectiveDefaultDescription =
+    "[objective deleted from model]";
+
+// A value type that references an objective (either primary or auxiliary) from
+// ModelStorage. Usually this type is passed by copy.
 //
-// Objective is a value type and is typically passed by copy.
-class Objective {
+// This type implements https://abseil.io/docs/cpp/guides/hash.
+class Objective final : public ModelStorageItem {
  public:
-  inline explicit Objective(IndexedModel* model);
+  // The type used for ids.
+  using IdType = AuxiliaryObjectiveId;
 
-  inline IndexedModel* model() const;
+  // Returns an object that refers to the primary objective of the model.
+  inline static Objective Primary(ModelStorageCPtr storage);
+  // Returns an object that refers to an auxiliary objective of the model.
+  inline static Objective Auxiliary(ModelStorageCPtr storage,
+                                    AuxiliaryObjectiveId id);
 
-  // Setting a value to 0.0 will delete the variable from the underlying sparse
-  // representation (and has no effect if the variable is not present).
-  inline void set_linear_coefficient(Variable variable, double value) const;
+  // Returns the raw integer ID associated with the objective: nullopt for the
+  // primary objective, a nonnegative int64_t for an auxiliary objective.
+  inline std::optional<int64_t> id() const;
+  // Returns the strong int ID associated with the objective: nullopt for the
+  // primary objective, an AuxiliaryObjectiveId for an auxiliary objective.
+  inline ObjectiveId typed_id() const;
 
-  inline bool is_linear_coefficient_nonzero(Variable variable) const;
+  // Returns true if the ID corresponds to the primary objective, and false if
+  // it is an auxiliary objective.
+  inline bool is_primary() const;
 
-  // Returns 0.0 if this variable has no linear objective coefficient.
-  inline double linear_coefficient(Variable variable) const;
+  // Returns true if the objective is the maximization sense.
+  inline bool maximize() const;
 
-  inline void set_offset(double value) const;
+  // Returns the priority (lower is more important) of the objective.
+  inline int64_t priority() const;
+
+  // Returns the name of the objective.
+  inline absl::string_view name() const;
+
+  // Returns the constant offset of the objective.
   inline double offset() const;
 
-  // Equivalent to calling set_linear_coefficient(v, 0.0) for every variable
-  // with nonzero objective coefficient.
-  //
-  // Runs in O(#variables with nonzero objective coefficient).
-  inline void clear() const;
-  inline bool is_maximize() const;
-  inline void set_maximize() const;
-  inline void set_minimize() const;
+  // Returns the number of linear terms in the objective.
+  inline int64_t num_linear_terms() const;
 
-  // Prefer set_maximize() and set_minimize() above for more readable code.
-  inline void set_is_maximize(bool is_maximize) const;
+  // Returns the number of quadratic terms in the objective.
+  inline int64_t num_quadratic_terms() const;
 
-  void Maximize(const LinearExpression& objective) const;
-  void Minimize(const LinearExpression& objective) const;
-  void SetObjective(const LinearExpression& objective, bool is_maximize) const;
-  void Add(const LinearExpression& objective_terms) const;
+  // Returns the linear coefficient for the variable in the model.
+  inline double coefficient(Variable variable) const;
+  // Returns the quadratic coefficient for the pair of variables in the model.
+  inline double coefficient(Variable first_variable,
+                            Variable second_variable) const;
 
+  // Returns true if the variable has a nonzero linear coefficient in the model.
+  inline bool is_coefficient_nonzero(Variable variable) const;
+  // Returns true if the pair of variables has a nonzero quadratic coefficient
+  // in the model.
+  inline bool is_coefficient_nonzero(Variable first_variable,
+                                     Variable second_variable) const;
+
+  // Returns a representation of the objective as a LinearExpression.
+  // NOTE: This will CHECK fail if the objective has quadratic terms.
   LinearExpression AsLinearExpression() const;
+  // Returns a representation of the objective as a QuadraticExpression.
+  QuadraticExpression AsQuadraticExpression() const;
+
+  // Returns a detailed string description of the contents of the objective
+  // (not its name, use `<<` for that instead).
+  std::string ToString() const;
+
+  friend inline bool operator==(const Objective& lhs, const Objective& rhs);
+  friend inline bool operator!=(const Objective& lhs, const Objective& rhs);
+  template <typename H>
+  friend H AbslHashValue(H h, const Objective& objective);
+  friend std::ostream& operator<<(std::ostream& ostr,
+                                  const Objective& objective);
 
  private:
-  IndexedModel* model_;
+  inline Objective(ModelStorageCPtr storage, ObjectiveId id);
+
+  ObjectiveId id_;
 };
+
+template <typename V>
+using ObjectiveMap = absl::flat_hash_map<Objective, V>;
+
+// Streams the name of the objective, as registered upon objective creation, or
+// a short default if none was provided.
+std::ostream& operator<<(std::ostream& ostr, const Objective& objective);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Inline function implementations
 ////////////////////////////////////////////////////////////////////////////////
 
-Objective::Objective(IndexedModel* const model) : model_(model) {}
-
-IndexedModel* Objective::model() const { return model_; }
-
-void Objective::set_linear_coefficient(const Variable variable,
-                                       const double value) const {
-  CHECK_EQ(variable.model(), model_) << internal::kObjectsFromOtherIndexedModel;
-  model_->set_linear_objective_coefficient(variable.typed_id(), value);
-}
-bool Objective::is_linear_coefficient_nonzero(const Variable variable) const {
-  CHECK_EQ(variable.model(), model_) << internal::kObjectsFromOtherIndexedModel;
-  return model_->is_linear_objective_coefficient_nonzero(variable.typed_id());
-}
-double Objective::linear_coefficient(const Variable variable) const {
-  CHECK_EQ(variable.model(), model_) << internal::kObjectsFromOtherIndexedModel;
-  return model_->linear_objective_coefficient(variable.typed_id());
+std::optional<int64_t> Objective::id() const {
+  if (is_primary()) {
+    return std::nullopt;
+  }
+  return id_->value();
 }
 
-void Objective::set_offset(const double value) const {
-  model_->set_objective_offset(value);
+ObjectiveId Objective::typed_id() const { return id_; }
+
+bool Objective::is_primary() const { return id_ == kPrimaryObjectiveId; }
+
+int64_t Objective::priority() const {
+  return storage()->objective_priority(id_);
 }
-double Objective::offset() const { return model_->objective_offset(); }
 
-void Objective::clear() const { model_->clear_objective(); }
-bool Objective::is_maximize() const { return model_->is_maximize(); }
-void Objective::set_is_maximize(const bool is_maximize) const {
-  model_->set_is_maximize(is_maximize);
+bool Objective::maximize() const { return storage()->is_maximize(id_); }
+
+absl::string_view Objective::name() const {
+  if (is_primary() || storage()->has_auxiliary_objective(*id_)) {
+    return storage()->objective_name(id_);
+  }
+  return kDeletedObjectiveDefaultDescription;
 }
-void Objective::set_maximize() const { model_->set_maximize(); }
-void Objective::set_minimize() const { model_->set_minimize(); }
 
-}  // namespace math_opt
-}  // namespace operations_research
+double Objective::offset() const { return storage()->objective_offset(id_); }
 
-#endif  // OR_TOOLS_MATH_OPT_CPP_OBJECTIVE_H_
+int64_t Objective::num_quadratic_terms() const {
+  return storage()->num_quadratic_objective_terms(id_);
+}
+
+int64_t Objective::num_linear_terms() const {
+  return storage()->num_linear_objective_terms(id_);
+}
+
+double Objective::coefficient(const Variable variable) const {
+  CHECK_EQ(variable.storage(), storage())
+      << internal::kObjectsFromOtherModelStorage;
+  return storage()->linear_objective_coefficient(id_, variable.typed_id());
+}
+
+double Objective::coefficient(const Variable first_variable,
+                              const Variable second_variable) const {
+  CHECK_EQ(first_variable.storage(), storage())
+      << internal::kObjectsFromOtherModelStorage;
+  CHECK_EQ(second_variable.storage(), storage())
+      << internal::kObjectsFromOtherModelStorage;
+  return storage()->quadratic_objective_coefficient(
+      id_, first_variable.typed_id(), second_variable.typed_id());
+}
+
+bool Objective::is_coefficient_nonzero(const Variable variable) const {
+  CHECK_EQ(variable.storage(), storage())
+      << internal::kObjectsFromOtherModelStorage;
+  return storage()->is_linear_objective_coefficient_nonzero(
+      id_, variable.typed_id());
+}
+
+bool Objective::is_coefficient_nonzero(const Variable first_variable,
+                                       const Variable second_variable) const {
+  CHECK_EQ(first_variable.storage(), storage())
+      << internal::kObjectsFromOtherModelStorage;
+  CHECK_EQ(second_variable.storage(), storage())
+      << internal::kObjectsFromOtherModelStorage;
+  return storage()->is_quadratic_objective_coefficient_nonzero(
+      id_, first_variable.typed_id(), second_variable.typed_id());
+}
+
+bool operator==(const Objective& lhs, const Objective& rhs) {
+  return lhs.id_ == rhs.id_ && lhs.storage() == rhs.storage();
+}
+
+bool operator!=(const Objective& lhs, const Objective& rhs) {
+  return !(lhs == rhs);
+}
+
+template <typename H>
+H AbslHashValue(H h, const Objective& objective) {
+  return H::combine(std::move(h), objective.id_, objective.storage());
+}
+
+Objective::Objective(const ModelStorageCPtr storage, const ObjectiveId id)
+    : ModelStorageItem(storage), id_(id) {}
+
+Objective Objective::Primary(const ModelStorageCPtr storage) {
+  return Objective(storage, kPrimaryObjectiveId);
+}
+
+Objective Objective::Auxiliary(const ModelStorageCPtr storage,
+                               const AuxiliaryObjectiveId id) {
+  return Objective(storage, id);
+}
+
+}  // namespace operations_research::math_opt
+
+#endif  // ORTOOLS_MATH_OPT_CPP_OBJECTIVE_H_

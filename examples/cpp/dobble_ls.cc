@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -32,15 +32,17 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <random>
+#include <utility>
 #include <vector>
 
-#include "absl/flags/parse.h"
-#include "absl/flags/usage.h"
 #include "absl/random/random.h"
 #include "absl/strings/str_format.h"
+#include "absl/types/span.h"
 #include "ortools/base/commandlineflags.h"
-#include "ortools/base/integral_types.h"
+#include "ortools/base/init_google.h"
 #include "ortools/base/map_util.h"
+#include "ortools/base/types.h"
 #include "ortools/constraint_solver/constraint_solveri.h"
 #include "ortools/util/bitset.h"
 
@@ -89,7 +91,7 @@ class SymbolsSharedByTwoCardsConstraint : public Constraint {
     }
   }
 
-  ~SymbolsSharedByTwoCardsConstraint() override {}
+  ~SymbolsSharedByTwoCardsConstraint() override = default;
 
   // Adds observers (named Demon) to variable events. These demons are
   // responsible for implementing the propagation algorithm of the
@@ -254,7 +256,7 @@ class DobbleOperator : public IntVarLocalSearchOperator {
     }
   }
 
-  ~DobbleOperator() override {}
+  ~DobbleOperator() override = default;
 
  protected:
   // OnStart() simply stores the current symbols per card in
@@ -313,7 +315,7 @@ class SwapSymbols : public DobbleOperator {
         current_symbol1_(-1),
         current_symbol2_(-1) {}
 
-  ~SwapSymbols() override {}
+  ~SwapSymbols() override = default;
 
   // Finds the next swap, returns false when it has finished.
   bool MakeOneNeighbor() override {
@@ -384,7 +386,7 @@ class SwapSymbolsOnCardPairs : public DobbleOperator {
     CHECK_GE(max_num_swaps, 2);
   }
 
-  ~SwapSymbolsOnCardPairs() override {}
+  ~SwapSymbolsOnCardPairs() override = default;
 
  protected:
   bool MakeOneNeighbor() override {
@@ -546,9 +548,9 @@ class DobbleFilter : public IntVarLocalSearchFilter {
   void ClearBitset() { temporary_bitset_ = 0; }
 
   // For each touched card, compare against all others to compute the
-  // delta in term of cost. We use an bitset to avoid counting twice
+  // delta in term of cost. We use a bitset to avoid counting twice
   // between two cards appearing in the local search move.
-  int ComputeNewCost(const std::vector<int>& touched_cards) {
+  int ComputeNewCost(absl::Span<const int> touched_cards) {
     ClearBitset();
     int cost_delta = 0;
     for (int i = 0; i < touched_cards.size(); ++i) {
@@ -761,8 +763,7 @@ void SolveDobble(int num_cards, int num_symbols, int num_symbols_per_card) {
 }  // namespace operations_research
 
 int main(int argc, char** argv) {
-  google::InitGoogleLogging(argv[0]);
-  absl::ParseCommandLine(argc, argv);
+  InitGoogle(argv[0], &argc, &argv, true);
   // These constants comes directly from the dobble game.
   // There are actually 55 cards, but we can create up to 57 cards.
   const int kSymbolsPerCard = absl::GetFlag(FLAGS_symbols_per_card);

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,12 +15,16 @@
 
 #include "ortools/algorithms/hungarian.h"
 
+#include <cmath>
 #include <cstdint>
+#include <random>
+#include <vector>
 
+#include "absl/base/macros.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/random/distributions.h"
+#include "absl/types/span.h"
 #include "gtest/gtest.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/base/macros.h"
 #include "ortools/base/map_util.h"
 
 namespace operations_research {
@@ -47,7 +51,7 @@ void GenericCheck(const int expected_assignment_size,
   }
 }
 
-void TestMinimization(const std::vector<std::vector<double>>& cost,
+void TestMinimization(absl::Span<const std::vector<double>> cost,
                       const int expected_assignment_size,
                       const int expected_agents[], const int expected_tasks[]) {
   absl::flat_hash_map<int, int> direct_assignment;
@@ -58,7 +62,7 @@ void TestMinimization(const std::vector<std::vector<double>>& cost,
                expected_agents, expected_tasks);
 }
 
-void TestMaximization(const std::vector<std::vector<double>>& cost,
+void TestMaximization(absl::Span<const std::vector<double>> cost,
                       const int expected_assignment_size,
                       const int expected_agents[], const int expected_tasks[]) {
   absl::flat_hash_map<int, int> direct_assignment;
@@ -89,24 +93,24 @@ TEST(LinearAssignmentTest, InvalidMatrix) {
   TestMinimization(cost_nan, 0, expected_agents, expected_tasks);
 }
 
-#define MATRIX_TEST                                                  \
-  {                                                                  \
-    std::vector<std::vector<double>> cost(kMatrixHeight);            \
-    for (int row = 0; row < kMatrixHeight; ++row) {                  \
-      cost[row].resize(kMatrixWidth);                                \
-      for (int col = 0; col < kMatrixWidth; ++col) {                 \
-        cost[row][col] = kCost[row][col];                            \
-      }                                                              \
-    }                                                                \
-    EXPECT_EQ(arraysize(expected_agents_for_min),                    \
-              arraysize(expected_tasks_for_min));                    \
-    EXPECT_EQ(arraysize(expected_agents_for_max),                    \
-              arraysize(expected_tasks_for_max));                    \
-    const int assignment_size = arraysize(expected_agents_for_max);  \
-    TestMinimization(cost, assignment_size, expected_agents_for_min, \
-                     expected_tasks_for_min);                        \
-    TestMaximization(cost, assignment_size, expected_agents_for_max, \
-                     expected_tasks_for_max);                        \
+#define MATRIX_TEST                                                      \
+  {                                                                      \
+    std::vector<std::vector<double>> cost(kMatrixHeight);                \
+    for (int row = 0; row < kMatrixHeight; ++row) {                      \
+      cost[row].resize(kMatrixWidth);                                    \
+      for (int col = 0; col < kMatrixWidth; ++col) {                     \
+        cost[row][col] = kCost[row][col];                                \
+      }                                                                  \
+    }                                                                    \
+    EXPECT_EQ(ABSL_ARRAYSIZE(expected_agents_for_min),                   \
+              ABSL_ARRAYSIZE(expected_tasks_for_min));                   \
+    EXPECT_EQ(ABSL_ARRAYSIZE(expected_agents_for_max),                   \
+              ABSL_ARRAYSIZE(expected_tasks_for_max));                   \
+    const int assignment_size = ABSL_ARRAYSIZE(expected_agents_for_max); \
+    TestMinimization(cost, assignment_size, expected_agents_for_min,     \
+                     expected_tasks_for_min);                            \
+    TestMaximization(cost, assignment_size, expected_agents_for_max,     \
+                     expected_tasks_for_max);                            \
   }
 
 // Test on a 1x1 matrix

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,8 +15,8 @@
 %include "ortools/base/base.i"
 
 %{
+#include <cstdint>
 #include <vector>
-#include "ortools/base/integral_types.h"
 %}
 
 // SWIG macros to be used in generating C# wrappers for C++ protocol
@@ -32,25 +32,20 @@
 // if the C++ function returns a protocol message:
 //   MyProto* foo();
 // Use PROTO2_RETURN macro:
-//   PROTO2_RETURN(MyProto, Google.Proto.Protos.Test.MyProto, true)
-//
-// Replace true by false if the C++ function returns a pointer to a
-// protocol message object whose ownership is not transferred to the
-// (C++) caller.
+//   PROTO2_RETURN(MyProto, Google.Proto.Protos.Test.MyProto)
 //
 // Passing each protocol message from C# to C++ by value. Each ProtocolMessage
 // is serialized into byte[] when it is passed from C# to C++, the C++ code
 // deserializes into C++ native protocol message.
 //
 // @param CppProtoType the fully qualified C++ protocol message type
-// @param CSharpProtoType the corresponding fully qualified C# protocol message
-//        type
+// @param CSharpProtoType the corresponding fully qualified C# protocol message type
 // @param param_name the parameter name
 %define PROTO_INPUT(CppProtoType, CSharpProtoType, param_name)
 %typemap(ctype)  PROTO_TYPE* INPUT, PROTO_TYPE& INPUT "int " #param_name "_size, uint8_t*"
 %typemap(imtype) PROTO_TYPE* INPUT, PROTO_TYPE& INPUT "int " #param_name "_size, byte[]"
 %typemap(cstype) PROTO_TYPE* INPUT, PROTO_TYPE& INPUT "CSharpProtoType"
-%typemap(csin)   PROTO_TYPE* INPUT, PROTO_TYPE& INPUT "$csinput.CalculateSize(), ProtoHelper.ProtoToByteArray($csinput)"
+%typemap(csin)   PROTO_TYPE* INPUT, PROTO_TYPE& INPUT "ProtoHelper.ProtoToByteArray($csinput, out var buffer), buffer"
 %typemap(in)     PROTO_TYPE* INPUT, PROTO_TYPE& INPUT {
   $1 = new CppProtoType;
   bool parsed_ok = $1->ParseFromArray($input, param_name ## _size);
@@ -69,27 +64,33 @@
 %apply PROTO_TYPE* INPUT { CppProtoType* param_name }
 %enddef // end PROTO_INPUT
 
+// Return protocol message from C++ to C#.
+// Each protocol message is serialized into byte[] when it is returned
+// from C++.
+//
+// @param CppProtoType the fully qualified C++ protocol message type
+// @param CSharpProtoType the corresponding fully qualified C# protocol message type
 %define PROTO2_RETURN(CppProtoType, CSharpProtoType)
 %typemap(ctype)  CppProtoType "uint8_t*"
 %typemap(imtype) CppProtoType "System.IntPtr"
 %typemap(cstype) CppProtoType "CSharpProtoType"
 %typemap(csout)  CppProtoType {
-  byte[] tmp = new byte[4];
-  System.IntPtr data = $imcall;
-  System.Runtime.InteropServices.Marshal.Copy(data, tmp, 0, 4);
-  int size = System.BitConverter.ToInt32(tmp, 0);
-  byte[] buf = new byte[size + 4];
-  System.Runtime.InteropServices.Marshal.Copy(data, buf, 0, size + 4);
-  // TODO(user): delete the C++ buffer.
-  try {
-    Google.Protobuf.CodedInputStream input =
-        new Google.Protobuf.CodedInputStream(buf, 4, size);
-    CSharpProtoType proto = new CSharpProtoType();
-    proto.MergeFrom(input);
-    return proto;
-  } catch (Google.Protobuf.InvalidProtocolBufferException /*e*/) {
-    throw new System.Exception(
-        "Unable to parse CSharpProtoType protocol message.");
+  System.IntPtr dataPointer = $imcall;
+  try
+  {
+    int size = System.Runtime.InteropServices.Marshal.ReadInt32(dataPointer);
+    unsafe
+    {
+      var data = new System.ReadOnlySpan<byte>((dataPointer + sizeof(int)).ToPointer(), size);
+      return CSharpProtoType.Parser.ParseFrom(data);
+    }
+  } catch (Google.Protobuf.InvalidProtocolBufferException /*e*/)
+  {
+    throw new System.Exception("Unable to parse CSharpProtoType protocol message.");
+  }
+  finally
+  {
+    Google.OrTools.Init.CppBridge.DeleteByteArray(dataPointer);
   }
 }
 %typemap(out) CppProtoType {
@@ -101,4 +102,23 @@
   $result[2] = (size >> 16) & 0xFF;
   $result[3] = (size >> 24) & 0xFF;
 }
+
 %enddef // end PROTO2_RETURN
+
+// SWIG Macro for mapping protocol message enum type.
+// @param CppEnumProto the C++ protocol message enum type
+// @param CSharpEnumProto the corresponding C# protocol message enum type
+%define PROTO_ENUM_RETURN(CppEnumProto, CSharpEnumProto)
+%typemap(ctype)  CppEnumProto "int"
+%typemap(imtype) CppEnumProto "int"
+%typemap(cstype) CppEnumProto "CSharpEnumProto"
+
+// From CppEnumProto to ctype (in wrap.cxx code)
+%typemap(out) CppEnumProto %{ $result = $1; %}
+
+// From imtype to cstype (in .cs code)
+%typemap(csout) CppEnumProto {
+  return (CSharpEnumProto) $imcall;
+}
+%enddef // end PROTO_ENUM_RETURN
+

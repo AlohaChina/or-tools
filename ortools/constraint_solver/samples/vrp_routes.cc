@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,8 +14,12 @@
 // [START program]
 // [START import]
 #include <cstdint>
+#include <cstdlib>
+#include <sstream>
 #include <vector>
 
+#include "ortools/base/logging.h"
+#include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/routing.h"
 #include "ortools/constraint_solver/routing_enums.pb.h"
 #include "ortools/constraint_solver/routing_index_manager.h"
@@ -73,7 +77,7 @@ void PrintSolution(
   DataModel data;
   int64_t total_distance = 0;
   for (int i = 0; i < routes.size(); ++i) {
-    std::vector<RoutingIndexManager::NodeIndex> route = routes[i];
+    const std::vector<RoutingIndexManager::NodeIndex>& route = routes[i];
     int64_t route_distance{0};
     std::stringstream route_text;
     LOG(INFO) << "Route for Vehicle " << i << ":";
@@ -111,10 +115,11 @@ void Vrp() {
   // Create and register a transit callback.
   // [START transit_callback]
   const int transit_callback_index = routing.RegisterTransitCallback(
-      [&data, &manager](int64_t from_index, int64_t to_index) -> int64_t {
+      [&data, &manager](const int64_t from_index,
+                        const int64_t to_index) -> int64_t {
         // Convert from routing variable Index to distance matrix NodeIndex.
-        auto from_node = manager.IndexToNode(from_index).value();
-        auto to_node = manager.IndexToNode(to_index).value();
+        const int from_node = manager.IndexToNode(from_index).value();
+        const int to_node = manager.IndexToNode(to_index).value();
         return data.distance_matrix[from_node][to_node];
       });
   // [END transit_callback]
@@ -151,7 +156,7 @@ void Vrp() {
 }
 }  // namespace operations_research
 
-int main(int argc, char** argv) {
+int main(int /*argc*/, char* /*argv*/[]) {
   operations_research::Vrp();
   return EXIT_SUCCESS;
 }

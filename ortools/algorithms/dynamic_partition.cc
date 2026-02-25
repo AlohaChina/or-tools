@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,9 +15,13 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "absl/strings/str_format.h"
+#include "absl/log/check.h"
 #include "absl/strings/str_join.h"
+#include "absl/types/span.h"
 #include "ortools/base/murmur.h"
 
 namespace operations_research {
@@ -94,7 +98,7 @@ DynamicPartition::DynamicPartition(
   }
 }
 
-void DynamicPartition::Refine(const std::vector<int>& distinguished_subset) {
+void DynamicPartition::Refine(absl::Span<const int> distinguished_subset) {
   // tmp_counter_of_part_[i] will contain the number of
   // elements in distinguished_subset that were part of part #i.
   tmp_counter_of_part_.resize(NumParts(), 0);
@@ -182,17 +186,15 @@ void DynamicPartition::UndoRefineUntilNumPartsEqual(int original_num_parts) {
   }
 }
 
-std::string DynamicPartition::DebugString(DebugStringSorting sorting) const {
-  if (sorting != SORT_LEXICOGRAPHICALLY && sorting != SORT_BY_PART) {
-    return absl::StrFormat("Unsupported sorting: %d", sorting);
-  }
+std::string DynamicPartition::DebugString(
+    bool sort_parts_lexicographically) const {
   std::vector<std::vector<int>> parts;
   for (int i = 0; i < NumParts(); ++i) {
     IterablePart iterable_part = ElementsInPart(i);
     parts.emplace_back(iterable_part.begin(), iterable_part.end());
     std::sort(parts.back().begin(), parts.back().end());
   }
-  if (sorting == SORT_LEXICOGRAPHICALLY) {
+  if (sort_parts_lexicographically) {
     std::sort(parts.begin(), parts.end());
   }
   std::string out;
@@ -279,8 +281,9 @@ std::string MergingPartition::DebugString() {
   for (int i = 0; i < NumNodes(); ++i) {
     sorted_parts[GetRootAndCompressPath(i)].push_back(i);
   }
-  for (std::vector<int>& part : sorted_parts)
+  for (std::vector<int>& part : sorted_parts) {
     std::sort(part.begin(), part.end());
+  }
   std::sort(sorted_parts.begin(), sorted_parts.end());
   // Note: typically, a lot of elements of "sorted_parts" will be empty,
   // but these won't be visible in the string that we construct below.
@@ -290,6 +293,47 @@ std::string MergingPartition::DebugString() {
     out += absl::StrJoin(part, " ");
   }
   return out;
+}
+
+void SimpleDynamicPartition::Refine(
+    absl::Span<const int> distinguished_subset) {
+  // Compute the size of the non-empty intersection of each part with the
+  // distinguished_subset.
+  temp_to_clean_.clear();
+  std::vector<int>& local_sizes = temp_data_by_part_;
+  local_sizes.resize(size_of_part_.size(), 0);
+  for (const int element : distinguished_subset) {
+    const int part = part_of_[element];
+    if (local_sizes[part] == 0) temp_to_clean_.push_back(part);
+    local_sizes[part]++;
+  }
+
+  // Reuse local_sizes to store new_part index or zero (no remapping).
+  // Also update the size of each part.
+  for (const int part : temp_to_clean_) {
+    if (local_sizes[part] == size_of_part_[part]) {
+      // No need to remap if the whole part is in distinguished_subset.
+      local_sizes[part] = 0;
+      continue;
+    }
+
+    const int new_part_index = size_of_part_.size();
+    size_of_part_[part] -= local_sizes[part];
+    size_of_part_.push_back(local_sizes[part]);
+    local_sizes[part] = new_part_index;
+  }
+
+  // For each part not completely included or excluded, split out the element
+  // from distinguished_subset into a new part.
+  for (const int element : distinguished_subset) {
+    const int new_part = local_sizes[part_of_[element]];
+    if (new_part != 0) part_of_[element] = new_part;
+  }
+
+  // Sparse clean.
+  for (const int part : temp_to_clean_) {
+    local_sizes[part] = 0;
+  }
 }
 
 }  // namespace operations_research

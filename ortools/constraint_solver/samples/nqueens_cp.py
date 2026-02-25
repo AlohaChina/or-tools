@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2010-2021 Google LLC
+# Copyright 2010-2025 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 # [START program]
 """OR-Tools solution to the N-queens problem."""
 # [START import]
@@ -22,15 +23,13 @@ from ortools.constraint_solver import pywrapcp
 def main(board_size):
     # Creates the solver.
     # [START solver]
-    solver = pywrapcp.Solver('n-queens')
+    solver = pywrapcp.Solver("n-queens")
     # [END solver]
 
     # Creates the variables.
     # [START variables]
     # The array index is the column, and the value is the row.
-    queens = [
-        solver.IntVar(0, board_size - 1, f'x{i}') for i in range(board_size)
-    ]
+    queens = [solver.IntVar(0, board_size - 1, f"x{i}") for i in range(board_size)]
     # [END variables]
 
     # Creates the constraints.
@@ -44,8 +43,7 @@ def main(board_size):
     # [END constraints]
 
     # [START db]
-    db = solver.Phase(queens, solver.CHOOSE_FIRST_UNBOUND,
-                      solver.ASSIGN_MIN_VALUE)
+    db = solver.Phase(queens, solver.CHOOSE_FIRST_UNBOUND, solver.ASSIGN_MIN_VALUE)
     # [END db]
 
     # [START solve]
@@ -58,9 +56,9 @@ def main(board_size):
             for j in range(board_size):
                 if queens[j].Value() == i:
                     # There is a queen in column j, row i.
-                    print('Q', end=' ')
+                    print("Q", end=" ")
                 else:
-                    print('_', end=' ')
+                    print("_", end=" ")
             print()
         print()
         num_solutions += 1
@@ -69,18 +67,18 @@ def main(board_size):
 
     # Statistics.
     # [START statistics]
-    print('\nStatistics')
-    print(f'  failures: {solver.Failures()}')
-    print(f'  branches: {solver.Branches()}')
-    print(f'  wall time: {solver.WallTime()} ms')
-    print(f'  Solutions found: {num_solutions}')
+    print("\nStatistics")
+    print(f"  failures: {solver.Failures()}")
+    print(f"  branches: {solver.Branches()}")
+    print(f"  wall time: {solver.WallTime()} ms")
+    print(f"  Solutions found: {num_solutions}")
     # [END statistics]
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # By default, solve the 8x8 problem.
-    board_size = 8
+    size = 8
     if len(sys.argv) > 1:
-        board_size = int(sys.argv[1])
-    main(board_size)
+        size = int(sys.argv[1])
+    main(size)
 # [END program]

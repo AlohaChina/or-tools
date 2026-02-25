@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_ALGORITHMS_DENSE_DOUBLY_LINKED_LIST_H_
-#define OR_TOOLS_ALGORITHMS_DENSE_DOUBLY_LINKED_LIST_H_
+#ifndef ORTOOLS_ALGORITHMS_DENSE_DOUBLY_LINKED_LIST_H_
+#define ORTOOLS_ALGORITHMS_DENSE_DOUBLY_LINKED_LIST_H_
 
 #include <vector>
 
@@ -94,4 +94,4 @@ DenseDoublyLinkedList::DenseDoublyLinkedList(const T& elements)
 
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_ALGORITHMS_DENSE_DOUBLY_LINKED_LIST_H_
+#endif  // ORTOOLS_ALGORITHMS_DENSE_DOUBLY_LINKED_LIST_H_

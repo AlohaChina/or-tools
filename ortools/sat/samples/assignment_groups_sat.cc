@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,14 +10,26 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 // [START program]
 // Solve assignment problem for given group of workers.
 // [START import]
+#include <stdlib.h>
+
+#include <cstdint>
 #include <numeric>
 #include <vector>
 
+#include "absl/base/log_severity.h"
+#include "absl/log/globals.h"
 #include "absl/strings/str_format.h"
+#include "absl/types/span.h"
+#include "ortools/base/init_google.h"
+#include "ortools/base/logging.h"
 #include "ortools/sat/cp_model.h"
+#include "ortools/sat/cp_model.pb.h"
+#include "ortools/sat/cp_model_solver.h"
+
 // [END import]
 namespace operations_research {
 namespace sat {
@@ -39,11 +51,11 @@ void AssignmentGroups() {
       {{17, 39, 103, 64, 61, 92}},
       {{101, 45, 83, 59, 92, 27}},
   }};
-  const int num_workers = costs.size();
+  const int num_workers = static_cast<int>(costs.size());
   std::vector<int> all_workers(num_workers);
   std::iota(all_workers.begin(), all_workers.end(), 0);
 
-  const int num_tasks = costs[0].size();
+  const int num_tasks = static_cast<int>(costs[0].size());
   std::vector<int> all_tasks(num_tasks);
   std::iota(all_tasks.begin(), all_tasks.end(), 0);
   // [END data]
@@ -98,15 +110,15 @@ void AssignmentGroups() {
   // [START constraints]
   // Each worker is assigned to at most one task.
   for (int worker : all_workers) {
-    cp_model.AddLessOrEqual(LinearExpr::Sum(x[worker]), 1);
+    cp_model.AddAtMostOne(x[worker]);
   }
   // Each task is assigned to exactly one worker.
   for (int task : all_tasks) {
-    LinearExpr task_sum;
+    std::vector<BoolVar> tasks;
     for (int worker : all_workers) {
-      task_sum.AddTerm(x[worker][task], 1);
+      tasks.push_back(x[worker][task]);
     }
-    cp_model.AddEquality(task_sum, 1);
+    cp_model.AddExactlyOne(tasks);
   }
   // [END constraints]
 
@@ -122,7 +134,7 @@ void AssignmentGroups() {
   for (int worker : all_workers) {
     LinearExpr task_sum;
     for (int task : all_tasks) {
-      task_sum.AddTerm(x[worker][task], 1);
+      task_sum += x[worker][task];
     }
     cp_model.AddEquality(work[worker], task_sum);
   }
@@ -181,7 +193,9 @@ void AssignmentGroups() {
 }  // namespace sat
 }  // namespace operations_research
 
-int main(int argc, char** argv) {
+int main(int argc, char* argv[]) {
+  InitGoogle(argv[0], &argc, &argv, true);
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
   operations_research::sat::AssignmentGroups();
   return EXIT_SUCCESS;
 }

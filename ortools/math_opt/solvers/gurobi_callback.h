@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_MATH_OPT_SOLVERS_GUROBI_CALLBACK_H_
-#define OR_TOOLS_MATH_OPT_SOLVERS_GUROBI_CALLBACK_H_
+#ifndef ORTOOLS_MATH_OPT_SOLVERS_GUROBI_CALLBACK_H_
+#define ORTOOLS_MATH_OPT_SOLVERS_GUROBI_CALLBACK_H_
 
 #include <cstdint>
 #include <vector>
@@ -23,16 +23,18 @@
 #include "ortools/base/linked_hash_map.h"
 #include "ortools/math_opt/callback.pb.h"
 #include "ortools/math_opt/core/solver_interface.h"
+#include "ortools/math_opt/solvers/gurobi/g_gurobi.h"
 #include "ortools/math_opt/solvers/message_callback_data.h"
 #include "ortools/math_opt/sparse_containers.pb.h"
-
-#include "ortools/gurobi/environment.h"
+#include "ortools/third_party_solvers/gurobi_environment.h"
+#include "ortools/util/solve_interrupter.h"
 
 namespace operations_research {
 namespace math_opt {
 
 struct GurobiCallbackInput {
   SolverInterface::Callback user_cb;
+  SolverInterface::MessageCallback message_cb;
   const gtl::linked_hash_map<int64_t, int>& variable_ids;
   int num_gurobi_vars = 0;
   // events[i] indicates if we should run user_cb when Gurobi's callback is
@@ -54,17 +56,18 @@ struct GurobiCallbackInput {
 std::vector<bool> EventToGurobiWhere(
     const absl::flat_hash_set<CallbackEventProto>& events);
 
-absl::Status GurobiCallbackImpl(GRBmodel* grb_model, void* cbdata, int where,
+absl::Status GurobiCallbackImpl(const Gurobi::CallbackContext& context,
                                 const GurobiCallbackInput& callback_input,
-                                MessageCallbackData& message_callback_data);
+                                MessageCallbackData& message_callback_data,
+                                SolveInterrupter* local_interrupter);
 
-// Makes the final calls to the user callback with any buffered event if
-// necessary. It must be called once at the end of the solve, and only if all
-// previous callbacks succeeded (and the solve succeeded).
-absl::Status GurobiCallbackImplFlush(
-    const GurobiCallbackInput& callback_input,
-    MessageCallbackData& message_callback_data);
+// Makes the final calls to the message callback with any unfinished line if
+// necessary. It must be called once at the end of the solve, even when the
+// solve or one callback failed (in case the last unfinished line contains some
+// details about that).
+void GurobiCallbackImplFlush(const GurobiCallbackInput& callback_input,
+                             MessageCallbackData& message_callback_data);
 
 }  // namespace math_opt
 }  // namespace operations_research
-#endif  // OR_TOOLS_MATH_OPT_SOLVERS_GUROBI_CALLBACK_H_
+#endif  // ORTOOLS_MATH_OPT_SOLVERS_GUROBI_CALLBACK_H_

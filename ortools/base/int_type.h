@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -88,6 +88,7 @@
 // The class also defines a hash functor that allows the IntType to be used
 // as key to hashable containers such as hash_map and hash_set.
 //
+// We suggest using the IntTypeIndexedContainer wrapper around google3's
 // FixedArray and STL vector (see int-type-indexed-container.h) if an IntType is
 // intended to be used as an index into these containers.  These wrappers are
 // indexed in a type-safe manner using IntTypes to ensure type-safety.
@@ -141,19 +142,17 @@
 //  void GetGlobalDoc(int64_t global) { ...
 //  GetGlobalDoc(local.value());                  <-- Compiles fine.
 
-#ifndef OR_TOOLS_BASE_INT_TYPE_H_
-#define OR_TOOLS_BASE_INT_TYPE_H_
+#ifndef ORTOOLS_BASE_INT_TYPE_H_
+#define ORTOOLS_BASE_INT_TYPE_H_
 
 #include <stddef.h>
 
-#include <functional>
 #include <iosfwd>
 #include <ostream>  // NOLINT
 #include <type_traits>
 
-#include "absl/base/port.h"
+#include "absl/base/attributes.h"
 #include "absl/strings/string_view.h"
-#include "ortools/base/macros.h"
 
 namespace gtl {
 
@@ -196,8 +195,13 @@ class IntType {
     }
   };
 
+  template <typename H>
+  friend H AbslHashValue(H h, const IntType& i) {
+    return H::combine(std::move(h), i.value());
+  }
+
  public:
-  // Default c'tor initializing value_ to 0.
+  // Default constructor initializing value_ to 0.
   constexpr IntType() : value_(0) {}
   // C'tor explicitly initializing from a ValueType.
   constexpr explicit IntType(ValueType value) : value_(value) {}
@@ -271,9 +275,6 @@ class IntType {
  private:
   // The integer value of type ValueType.
   ValueType value_;
-
-  COMPILE_ASSERT(std::is_integral<ValueType>::value,
-                 invalid_integer_type_for_id_type_);
 } ABSL_ATTRIBUTE_PACKED;
 
 // -- NON-MEMBER STREAM OPERATORS ----------------------------------------------
@@ -355,11 +356,4 @@ INT_TYPE_COMPARISON_OP(>=);  // NOLINT
 
 }  // namespace gtl
 
-// Allows it to be used as a key to hashable containers.
-namespace std {
-template <typename IntTypeName, typename ValueType>
-struct hash<gtl::IntType<IntTypeName, ValueType> >
-    : gtl::IntType<IntTypeName, ValueType>::Hasher {};
-}  // namespace std
-
-#endif  // OR_TOOLS_BASE_INT_TYPE_H_
+#endif  // ORTOOLS_BASE_INT_TYPE_H_

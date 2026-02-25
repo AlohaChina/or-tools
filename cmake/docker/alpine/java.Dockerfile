@@ -1,10 +1,14 @@
 FROM ortools/cmake:alpine_swig AS env
+
 ENV JAVA_HOME=/usr/lib/jvm/java-1.8-openjdk
 RUN apk add --no-cache openjdk8 maven
 
 FROM env AS devel
 WORKDIR /home/project
 COPY . .
+
+ARG CMAKE_BUILD_PARALLEL_LEVEL
+ENV CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL:-4}
 
 FROM devel AS build
 RUN cmake -S. -Bbuild -DBUILD_JAVA=ON -DSKIP_GPG=ON \

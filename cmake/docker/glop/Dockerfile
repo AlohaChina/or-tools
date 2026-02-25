@@ -1,27 +1,25 @@
 # Create a virtual environment with all tools installed
 # ref: https://hub.docker.com/_/ubuntu
-FROM ubuntu:rolling AS env
-LABEL maintainer="corentinl@google.com"
+FROM ubuntu:latest AS env
+
 # Install system build dependencies
 ENV PATH=/usr/local/bin:$PATH
 RUN apt-get update -qq \
-&& apt-get install -yq git wget libssl-dev build-essential \
+&& DEBIAN_FRONTEND=noninteractive apt-get install -yq \
+ git wget libssl-dev build-essential cmake \
 && apt-get clean \
 && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-# Install CMake 3.21.1
-RUN wget -q "https://cmake.org/files/v3.21/cmake-3.21.1-linux-x86_64.sh" \
-&& chmod a+x cmake-3.21.1-linux-x86_64.sh \
-&& ./cmake-3.21.1-linux-x86_64.sh --prefix=/usr/local/ --skip-license \
-&& rm cmake-3.21.1-linux-x86_64.sh
-CMD [ "/usr/bin/bash" ]
 
 FROM env AS devel
 WORKDIR /home/project
 COPY . .
 
+ARG CMAKE_BUILD_PARALLEL_LEVEL
+ENV CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL:-4}
+
 FROM devel AS build
 RUN cmake -S. -Bbuild -DBUILD_DEPS=ON -DBUILD_CXX=OFF -DBUILD_GLOP=ON
-RUN cmake --build build --target all -v
+RUN cmake --build build --target all -j 4 -v
 RUN cmake --build build --target install
 
 FROM build AS test

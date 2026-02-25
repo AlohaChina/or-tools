@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,23 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_UTIL_ZVECTOR_H_
-#define OR_TOOLS_UTIL_ZVECTOR_H_
+#ifndef ORTOOLS_UTIL_ZVECTOR_H_
+#define ORTOOLS_UTIL_ZVECTOR_H_
 
-#if (defined(__APPLE__) || defined(__FreeBSD__)) && defined(__GNUC__)
+#if (defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || \
+     defined(__OpenBSD__)) &&                                             \
+    defined(__GNUC__)
 #include <machine/endian.h>
-#elif !defined(_MSC_VER)
+#elif !defined(_MSC_VER) && !defined(__MINGW32__) && !defined(__MINGW64__)
 #include <endian.h>
 #endif
-#include <climits>
-#include <cstdio>
-#include <limits>
+#include <cstdint>
 #include <memory>
-#include <string>
+#include <string>  // IWYU pragma: keep
 
-#include "ortools/base/integral_types.h"
+#include "absl/log/check.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
 
 // An array class for storing arrays of integers.
 //
@@ -76,7 +75,7 @@ class ZVector {
     return base_[index];
   }
 
-  const T operator[](int64_t index) const {
+  T operator[](int64_t index) const {
     DCHECK_LE(min_index_, index);
     DCHECK_GE(max_index_, index);
     DCHECK(base_ != nullptr);
@@ -167,4 +166,4 @@ typedef ZVector<uint64_t> UInt64ZVector;
 
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_UTIL_ZVECTOR_H_
+#endif  // ORTOOLS_UTIL_ZVECTOR_H_

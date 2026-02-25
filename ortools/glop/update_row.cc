@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,7 +13,20 @@
 
 #include "ortools/glop/update_row.h"
 
+#include <cstdlib>
+#include <string>
+
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/types/span.h"
+#include "ortools/glop/basis_representation.h"
+#include "ortools/glop/parameters.pb.h"
+#include "ortools/glop/variables_info.h"
+#include "ortools/lp_data/lp_types.h"
 #include "ortools/lp_data/lp_utils.h"
+#include "ortools/lp_data/scattered_vector.h"
+#include "ortools/lp_data/sparse.h"
+#include "ortools/util/stats.h"
 
 namespace operations_research {
 namespace glop {
@@ -32,14 +45,14 @@ UpdateRow::UpdateRow(const CompactSparseMatrix& matrix,
       non_zero_position_list_(),
       non_zero_position_set_(),
       coefficient_(),
-      compute_update_row_(true),
       num_operations_(0),
       parameters_(),
       stats_() {}
 
 void UpdateRow::Invalidate() {
   SCOPED_TIME_STAT(&stats_);
-  compute_update_row_ = true;
+  left_inverse_computed_for_ = kInvalidRow;
+  update_row_computed_for_ = kInvalidRow;
 }
 
 const ScatteredRow& UpdateRow::GetUnitRowLeftInverse() const {
@@ -55,7 +68,10 @@ const ScatteredRow& UpdateRow::ComputeAndGetUnitRowLeftInverse(
 }
 
 void UpdateRow::ComputeUnitRowLeftInverse(RowIndex leaving_row) {
+  if (left_inverse_computed_for_ == leaving_row) return;
+  left_inverse_computed_for_ = leaving_row;
   SCOPED_TIME_STAT(&stats_);
+
   basis_factorization_.LeftSolveForUnitRow(RowToColIndex(leaving_row),
                                            &unit_row_left_inverse_);
 
@@ -69,8 +85,7 @@ void UpdateRow::ComputeUnitRowLeftInverse(RowIndex leaving_row) {
 }
 
 void UpdateRow::ComputeUpdateRow(RowIndex leaving_row) {
-  if (!compute_update_row_ && update_row_computed_for_ == leaving_row) return;
-  compute_update_row_ = false;
+  if (update_row_computed_for_ == leaving_row) return;
   update_row_computed_for_ = leaving_row;
   ComputeUnitRowLeftInverse(leaving_row);
   SCOPED_TIME_STAT(&stats_);
@@ -91,22 +106,37 @@ void UpdateRow::ComputeUpdateRow(RowIndex leaving_row) {
     // small entries (no complexity changes).
     const Fractional drop_tolerance = parameters_.drop_tolerance();
     unit_row_left_inverse_filtered_non_zeros_.clear();
+    const auto matrix_view = transposed_matrix_.view();
     if (unit_row_left_inverse_.non_zeros.empty()) {
       const ColIndex size = unit_row_left_inverse_.values.size();
+      const auto values = unit_row_left_inverse_.values.view();
       for (ColIndex col(0); col < size; ++col) {
-        if (std::abs(unit_row_left_inverse_.values[col]) > drop_tolerance) {
+        if (std::abs(values[col]) > drop_tolerance) {
           unit_row_left_inverse_filtered_non_zeros_.push_back(col);
-          num_row_wise_entries += transposed_matrix_.ColumnNumEntries(col);
+          num_row_wise_entries += matrix_view.ColumnNumEntries(col);
         }
       }
     } else {
       for (const auto e : unit_row_left_inverse_) {
         if (std::abs(e.coefficient()) > drop_tolerance) {
           unit_row_left_inverse_filtered_non_zeros_.push_back(e.column());
-          num_row_wise_entries +=
-              transposed_matrix_.ColumnNumEntries(e.column());
+          num_row_wise_entries += matrix_view.ColumnNumEntries(e.column());
         }
       }
+    }
+
+    // The case of size 1 happens often enough to deserve special code.
+    //
+    // TODO(user): The impact is not as high as I hopped though, so not too
+    // important.
+    if (unit_row_left_inverse_filtered_non_zeros_.size() == 1) {
+      ComputeUpdatesForSingleRow(
+          unit_row_left_inverse_filtered_non_zeros_.front());
+      num_operations_ += num_row_wise_entries.value();
+      IF_STATS_ENABLED(stats_.update_row_density.Add(
+          static_cast<double>(num_non_zeros_) /
+          static_cast<double>(matrix_.num_cols().value())));
+      return;
     }
 
     // Number of entries that ComputeUpdatesColumnWise() will need to look at.
@@ -142,7 +172,7 @@ void UpdateRow::ComputeUpdateRow(RowIndex leaving_row) {
         matrix_.num_cols().value();
   }
   IF_STATS_ENABLED(stats_.update_row_density.Add(
-      static_cast<double>(non_zero_position_list_.size()) /
+      static_cast<double>(num_non_zeros_) /
       static_cast<double>(matrix_.num_cols().value())));
 }
 
@@ -164,8 +194,8 @@ void UpdateRow::ComputeUpdateRowForBenchmark(const DenseRow& lhs,
 
 const DenseRow& UpdateRow::GetCoefficients() const { return coefficient_; }
 
-const ColIndexVector& UpdateRow::GetNonZeroPositions() const {
-  return non_zero_position_list_;
+absl::Span<const ColIndex> UpdateRow::GetNonZeroPositions() const {
+  return absl::MakeSpan(non_zero_position_list_.data(), num_non_zeros_);
 }
 
 void UpdateRow::SetParameters(const GlopParameters& parameters) {
@@ -176,23 +206,26 @@ void UpdateRow::SetParameters(const GlopParameters& parameters) {
 // the same as, or greater than, the number of columns.
 void UpdateRow::ComputeUpdatesRowWise() {
   SCOPED_TIME_STAT(&stats_);
-  const ColIndex num_cols = matrix_.num_cols();
-  coefficient_.AssignToZero(num_cols);
-  for (ColIndex col : unit_row_left_inverse_filtered_non_zeros_) {
+  coefficient_.AssignToZero(matrix_.num_cols());
+  const auto output_coeffs = coefficient_.view();
+  const auto view = transposed_matrix_.view();
+  for (const ColIndex col : unit_row_left_inverse_filtered_non_zeros_) {
     const Fractional multiplier = unit_row_left_inverse_[col];
-    for (const EntryIndex i : transposed_matrix_.Column(col)) {
-      const ColIndex pos = RowToColIndex(transposed_matrix_.EntryRow(i));
-      coefficient_[pos] += multiplier * transposed_matrix_.EntryCoefficient(i);
+    for (const EntryIndex i : view.Column(col)) {
+      const ColIndex pos = RowToColIndex(view.EntryRow(i));
+      output_coeffs[pos] += multiplier * view.EntryCoefficient(i);
     }
   }
 
-  non_zero_position_list_.clear();
+  non_zero_position_list_.resize(matrix_.num_cols().value());
+  auto* non_zeros = non_zero_position_list_.data();
   const Fractional drop_tolerance = parameters_.drop_tolerance();
   for (const ColIndex col : variables_info_.GetIsRelevantBitRow()) {
-    if (std::abs(coefficient_[col]) > drop_tolerance) {
-      non_zero_position_list_.push_back(col);
+    if (std::abs(output_coeffs[col]) > drop_tolerance) {
+      *non_zeros++ = col;
     }
   }
+  num_non_zeros_ = non_zeros - non_zero_position_list_.data();
 }
 
 // This is optimized for the case when the total number of entries is smaller
@@ -202,82 +235,123 @@ void UpdateRow::ComputeUpdatesRowWiseHypersparse() {
   const ColIndex num_cols = matrix_.num_cols();
   non_zero_position_set_.ClearAndResize(num_cols);
   coefficient_.resize(num_cols, 0.0);
-  for (ColIndex col : unit_row_left_inverse_filtered_non_zeros_) {
+
+  const auto output_coeffs = coefficient_.view();
+  const auto view = transposed_matrix_.view();
+  const auto nz_set = non_zero_position_set_.const_view();
+  for (const ColIndex col : unit_row_left_inverse_filtered_non_zeros_) {
     const Fractional multiplier = unit_row_left_inverse_[col];
-    for (const EntryIndex i : transposed_matrix_.Column(col)) {
-      const ColIndex pos = RowToColIndex(transposed_matrix_.EntryRow(i));
-      const Fractional v = multiplier * transposed_matrix_.EntryCoefficient(i);
-      if (!non_zero_position_set_.IsSet(pos)) {
+    for (const EntryIndex i : view.Column(col)) {
+      const ColIndex pos = RowToColIndex(view.EntryRow(i));
+      const Fractional v = multiplier * view.EntryCoefficient(i);
+      if (!nz_set[pos]) {
         // Note that we could create the non_zero_position_list_ here, but we
         // prefer to keep the non-zero positions sorted, so using the bitset is
-        // a good alernative. Of course if the solution is really really sparse,
-        // then sorting non_zero_position_list_ will be faster.
-        coefficient_[pos] = v;
+        // a good alternative. Of course if the solution is really really
+        // sparse, then sorting non_zero_position_list_ will be faster.
+        output_coeffs[pos] = v;
         non_zero_position_set_.Set(pos);
       } else {
-        coefficient_[pos] += v;
+        output_coeffs[pos] += v;
       }
     }
   }
 
   // Only keep in non_zero_position_set_ the relevant positions.
   non_zero_position_set_.Intersection(variables_info_.GetIsRelevantBitRow());
-  non_zero_position_list_.clear();
+  non_zero_position_list_.resize(matrix_.num_cols().value());
+  auto* non_zeros = non_zero_position_list_.data();
   const Fractional drop_tolerance = parameters_.drop_tolerance();
   for (const ColIndex col : non_zero_position_set_) {
     // TODO(user): Since the solution is really sparse, maybe storing the
     // non-zero coefficients contiguously in a vector is better than keeping
     // them as they are. Note however that we will iterate only twice on the
     // update row coefficients during an iteration.
-    if (std::abs(coefficient_[col]) > drop_tolerance) {
-      non_zero_position_list_.push_back(col);
+    if (std::abs(output_coeffs[col]) > drop_tolerance) {
+      *non_zeros++ = col;
     }
   }
+  num_non_zeros_ = non_zeros - non_zero_position_list_.data();
 }
 
-// Note that we use the same algo as ComputeUpdatesColumnWise() here. The
-// others version might be faster, but this is called only once per solve, so
-// it shouldn't be too bad.
-void UpdateRow::RecomputeFullUpdateRow(RowIndex leaving_row) {
-  CHECK(!compute_update_row_);
-  const ColIndex num_cols = matrix_.num_cols();
+void UpdateRow::ComputeUpdatesForSingleRow(ColIndex row_as_col) {
+  coefficient_.resize(matrix_.num_cols(), 0.0);
+  non_zero_position_list_.resize(matrix_.num_cols().value());
+  auto* non_zeros = non_zero_position_list_.data();
+
+  const DenseBitRow& is_relevant = variables_info_.GetIsRelevantBitRow();
   const Fractional drop_tolerance = parameters_.drop_tolerance();
-  coefficient_.resize(num_cols, 0.0);
-  non_zero_position_list_.clear();
+  const Fractional multiplier = unit_row_left_inverse_[row_as_col];
+  const auto output_coeffs = coefficient_.view();
+  const auto view = transposed_matrix_.view();
+  for (const EntryIndex i : view.Column(row_as_col)) {
+    const ColIndex pos = RowToColIndex(view.EntryRow(i));
+    if (!is_relevant[pos]) continue;
 
-  // Fills the only position at one in the basic columns.
-  coefficient_[basis_[leaving_row]] = 1.0;
-  non_zero_position_list_.push_back(basis_[leaving_row]);
-
-  // Fills the non-basic column.
-  for (const ColIndex col : variables_info_.GetNotBasicBitRow()) {
-    const Fractional coeff =
-        matrix_.ColumnScalarProduct(col, unit_row_left_inverse_.values);
-    if (std::abs(coeff) > drop_tolerance) {
-      non_zero_position_list_.push_back(col);
-      coefficient_[col] = coeff;
+    const Fractional v = multiplier * view.EntryCoefficient(i);
+    if (std::abs(v) > drop_tolerance) {
+      output_coeffs[pos] = v;
+      *non_zeros++ = pos;
     }
   }
+  num_non_zeros_ = non_zeros - non_zero_position_list_.data();
 }
 
 void UpdateRow::ComputeUpdatesColumnWise() {
   SCOPED_TIME_STAT(&stats_);
 
-  const ColIndex num_cols = matrix_.num_cols();
+  coefficient_.resize(matrix_.num_cols(), 0.0);
+  non_zero_position_list_.resize(matrix_.num_cols().value());
+  auto* non_zeros = non_zero_position_list_.data();
+
+  const ColIndex first_slack =
+      matrix_.num_cols() - RowToColIndex(matrix_.num_rows());
+
   const Fractional drop_tolerance = parameters_.drop_tolerance();
-  coefficient_.resize(num_cols, 0.0);
-  non_zero_position_list_.clear();
+  const auto output_coeffs = coefficient_.view();
+  const auto view = matrix_.view();
+  const auto unit_row_left_inverse = unit_row_left_inverse_.values.const_view();
   for (const ColIndex col : variables_info_.GetIsRelevantBitRow()) {
     // Coefficient of the column right inverse on the 'leaving_row'.
     const Fractional coeff =
-        matrix_.ColumnScalarProduct(col, unit_row_left_inverse_.values);
+        col >= first_slack
+            ? unit_row_left_inverse_[col - first_slack]
+            : view.ColumnScalarProduct(col, unit_row_left_inverse);
+
     // Nothing to do if 'coeff' is (almost) zero which does happen due to
     // sparsity. Note that it shouldn't be too bad to use a non-zero drop
     // tolerance here because even if we introduce some precision issues, the
     // quantities updated by this update row will eventually be recomputed.
     if (std::abs(coeff) > drop_tolerance) {
-      non_zero_position_list_.push_back(col);
-      coefficient_[col] = coeff;
+      *non_zeros++ = col;
+      output_coeffs[col] = coeff;
+    }
+  }
+  num_non_zeros_ = non_zeros - non_zero_position_list_.data();
+}
+
+// Note that we use the same algo as ComputeUpdatesColumnWise() here. The
+// others version might be faster, but this is called at most once per solve, so
+// it shouldn't be too bad.
+void UpdateRow::ComputeFullUpdateRow(RowIndex leaving_row,
+                                     DenseRow* output) const {
+  CHECK_EQ(leaving_row, left_inverse_computed_for_);
+
+  const ColIndex num_cols = matrix_.num_cols();
+  output->AssignToZero(num_cols);
+
+  // Fills the only position at one in the basic columns.
+  (*output)[basis_[leaving_row]] = 1.0;
+
+  // Fills the non-basic column.
+  const Fractional drop_tolerance = parameters_.drop_tolerance();
+  const auto view = matrix_.view();
+  const auto unit_row_left_inverse = unit_row_left_inverse_.values.const_view();
+  for (const ColIndex col : variables_info_.GetNotBasicBitRow()) {
+    const Fractional coeff =
+        view.ColumnScalarProduct(col, unit_row_left_inverse);
+    if (std::abs(coeff) > drop_tolerance) {
+      (*output)[col] = coeff;
     }
   }
 }

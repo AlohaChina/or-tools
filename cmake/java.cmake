@@ -1,3 +1,16 @@
+# Copyright 2010-2025 Google LLC
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 if(NOT BUILD_JAVA)
   return()
 endif()
@@ -7,6 +20,7 @@ if(NOT TARGET ${PROJECT_NAMESPACE}::ortools)
 endif()
 
 # Will need swig
+set(SWIG_SOURCE_FILE_EXTENSIONS ".i" ".swig")
 set(CMAKE_SWIG_FLAGS)
 find_package(SWIG REQUIRED)
 include(UseSWIG)
@@ -18,6 +32,7 @@ endif()
 if(UNIX AND NOT APPLE)
   list(APPEND CMAKE_SWIG_FLAGS "-DSWIGWORDSIZE64")
 endif()
+list(APPEND CMAKE_SWIG_FLAGS "-DOR_DLL=")
 
 # Find Java and JNI
 find_package(Java 1.8 COMPONENTS Development REQUIRED)
@@ -45,9 +60,17 @@ set(JAVA_ARTIFACT "ortools")
 
 set(JAVA_PACKAGE "${JAVA_GROUP}.${JAVA_ARTIFACT}")
 if(APPLE)
-  set(NATIVE_IDENTIFIER darwin-x86-64)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)")
+    set(NATIVE_IDENTIFIER darwin-aarch64)
+  else()
+    set(NATIVE_IDENTIFIER darwin-x86-64)
+  endif()
 elseif(UNIX)
-  set(NATIVE_IDENTIFIER linux-x86-64)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)")
+    set(NATIVE_IDENTIFIER linux-aarch64)
+  else()
+    set(NATIVE_IDENTIFIER linux-x86-64)
+  endif()
 elseif(WIN32)
   set(NATIVE_IDENTIFIER win32-x86-64)
 else()
@@ -63,28 +86,31 @@ message(STATUS "Java project: ${JAVA_PROJECT}")
 set(JAVA_PROJECT_DIR ${PROJECT_BINARY_DIR}/java/${JAVA_PROJECT})
 message(STATUS "Java project build path: ${JAVA_PROJECT_DIR}")
 
-# CMake will remove all '-D' prefix (i.e. -DUSE_FOO become USE_FOO)
-#get_target_property(FLAGS ${PROJECT_NAMESPACE}::ortools COMPILE_DEFINITIONS)
-set(FLAGS -DUSE_BOP -DUSE_GLOP -DABSL_MUST_USE_RESULT)
-if(USE_COINOR)
-  list(APPEND FLAGS "-DUSE_CBC" "-DUSE_CLP")
+if(RELEASE)
+  set(JAVA_RELEASE "")
+else()
+  set(JAVA_RELEASE "-RC1")
 endif()
-if(USE_GLPK)
-  list(APPEND FLAGS "-DUSE_GLPK")
-endif()
-if(USE_SCIP)
-  list(APPEND FLAGS "-DUSE_SCIP")
-endif()
-list(APPEND CMAKE_SWIG_FLAGS ${FLAGS} "-I${PROJECT_SOURCE_DIR}")
 
+##################
+##  PROTO FILE  ##
+##################
 # Generate Protobuf java sources
 set(PROTO_JAVAS)
 file(GLOB_RECURSE proto_java_files RELATIVE ${PROJECT_SOURCE_DIR}
+  "ortools/algorithms/*.proto"
+  "ortools/bop/*.proto"
   "ortools/constraint_solver/*.proto"
+  "ortools/glop/*.proto"
+  "ortools/graph/*.proto"
   "ortools/linear_solver/*.proto"
   "ortools/sat/*.proto"
   "ortools/util/*.proto"
   )
+if(USE_PDLP)
+  file(GLOB_RECURSE pdlp_proto_java_files RELATIVE ${PROJECT_SOURCE_DIR} "ortools/pdlp/*.proto")
+  list(APPEND proto_java_files ${pdlp_proto_java_files})
+endif()
 list(REMOVE_ITEM proto_java_files "ortools/constraint_solver/demon_profiler.proto")
 list(REMOVE_ITEM proto_java_files "ortools/constraint_solver/assignment.proto")
 foreach(PROTO_FILE IN LISTS proto_java_files)
@@ -135,103 +161,9 @@ elseif(UNIX)
   set_target_properties(jni${JAVA_ARTIFACT} PROPERTIES INSTALL_RPATH "$ORIGIN")
 endif()
 
-# Swig wrap all libraries
 set(JAVA_SRC_PATH src/main/java/${JAVA_DOMAIN_EXTENSION}/${JAVA_DOMAIN_NAME}/${JAVA_ARTIFACT})
 set(JAVA_TEST_PATH src/test/java/${JAVA_DOMAIN_EXTENSION}/${JAVA_DOMAIN_NAME}/${JAVA_ARTIFACT})
 set(JAVA_RESSOURCES_PATH src/main/resources)
-foreach(SUBPROJECT IN ITEMS algorithms graph init linear_solver constraint_solver sat util)
-  add_subdirectory(ortools/${SUBPROJECT}/java)
-  target_link_libraries(jni${JAVA_ARTIFACT} PRIVATE jni${SUBPROJECT})
-endforeach()
-
-#################################
-##  Java Native Maven Package  ##
-#################################
-file(MAKE_DIRECTORY ${JAVA_NATIVE_PROJECT_DIR}/${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT})
-
-configure_file(
-  ${PROJECT_SOURCE_DIR}/ortools/java/pom-native.xml.in
-  ${JAVA_NATIVE_PROJECT_DIR}/pom.xml
-  @ONLY)
-
-add_custom_command(
-  OUTPUT ${JAVA_NATIVE_PROJECT_DIR}/timestamp
-  COMMAND ${CMAKE_COMMAND} -E copy
-    $<TARGET_FILE:jni${JAVA_ARTIFACT}>
-    $<$<NOT:$<PLATFORM_ID:Windows>>:$<TARGET_SONAME_FILE:${PROJECT_NAME}>>
-    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
-  COMMAND ${MAVEN_EXECUTABLE} compile -B
-  COMMAND ${MAVEN_EXECUTABLE} package -B $<$<BOOL:${BUILD_FAT_JAR}>:-Dfatjar=true>
-  COMMAND ${MAVEN_EXECUTABLE} install -B $<$<BOOL:${SKIP_GPG}>:-Dgpg.skip=true>
-  COMMAND ${CMAKE_COMMAND} -E touch ${JAVA_NATIVE_PROJECT_DIR}/timestamp
-  DEPENDS
-    ${JAVA_NATIVE_PROJECT_DIR}/pom.xml
-  BYPRODUCTS
-    ${JAVA_NATIVE_PROJECT_DIR}/target
-  COMMENT "Generate Java native package ${JAVA_NATIVE_PROJECT} (${JAVA_NATIVE_PROJECT_DIR}/timestamp)"
-  WORKING_DIRECTORY ${JAVA_NATIVE_PROJECT_DIR})
-
-add_custom_target(java_native_package
-  DEPENDS
-    ${JAVA_NATIVE_PROJECT_DIR}/timestamp
-  WORKING_DIRECTORY ${JAVA_NATIVE_PROJECT_DIR})
-
-##########################
-##  Java Maven Package  ##
-##########################
-file(MAKE_DIRECTORY ${JAVA_PROJECT_DIR}/${JAVA_SRC_PATH})
-
-if(UNIVERSAL_JAVA_PACKAGE)
-  configure_file(
-    ${PROJECT_SOURCE_DIR}/ortools/java/pom-full.xml.in
-    ${JAVA_PROJECT_DIR}/pom.xml
-    @ONLY)
-else()
-  configure_file(
-    ${PROJECT_SOURCE_DIR}/ortools/java/pom-local.xml.in
-    ${JAVA_PROJECT_DIR}/pom.xml
-    @ONLY)
-endif()
-
-file(GLOB_RECURSE java_files RELATIVE ${PROJECT_SOURCE_DIR}/ortools/java
-  "ortools/java/*.java")
-#message(WARNING "list: ${java_files}")
-set(JAVA_SRCS)
-foreach(JAVA_FILE IN LISTS java_files)
-  #message(STATUS "java: ${JAVA_FILE}")
-  set(JAVA_OUT ${JAVA_PROJECT_DIR}/${JAVA_SRC_PATH}/${JAVA_FILE})
-  #message(STATUS "java out: ${JAVA_OUT}")
-  add_custom_command(
-    OUTPUT ${JAVA_OUT}
-    COMMAND ${CMAKE_COMMAND} -E copy
-      ${PROJECT_SOURCE_DIR}/ortools/java/${JAVA_FILE}
-      ${JAVA_OUT}
-    DEPENDS ${PROJECT_SOURCE_DIR}/ortools/java/${JAVA_FILE}
-    COMMENT "Copy Java file ${JAVA_FILE}"
-    VERBATIM)
-  list(APPEND JAVA_SRCS ${JAVA_OUT})
-endforeach()
-
-add_custom_command(
-  OUTPUT ${JAVA_PROJECT_DIR}/timestamp
-  COMMAND ${MAVEN_EXECUTABLE} compile -B
-  COMMAND ${MAVEN_EXECUTABLE} package -B $<$<BOOL:${BUILD_FAT_JAR}>:-Dfatjar=true>
-  COMMAND ${MAVEN_EXECUTABLE} install -B $<$<BOOL:${SKIP_GPG}>:-Dgpg.skip=true>
-  COMMAND ${CMAKE_COMMAND} -E touch ${JAVA_PROJECT_DIR}/timestamp
-  DEPENDS
-    ${JAVA_PROJECT_DIR}/pom.xml
-    ${JAVA_SRCS}
-    Java${PROJECT_NAME}_proto
-  java_native_package
-  BYPRODUCTS
-    ${JAVA_PROJECT_DIR}/target
-  COMMENT "Generate Java package ${JAVA_PROJECT} (${JAVA_PROJECT_DIR}/timestamp)"
-  WORKING_DIRECTORY ${JAVA_PROJECT_DIR})
-
-add_custom_target(java_package ALL
-  DEPENDS
-    ${JAVA_PROJECT_DIR}/timestamp
-  WORKING_DIRECTORY ${JAVA_PROJECT_DIR})
 
 #################
 ##  Java Test  ##
@@ -239,14 +171,41 @@ add_custom_target(java_package ALL
 # add_java_test()
 # CMake function to generate and build java test.
 # Parameters:
-#  the java filename
+#  FILE_NAME: the Java filename
+#  COMPONENT_NAME: name of the ortools/ subdir where the test is located
+#  note: automatically determined if located in ortools/<component>/java/
 # e.g.:
-# add_java_test(FooTests.java)
-function(add_java_test FILE_NAME)
-  message(STATUS "Configuring test ${FILE_NAME}: ...")
-  get_filename_component(TEST_NAME ${FILE_NAME} NAME_WE)
-  get_filename_component(COMPONENT_DIR ${FILE_NAME} DIRECTORY)
-  get_filename_component(COMPONENT_NAME ${COMPONENT_DIR} NAME)
+# add_java_test(
+#   FILE_NAME
+#     ${PROJECT_SOURCE_DIR}/ortools/foo/java/BarTest.java
+#   COMPONENT_NAME
+#     foo
+# )
+function(add_java_test)
+  set(options "")
+  set(oneValueArgs FILE_NAME COMPONENT_NAME)
+  set(multiValueArgs "")
+  cmake_parse_arguments(TEST
+    "${options}"
+    "${oneValueArgs}"
+    "${multiValueArgs}"
+    ${ARGN}
+  )
+  if(NOT TEST_FILE_NAME)
+    message(FATAL_ERROR "no FILE_NAME provided")
+  endif()
+  get_filename_component(TEST_NAME ${TEST_FILE_NAME} NAME_WE)
+
+  message(STATUS "Configuring test ${TEST_FILE_NAME} ...")
+
+  if(NOT TEST_COMPONENT_NAME)
+    # test is located in ortools/<component_name>/java/
+    get_filename_component(WRAPPER_DIR ${TEST_FILE_NAME} DIRECTORY)
+    get_filename_component(COMPONENT_DIR ${WRAPPER_DIR} DIRECTORY)
+    get_filename_component(COMPONENT_NAME ${COMPONENT_DIR} NAME)
+  else()
+    set(COMPONENT_NAME ${TEST_COMPONENT_NAME})
+  endif()
 
   set(JAVA_TEST_DIR ${PROJECT_BINARY_DIR}/java/${COMPONENT_NAME}/${TEST_NAME})
   message(STATUS "build path: ${JAVA_TEST_DIR}")
@@ -256,9 +215,9 @@ function(add_java_test FILE_NAME)
     COMMAND ${CMAKE_COMMAND} -E make_directory
       ${JAVA_TEST_DIR}/${JAVA_TEST_PATH}
     COMMAND ${CMAKE_COMMAND} -E copy
-      ${FILE_NAME}
+      ${TEST_FILE_NAME}
       ${JAVA_TEST_DIR}/${JAVA_TEST_PATH}/
-    MAIN_DEPENDENCY ${FILE_NAME}
+    MAIN_DEPENDENCY ${TEST_FILE_NAME}
     VERBATIM
   )
 
@@ -292,8 +251,370 @@ function(add_java_test FILE_NAME)
       COMMAND ${MAVEN_EXECUTABLE} test
       WORKING_DIRECTORY ${JAVA_TEST_DIR})
   endif()
-  message(STATUS "Configuring test ${FILE_NAME}: ...DONE")
+  message(STATUS "Configuring test ${TEST_FILE_NAME} ...DONE")
 endfunction()
+
+#####################
+##  JAVA WRAPPERS  ##
+#####################
+list(APPEND CMAKE_SWIG_FLAGS "-I${PROJECT_SOURCE_DIR}")
+
+# Swig wrap all libraries
+foreach(SUBPROJECT IN ITEMS
+ algorithms
+ graph
+ init
+ linear_solver
+ constraint_solver
+ sat
+ util)
+  add_subdirectory(ortools/${SUBPROJECT}/java)
+  target_link_libraries(jni${JAVA_ARTIFACT} PRIVATE jni${SUBPROJECT})
+endforeach()
+target_link_libraries(jni${JAVA_ARTIFACT} PRIVATE jnimodelbuilder)
+
+#################################
+##  Java Native Maven Package  ##
+#################################
+file(MAKE_DIRECTORY ${JAVA_NATIVE_PROJECT_DIR}/${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT})
+
+configure_file(
+  ${PROJECT_SOURCE_DIR}/ortools/java/pom-native.xml.in
+  ${JAVA_NATIVE_PROJECT_DIR}/pom.xml
+  @ONLY)
+
+set(is_windows "$<PLATFORM_ID:Windows>")
+set(is_not_windows "$<NOT:$<PLATFORM_ID:Windows>>")
+
+set(need_unix_zlib_lib "$<AND:${is_not_windows},$<BOOL:${BUILD_ZLIB}>>")
+set(need_windows_zlib_lib "$<AND:${is_windows},$<BOOL:${BUILD_ZLIB}>>")
+
+set(need_unix_bzip2_lib "$<AND:${is_not_windows},$<BOOL:${BUILD_BZip2}>>")
+set(need_windows_bzip2_lib "$<AND:${is_windows},$<BOOL:${BUILD_BZip2}>>")
+
+set(need_unix_absl_lib "$<AND:${is_not_windows},$<BOOL:${BUILD_absl}>>")
+set(need_windows_absl_lib "$<AND:${is_windows},$<BOOL:${BUILD_absl}>>")
+
+set(need_unix_re2_lib "$<AND:${is_not_windows},$<BOOL:${BUILD_re2}>>")
+set(need_windows_re2_lib "$<AND:${is_windows},$<BOOL:${BUILD_re2}>>")
+
+set(need_unix_protobuf_lib "$<AND:${is_not_windows},$<BOOL:${BUILD_Protobuf}>>")
+set(need_windows_protobuf_lib "$<AND:${is_windows},$<BOOL:${BUILD_Protobuf}>>")
+
+set(need_unix_coinutils_lib "$<AND:${is_not_windows},$<BOOL:${BUILD_CoinUtils}>>")
+set(need_unix_osi_lib "$<AND:${is_not_windows},$<BOOL:${BUILD_Osi}>>")
+set(need_unix_clp_lib "$<AND:${is_not_windows},$<BOOL:${BUILD_Clp}>>")
+set(need_unix_cgl_lib "$<AND:${is_not_windows},$<BOOL:${BUILD_Cgl}>>")
+set(need_unix_cbc_lib "$<AND:${is_not_windows},$<BOOL:${BUILD_Cbc}>>")
+
+set(need_unix_highs_lib "$<AND:${is_not_windows},$<BOOL:${BUILD_HIGHS}>>")
+set(need_windows_highs_lib "$<AND:${is_windows},$<BOOL:${BUILD_HIGHS}>>")
+
+set(need_unix_scip_lib "$<AND:${is_not_windows},$<BOOL:${BUILD_SCIP}>>")
+set(need_windows_scip_lib "$<AND:${is_windows},$<BOOL:${BUILD_SCIP}>>")
+
+set(is_ortools_shared "$<STREQUAL:$<TARGET_PROPERTY:ortools,TYPE>,SHARED_LIBRARY>")
+set(need_unix_ortools_lib "$<AND:${is_not_windows},${is_ortools_shared}>")
+set(need_windows_ortools_lib "$<AND:${is_windows},${is_ortools_shared}>")
+
+add_custom_command(
+  OUTPUT ${JAVA_NATIVE_PROJECT_DIR}/timestamp
+  COMMAND ${CMAKE_COMMAND} -E remove -f timestamp
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}
+  COMMAND ${CMAKE_COMMAND} -E
+    $<IF:$<BOOL:${BUILD_ZLIB}>,copy,true>
+    $<${need_unix_zlib_lib}:$<TARGET_SONAME_FILE:ZLIB::ZLIB>>
+    $<${need_windows_zlib_lib}:$<TARGET_FILE:ZLIB::ZLIB>>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+  COMMAND ${CMAKE_COMMAND} -E
+    $<IF:$<BOOL:${BUILD_BZip2}>,copy,true>
+    $<${need_unix_bzip2_lib}:$<TARGET_SONAME_FILE:BZip2::BZip2>>
+    $<${need_windows_bzip2_lib}:$<TARGET_FILE:BZip2::BZip2>>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+  COMMAND ${CMAKE_COMMAND} -E
+    $<IF:$<BOOL:${BUILD_absl}>,copy,true>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::base>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::city>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::civil_time>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::cord>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::cord_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::cordz_functions>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::cordz_handle>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::cordz_info>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::crc32c>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::crc_cord_state>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::crc_cpu_detect>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::crc_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::debugging_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::decode_rust_punycode>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::demangle_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::demangle_rust>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::die_if_null>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::examine_stack>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::exponential_biased>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::flags_commandlineflag>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::flags_commandlineflag_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::flags_config>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::flags_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::flags_marshalling>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::flags_parse>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::flags_private_handle_accessor>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::flags_program_name>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::flags_reflection>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::flags_usage>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::flags_usage_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::graphcycles_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::hash>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::hashtablez_sampler>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::int128>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::kernel_timeout_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::leak_check>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_entry>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_flags>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_globals>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_initialize>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_internal_check_op>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_internal_conditions>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_internal_fnmatch>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_internal_format>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_internal_globals>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_internal_log_sink_set>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_internal_structured_proto>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_internal_message>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_internal_nullguard>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_internal_proto>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_severity>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::log_sink>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::malloc_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::random_distributions>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::random_internal_entropy_pool>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::random_internal_platform>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::random_internal_randen>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::random_internal_randen_hwaes>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::random_internal_randen_hwaes_impl>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::random_internal_randen_slow>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::random_internal_seed_material>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::random_seed_gen_exception>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::random_seed_sequences>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::raw_hash_set>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::raw_logging_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::spinlock_wait>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::stacktrace>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::status>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::statusor>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::str_format_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::strerror>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::string_view>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::strings>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::strings_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::symbolize>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::synchronization>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::throw_delegate>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::time>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::tracing_internal>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::time_zone>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::utf8_for_code_point>>
+    $<${need_unix_absl_lib}:$<TARGET_SONAME_FILE:absl::vlog_config_internal>>
+    $<${need_windows_absl_lib}:$<TARGET_FILE:absl::abseil_dll>>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+
+  COMMAND ${CMAKE_COMMAND} -E
+    $<IF:$<BOOL:${BUILD_re2}>,copy,true>
+    $<${need_unix_re2_lib}:$<TARGET_SONAME_FILE:re2::re2>>
+    $<${need_windows_re2_lib}:$<TARGET_FILE:re2::re2>>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+
+  COMMAND ${CMAKE_COMMAND} -E
+    $<IF:$<BOOL:${BUILD_Protobuf}>,copy,true>
+    $<${need_unix_protobuf_lib}:$<TARGET_SONAME_FILE:protobuf::libprotobuf>>
+    $<${need_unix_protobuf_lib}:$<TARGET_SONAME_FILE:utf8_validity>>
+    $<${need_windows_protobuf_lib}:$<TARGET_FILE:protobuf::libprotobuf>>
+    $<${need_windows_protobuf_lib}:$<TARGET_FILE:utf8_validity>>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+
+  COMMAND ${CMAKE_COMMAND} -E
+    $<IF:${need_unix_coinutils_lib},copy,true>
+    $<${need_unix_coinutils_lib}:$<TARGET_SONAME_FILE:Coin::CoinUtils>>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+  COMMAND ${CMAKE_COMMAND} -E
+    $<IF:${need_unix_osi_lib},copy,true>
+    $<${need_unix_osi_lib}:$<TARGET_SONAME_FILE:Coin::Osi>>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+  COMMAND ${CMAKE_COMMAND} -E
+    $<IF:${need_unix_clp_lib},copy,true>
+    $<${need_unix_clp_lib}:$<TARGET_SONAME_FILE:Coin::Clp>>
+    $<${need_unix_clp_lib}:$<TARGET_SONAME_FILE:Coin::OsiClp>>
+    $<${need_unix_clp_lib}:$<TARGET_SONAME_FILE:Coin::ClpSolver>>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+  COMMAND ${CMAKE_COMMAND} -E
+    $<IF:${need_unix_cgl_lib},copy,true>
+    $<${need_unix_cgl_lib}:$<TARGET_SONAME_FILE:Coin::Cgl>>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+  COMMAND ${CMAKE_COMMAND} -E
+    $<IF:${need_unix_cbc_lib},copy,true>
+    $<${need_unix_cbc_lib}:$<TARGET_SONAME_FILE:Coin::Cbc>>
+    $<${need_unix_cbc_lib}:$<TARGET_SONAME_FILE:Coin::OsiCbc>>
+    $<${need_unix_cbc_lib}:$<TARGET_SONAME_FILE:Coin::CbcSolver>>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+
+  COMMAND ${CMAKE_COMMAND} -E
+    $<IF:$<BOOL:${BUILD_HIGHS}>,copy,true>
+    $<${need_unix_highs_lib}:$<TARGET_SONAME_FILE:highs::highs>>
+    $<${need_windows_highs_lib}:$<TARGET_FILE:highs::highs>>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+
+  COMMAND ${CMAKE_COMMAND} -E
+  $<IF:$<BOOL:${BUILD_SCIP}>,copy,true>
+  $<${need_unix_scip_lib}:$<TARGET_SONAME_FILE:SCIP::libscip>>
+    $<${need_windows_scip_lib}:$<TARGET_FILE:SCIP::libscip>>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+
+  COMMAND ${CMAKE_COMMAND} -E
+    $<IF:${is_ortools_shared},copy,true>
+    $<${need_unix_ortools_lib}:$<TARGET_SONAME_FILE:${PROJECT_NAMESPACE}::ortools>>
+    $<${need_windows_ortools_lib}:$<TARGET_FILE:${PROJECT_NAMESPACE}::ortools>>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+
+  COMMAND ${CMAKE_COMMAND} -E copy
+    $<TARGET_FILE:jni${JAVA_ARTIFACT}>
+    ${JAVA_RESSOURCES_PATH}/${JAVA_NATIVE_PROJECT}/
+
+  COMMAND ${MAVEN_EXECUTABLE} compile -B
+  COMMAND ${MAVEN_EXECUTABLE} package -B $<$<BOOL:${BUILD_FAT_JAR}>:-Dfatjar=true>
+  COMMAND ${MAVEN_EXECUTABLE} install -B $<$<BOOL:${SKIP_GPG}>:-Dgpg.skip=true>
+  COMMAND ${CMAKE_COMMAND} -E touch ${JAVA_NATIVE_PROJECT_DIR}/timestamp
+  DEPENDS
+    ${JAVA_NATIVE_PROJECT_DIR}/pom.xml
+    Java${PROJECT_NAME}_proto
+    jni${JAVA_ARTIFACT}
+  BYPRODUCTS
+    ${JAVA_NATIVE_PROJECT_DIR}/target
+  COMMENT "Generate Java native package ${JAVA_NATIVE_PROJECT} (${JAVA_NATIVE_PROJECT_DIR}/timestamp)"
+  WORKING_DIRECTORY ${JAVA_NATIVE_PROJECT_DIR})
+
+add_custom_target(java_native_package
+  DEPENDS
+    ${JAVA_NATIVE_PROJECT_DIR}/timestamp
+  WORKING_DIRECTORY ${JAVA_NATIVE_PROJECT_DIR})
+
+add_custom_target(java_native_deploy
+  COMMAND ${MAVEN_EXECUTABLE} deploy
+  WORKING_DIRECTORY ${JAVA_NATIVE_PROJECT_DIR})
+add_dependencies(java_native_deploy java_native_package)
+
+##########################
+##  Java Maven Package  ##
+##########################
+file(MAKE_DIRECTORY ${JAVA_PROJECT_DIR}/${JAVA_SRC_PATH})
+
+if(UNIVERSAL_JAVA_PACKAGE)
+  configure_file(
+    ${PROJECT_SOURCE_DIR}/ortools/java/pom-full.xml.in
+    ${JAVA_PROJECT_DIR}/pom.xml
+    @ONLY)
+else()
+  configure_file(
+    ${PROJECT_SOURCE_DIR}/ortools/java/pom-local.xml.in
+    ${JAVA_PROJECT_DIR}/pom.xml
+    @ONLY)
+endif()
+
+file(GLOB_RECURSE java_files RELATIVE ${PROJECT_SOURCE_DIR}/ortools/java
+  "ortools/java/*.java")
+#message(WARNING "list: ${java_files}")
+set(JAVA_SRCS)
+foreach(JAVA_FILE IN LISTS java_files)
+  #message(STATUS "java: ${JAVA_FILE}")
+  set(JAVA_OUT ${JAVA_PROJECT_DIR}/src/main/java/${JAVA_FILE})
+  #message(STATUS "java out: ${JAVA_OUT}")
+  add_custom_command(
+    OUTPUT ${JAVA_OUT}
+    COMMAND ${CMAKE_COMMAND} -E copy
+      ${PROJECT_SOURCE_DIR}/ortools/java/${JAVA_FILE}
+      ${JAVA_OUT}
+    DEPENDS ${PROJECT_SOURCE_DIR}/ortools/java/${JAVA_FILE}
+    COMMENT "Copy Java file ${JAVA_FILE}"
+    VERBATIM)
+  list(APPEND JAVA_SRCS ${JAVA_OUT})
+endforeach()
+
+add_custom_command(
+  OUTPUT ${JAVA_PROJECT_DIR}/timestamp
+  COMMAND ${MAVEN_EXECUTABLE} compile -B
+  COMMAND ${MAVEN_EXECUTABLE} package -B $<$<BOOL:${BUILD_FAT_JAR}>:-Dfatjar=true>
+  COMMAND ${MAVEN_EXECUTABLE} install -B $<$<BOOL:${SKIP_GPG}>:-Dgpg.skip=true>
+  COMMAND ${CMAKE_COMMAND} -E touch ${JAVA_PROJECT_DIR}/timestamp
+  DEPENDS
+    ${JAVA_PROJECT_DIR}/pom.xml
+    ${JAVA_SRCS}
+    Java${PROJECT_NAME}_proto
+    ${JAVA_NATIVE_PROJECT_DIR}/timestamp
+    java_native_package
+  BYPRODUCTS
+    ${JAVA_PROJECT_DIR}/target
+  COMMENT "Generate Java package ${JAVA_PROJECT} (${JAVA_PROJECT_DIR}/timestamp)"
+  WORKING_DIRECTORY ${JAVA_PROJECT_DIR})
+
+add_custom_target(java_package ALL
+  DEPENDS
+    ${JAVA_PROJECT_DIR}/timestamp
+  WORKING_DIRECTORY ${JAVA_PROJECT_DIR})
+
+add_custom_target(java_deploy
+  COMMAND ${MAVEN_EXECUTABLE} deploy
+  WORKING_DIRECTORY ${JAVA_PROJECT_DIR})
+add_dependencies(java_deploy java_package)
+
+###############
+## Doc rules ##
+###############
+if(BUILD_JAVA_DOC)
+  # add a target to generate API documentation with Doxygen
+  find_package(Doxygen)
+  if(DOXYGEN_FOUND)
+    configure_file(${PROJECT_SOURCE_DIR}/ortools/java/Doxyfile.in ${PROJECT_BINARY_DIR}/java/Doxyfile @ONLY)
+    file(DOWNLOAD
+      https://raw.githubusercontent.com/jothepro/doxygen-awesome-css/v2.3.4/doxygen-awesome.css
+      ${PROJECT_BINARY_DIR}/java/doxygen-awesome.css
+      SHOW_PROGRESS
+    )
+    add_custom_target(${PROJECT_NAME}_java_doc ALL
+      #COMMAND ${CMAKE_COMMAND} -E rm -rf ${PROJECT_BINARY_DIR}/docs/java
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_BINARY_DIR}/docs/java
+      COMMAND ${DOXYGEN_EXECUTABLE} ${PROJECT_BINARY_DIR}/java/Doxyfile
+      DEPENDS
+        java_package
+        ${PROJECT_BINARY_DIR}/java/Doxyfile
+        ${PROJECT_BINARY_DIR}/java/doxygen-awesome.css
+        ${PROJECT_SOURCE_DIR}/ortools/doxygen/header.html
+        ${PROJECT_SOURCE_DIR}/ortools/doxygen/DoxygenLayout.xml
+        ${PROJECT_SOURCE_DIR}/ortools/java/stylesheet.css
+      WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+      COMMENT "Generating Java API documentation with Doxygen"
+      VERBATIM)
+  else()
+    message(WARNING "cmd `doxygen` not found, Java doc generation is disable!")
+  endif()
+
+  # Java doc
+  find_program(JAR_PRG NAMES jar)
+  if (JAR_PRG)
+    file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR}/docs/javadoc)
+    add_custom_target(${PROJECT_NAME}_javadoc_doc ALL
+      #COMMAND ${CMAKE_COMMAND} -E rm -rf ${PROJECT_BINARY_DIR}/docs/javadoc
+      #COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_BINARY_DIR}/docs/javadoc
+      COMMAND jar xvf
+      "${PROJECT_BINARY_DIR}/java/ortools-java/target/ortools-java-${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}-javadoc.jar"
+      DEPENDS
+        java_package
+        ${PROJECT_BINARY_DIR}/docs/javadoc
+      WORKING_DIRECTORY ${PROJECT_BINARY_DIR}/docs/javadoc
+      COMMENT "Generating Java API documentation with Doxygen"
+      VERBATIM)
+  else()
+    message(WARNING "cmd `jar` not found, Javadoc doc generation is disable!")
+  endif()
+endif()
 
 ###################
 ##  Java Sample  ##
@@ -301,15 +622,41 @@ endfunction()
 # add_java_sample()
 # CMake function to generate and build java sample.
 # Parameters:
-#  the java filename
+#  FILE_NAME: the Java filename
+#  COMPONENT_NAME: name of the ortools/ subdir where the test is located
+#  note: automatically determined if located in ortools/<component>/samples/
 # e.g.:
-# add_java_sample(Foo.java)
-function(add_java_sample FILE_NAME)
-  message(STATUS "Configuring sample ${FILE_NAME}: ...")
-  get_filename_component(SAMPLE_NAME ${FILE_NAME} NAME_WE)
-  get_filename_component(SAMPLE_DIR ${FILE_NAME} DIRECTORY)
-  get_filename_component(COMPONENT_DIR ${SAMPLE_DIR} DIRECTORY)
-  get_filename_component(COMPONENT_NAME ${COMPONENT_DIR} NAME)
+# add_java_sample(
+#   FILE_NAME
+#     ${PROJECT_SOURCE_DIR}/ortools/foo/sample/Bar.java
+#   COMPONENT_NAME
+#     foo
+# )
+function(add_java_sample)
+  set(options "")
+  set(oneValueArgs FILE_NAME COMPONENT_NAME)
+  set(multiValueArgs "")
+  cmake_parse_arguments(SAMPLE
+    "${options}"
+    "${oneValueArgs}"
+    "${multiValueArgs}"
+    ${ARGN}
+  )
+  if(NOT SAMPLE_FILE_NAME)
+    message(FATAL_ERROR "no FILE_NAME provided")
+  endif()
+  get_filename_component(SAMPLE_NAME ${SAMPLE_FILE_NAME} NAME_WE)
+
+  message(STATUS "Configuring sample ${SAMPLE_FILE_NAME} ...")
+
+  if(NOT SAMPLE_COMPONENT_NAME)
+    # sample is located in ortools/<component_name>/sample/
+    get_filename_component(SAMPLE_DIR ${SAMPLE_FILE_NAME} DIRECTORY)
+    get_filename_component(COMPONENT_DIR ${SAMPLE_DIR} DIRECTORY)
+    get_filename_component(COMPONENT_NAME ${COMPONENT_DIR} NAME)
+  else()
+    set(COMPONENT_NAME ${SAMPLE_COMPONENT_NAME})
+  endif()
   string(REPLACE "_" "" COMPONENT_NAME_LOWER ${COMPONENT_NAME})
 
   set(SAMPLE_DIR ${PROJECT_BINARY_DIR}/java/${COMPONENT_NAME}/${SAMPLE_NAME})
@@ -320,9 +667,9 @@ function(add_java_sample FILE_NAME)
     COMMAND ${CMAKE_COMMAND} -E make_directory
       ${SAMPLE_DIR}/${JAVA_SRC_PATH}/${COMPONENT_NAME_LOWER}/samples
     COMMAND ${CMAKE_COMMAND} -E copy
-      ${FILE_NAME}
+      ${SAMPLE_FILE_NAME}
       ${SAMPLE_DIR}/${JAVA_SRC_PATH}/${COMPONENT_NAME_LOWER}/samples/
-    MAIN_DEPENDENCY ${FILE_NAME}
+    MAIN_DEPENDENCY ${SAMPLE_FILE_NAME}
     VERBATIM
   )
 
@@ -358,7 +705,7 @@ function(add_java_sample FILE_NAME)
       COMMAND ${MAVEN_EXECUTABLE} exec:java
       WORKING_DIRECTORY ${SAMPLE_DIR})
   endif()
-  message(STATUS "Configuring sample ${FILE_NAME}: ...DONE")
+  message(STATUS "Configuring sample ${SAMPLE_FILE_NAME} ...DONE")
 endfunction()
 
 ####################
@@ -367,14 +714,40 @@ endfunction()
 # add_java_example()
 # CMake function to generate and build java example.
 # Parameters:
-#  the java filename
+#  FILE_NAME: the Java filename
+#  COMPONENT_NAME: name of the example/ subdir where the test is located
+#  note: automatically determined if located in examples/<component>/
 # e.g.:
-# add_java_example(Foo.java)
-function(add_java_example FILE_NAME)
-  message(STATUS "Configuring example ${FILE_NAME}: ...")
-  get_filename_component(EXAMPLE_NAME ${FILE_NAME} NAME_WE)
-  get_filename_component(COMPONENT_DIR ${FILE_NAME} DIRECTORY)
-  get_filename_component(COMPONENT_NAME ${COMPONENT_DIR} NAME)
+# add_java_example(
+#   FILE_NAME
+#     ${PROJECT_SOURCE_DIR}/examples/foo/Bar.java
+#   COMPONENT_NAME
+#     foo
+# )
+function(add_java_example)
+  set(options "")
+  set(oneValueArgs FILE_NAME COMPONENT_NAME)
+  set(multiValueArgs "")
+  cmake_parse_arguments(EXAMPLE
+    "${options}"
+    "${oneValueArgs}"
+    "${multiValueArgs}"
+    ${ARGN}
+  )
+if(NOT EXAMPLE_FILE_NAME)
+    message(FATAL_ERROR "no FILE_NAME provided")
+  endif()
+  get_filename_component(EXAMPLE_NAME ${EXAMPLE_FILE_NAME} NAME_WE)
+
+  message(STATUS "Configuring example ${EXAMPLE_FILE_NAME} ...")
+
+  if(NOT EXAMPLE_COMPONENT_NAME)
+    # sample is located in examples/<component_name>/
+    get_filename_component(COMPONENT_DIR ${EXAMPLE_FILE_NAME} DIRECTORY)
+    get_filename_component(COMPONENT_NAME ${COMPONENT_DIR} NAME)
+  else()
+    set(COMPONENT_NAME ${EXAMPLE_COMPONENT_NAME})
+  endif()
 
   set(JAVA_EXAMPLE_DIR ${PROJECT_BINARY_DIR}/java/${COMPONENT_NAME}/${EXAMPLE_NAME})
   message(STATUS "build path: ${JAVA_EXAMPLE_DIR}")
@@ -384,9 +757,9 @@ function(add_java_example FILE_NAME)
     COMMAND ${CMAKE_COMMAND} -E make_directory
       ${JAVA_EXAMPLE_DIR}/${JAVA_SRC_PATH}/${COMPONENT_NAME}
     COMMAND ${CMAKE_COMMAND} -E copy
-      ${FILE_NAME}
+      ${EXAMPLE_FILE_NAME}
       ${JAVA_EXAMPLE_DIR}/${JAVA_SRC_PATH}/${COMPONENT_NAME}/
-    MAIN_DEPENDENCY ${FILE_NAME}
+    MAIN_DEPENDENCY ${EXAMPLE_FILE_NAME}
     VERBATIM
   )
 
@@ -422,5 +795,5 @@ function(add_java_example FILE_NAME)
       COMMAND ${MAVEN_EXECUTABLE} exec:java
       WORKING_DIRECTORY ${JAVA_EXAMPLE_DIR})
   endif()
-  message(STATUS "Configuring example ${FILE_NAME}: ...DONE")
+  message(STATUS "Configuring example ${EXAMPLE_FILE_NAME} ...DONE")
 endfunction()

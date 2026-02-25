@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -23,9 +23,7 @@
 // if the C++ function returns a protocol message:
 //   MyProto* foo();
 // Use PROTO2_RETURN macro:
-//   PROTO2_RETURN(MyProto, com.google.proto.protos.test.MyProto, giveOwnership)
-//   -> the 'giveOwnership' parameter should be true iff the C++ function
-//      returns a new proto which should be deleted by the client.
+//   PROTO2_RETURN(MyProto, com.google.proto.protos.test.MyProto)
 //
 // Passing each protocol message from Java to C++ by value. Each ProtocolMessage
 // is serialized into byte[] when it is passed from Java to C++, the C++ code
@@ -35,15 +33,9 @@
 // @param JavaProtoType the corresponding fully qualified Java protocol message
 //        type
 // @param param_name the parameter name
-//
-// TODO(user): move this file to base/swig/java
 
 %{
-#include "ortools/base/integral_types.h"
-%}
-
-%{
-#include "ortools/base/jniutil.h"
+#include <cstdint>
 %}
 
 %define PROTO_INPUT(CppProtoType, JavaProtoType, param_name)
@@ -53,9 +45,9 @@
 %typemap(javain) PROTO_TYPE* INPUT, PROTO_TYPE& INPUT "$javainput.toByteArray()"
 %typemap(in) PROTO_TYPE* INPUT (CppProtoType temp),
              PROTO_TYPE& INPUT (CppProtoType temp) {
-  int proto_size = 0;
-  std::unique_ptr<char[]> proto_buffer(
-    JNIUtil::MakeCharArray(jenv, $input, &proto_size));
+  const int proto_size = jenv->GetArrayLength($input);
+  std::unique_ptr<jbyte[]> proto_buffer(new jbyte[proto_size]);
+  jenv->GetByteArrayRegion($input, 0, proto_size, proto_buffer.get());
   bool parsed_ok = temp.ParseFromArray(proto_buffer.get(), proto_size);
   if (!parsed_ok) {
     SWIG_JavaThrowException(jenv,
@@ -90,8 +82,28 @@
 }
 %typemap(out) CppProtoType {
   const long size = $1.ByteSizeLong();
-  std::unique_ptr<char[]> buf(new char[size]);
+  std::unique_ptr<jbyte[]> buf(new jbyte[size]);
   $1.SerializeWithCachedSizesToArray(reinterpret_cast<uint8_t*>(buf.get()));
-  $result = JNIUtil::MakeJByteArray(jenv, buf.get(), size);
+  $result = jenv->NewByteArray(size);
+  jenv->SetByteArrayRegion($result, 0, size, buf.get());
 }
 %enddef // PROTO2_RETURN
+
+// SWIG Macro for mapping protocol message enum type.
+// @param CppEnumProto the C++ protocol message enum type
+// @param JavaEnumProto the corresponding Java protocol message enum type
+%define PROTO_ENUM_RETURN(CppEnumProto, JavaEnumProto)
+%typemap(jni) CppEnumProto "jint"
+%typemap(jtype) CppEnumProto "int"
+%typemap(jstype) CppEnumProto "JavaEnumProto"
+
+// From CppEnumProto to jni (in wrap.cxx code)
+%typemap(out) CppEnumProto %{ $result = $1; %}
+
+// From jtype to jstype (in .java code)
+%typemap(javaout) CppEnumProto {
+  return JavaEnumProto.forNumber($jnicall);
+}
+
+%enddef // end PROTO_ENUM_RETURN
+

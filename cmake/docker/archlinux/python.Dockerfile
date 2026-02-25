@@ -1,10 +1,18 @@
 FROM ortools/cmake:archlinux_swig AS env
+
 ENV PATH=/root/.local/bin:$PATH
-RUN pacman -Syu --noconfirm python python-pip
+RUN pacman -Syu --noconfirm python python-pip \
+ python-wheel python-virtualenv python-setuptools \
+ python-numpy python-pandas
+RUN python -m pip install --break-system-package \
+ absl-py mypy mypy-protobuf
 
 FROM env AS devel
 WORKDIR /home/project
 COPY . .
+
+ARG CMAKE_BUILD_PARALLEL_LEVEL
+ENV CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL:-4}
 
 FROM devel AS build
 RUN cmake -S. -Bbuild -DBUILD_PYTHON=ON -DBUILD_CXX_SAMPLES=OFF -DBUILD_CXX_EXAMPLES=OFF
@@ -17,7 +25,7 @@ RUN CTEST_OUTPUT_ON_FAILURE=1 cmake --build build --target test
 FROM env AS install_env
 WORKDIR /home/sample
 COPY --from=build /home/project/build/python/dist/*.whl .
-RUN python -m pip install *.whl
+RUN python -m pip install --break-system-packages *.whl
 
 FROM install_env AS install_devel
 COPY cmake/samples/python .

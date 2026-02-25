@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,23 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_SCHEDULING_CUTS_H_
-#define OR_TOOLS_SAT_SCHEDULING_CUTS_H_
+#ifndef ORTOOLS_SAT_SCHEDULING_CUTS_H_
+#define ORTOOLS_SAT_SCHEDULING_CUTS_H_
 
-#include <functional>
+#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "ortools/base/int_type.h"
-#include "ortools/base/strong_vector.h"
+#include "absl/types/span.h"
 #include "ortools/sat/cuts.h"
 #include "ortools/sat/integer.h"
-#include "ortools/sat/intervals.h"
-#include "ortools/sat/linear_constraint.h"
-#include "ortools/sat/linear_constraint_manager.h"
+#include "ortools/sat/integer_base.h"
 #include "ortools/sat/model.h"
-#include "ortools/util/time_limit.h"
+#include "ortools/sat/scheduling_helpers.h"
+#include "ortools/sat/util.h"
 
 namespace operations_research {
 namespace sat {
@@ -46,10 +45,9 @@ namespace sat {
 //
 // The maximum energy is capacity * span of intervals at level 0.
 CutGenerator CreateCumulativeEnergyCutGenerator(
-    const std::vector<IntervalVariable>& intervals,
+    SchedulingConstraintHelper* helper, SchedulingDemandHelper* demands_helper,
     const AffineExpression& capacity,
-    const std::vector<AffineExpression>& demands,
-    const std::vector<LinearExpression>& energies, Model* model);
+    const std::optional<AffineExpression>& makespan, Model* model);
 
 // For a given set of intervals and demands, we first compute the mandatory part
 // of the interval as [start_max , end_min]. We use this to calculate mandatory
@@ -63,49 +61,21 @@ CutGenerator CreateCumulativeEnergyCutGenerator(
 //   sum(demands of always present intervals)
 //   + sum(presence_literal * min_of_demand) <= capacity.
 CutGenerator CreateCumulativeTimeTableCutGenerator(
-    const std::vector<IntervalVariable>& intervals,
-    const AffineExpression& capacity,
-    const std::vector<AffineExpression>& demands, Model* model);
+    SchedulingConstraintHelper* helper, SchedulingDemandHelper* demands_helper,
+    const AffineExpression& capacity, Model* model);
 
 // Completion time cuts for the cumulative constraint. It is a simple relaxation
 // where we replace a cumulative task with demand k and duration d by a
 // no_overlap task with duration d * k / capacity_max.
 CutGenerator CreateCumulativeCompletionTimeCutGenerator(
-    const std::vector<IntervalVariable>& intervals,
-    const AffineExpression& capacity,
-    const std::vector<AffineExpression>& demands,
-    const std::vector<LinearExpression>& energies, Model* model);
+    SchedulingConstraintHelper* helper, SchedulingDemandHelper* demands_helper,
+    const AffineExpression& capacity, Model* model);
 
 // For a given set of intervals in a cumulative constraint, we detect violated
 // mandatory precedences and create a cut for these.
 CutGenerator CreateCumulativePrecedenceCutGenerator(
-    const std::vector<IntervalVariable>& intervals,
-    const AffineExpression& capacity,
-    const std::vector<AffineExpression>& demands, Model* model);
-
-// Completion time cuts for the no_overlap_2d constraint. It actually generates
-// the completion time cumulative cuts in both axis.
-CutGenerator CreateNoOverlap2dCompletionTimeCutGenerator(
-    const std::vector<IntervalVariable>& x_intervals,
-    const std::vector<IntervalVariable>& y_intervals, Model* model);
-
-// Energetic cuts for the no_overlap_2d constraint.
-//
-// For a given set of rectangles, we compute the area of each rectangle
-// and make sure their sum is less than the area of the bounding interval.
-//
-// If an interval is optional, it contributes
-//    min_size_x * min_size_y * presence_literal
-// amount of total area.
-//
-// If an interval is performed, we use the linear area formulation (if
-// possible), or the McCormick relaxation of the size_x * size_y.
-//
-// The maximum area is the area of the bounding rectangle of each intervals
-// at level 0.
-CutGenerator CreateNoOverlap2dEnergyCutGenerator(
-    const std::vector<IntervalVariable>& x_intervals,
-    const std::vector<IntervalVariable>& y_intervals, Model* model);
+    SchedulingConstraintHelper* helper, SchedulingDemandHelper* demands_helper,
+    const AffineExpression& capacity, Model* model);
 
 // For a given set of intervals, we first compute the min and max of all
 // intervals. Then we create a cut that indicates that all intervals must fit
@@ -117,20 +87,174 @@ CutGenerator CreateNoOverlap2dEnergyCutGenerator(
 //   sum(sizes of always present intervals)
 //   + sum(presence_literal * min_of_size) <= span of all intervals.
 CutGenerator CreateNoOverlapEnergyCutGenerator(
-    const std::vector<IntervalVariable>& intervals, Model* model);
+    SchedulingConstraintHelper* helper,
+    const std::optional<AffineExpression>& makespan, Model* model);
 
 // For a given set of intervals in a no_overlap constraint, we detect violated
 // mandatory precedences and create a cut for these.
 CutGenerator CreateNoOverlapPrecedenceCutGenerator(
-    const std::vector<IntervalVariable>& intervals, Model* model);
+    SchedulingConstraintHelper* helper, Model* model);
 
 // For a given set of intervals in a no_overlap constraint, we detect violated
 // area based cuts from Queyranne 93 [see note in the code] and create a cut for
 // these.
 CutGenerator CreateNoOverlapCompletionTimeCutGenerator(
-    const std::vector<IntervalVariable>& intervals, Model* model);
+    SchedulingConstraintHelper* helper, Model* model);
+
+// Internal methods and data structures, useful for testing.
+
+// Stores the event for a task (interval, demand).
+// For a no_overlap constraint, demand is always between 0 and 1.
+// For a cumulative constraint, demand must be between 0 and capacity_max.
+struct CompletionTimeEvent {
+  CompletionTimeEvent(int t, SchedulingConstraintHelper* x_helper,
+                      SchedulingDemandHelper* demands_helper);
+
+  // The index of the task in the helper.
+  int task_index;
+
+  // Cache of the bounds of the interval.
+  IntegerValue start_min;
+  IntegerValue start_max;
+  IntegerValue end_min;
+  IntegerValue end_max;
+  IntegerValue size_min;
+
+  // Start and end affine expressions and lp value of the end of the interval.
+  AffineExpression start;
+  AffineExpression end;
+  double lp_end = 0.0;
+
+  // Cache of the bounds of the demand.
+  IntegerValue demand_min;
+
+  // If we know that the size on y is fixed, we can use some heuristic to
+  // compute the maximum subset sums under the capacity and use that instead
+  // of the full capacity.
+  bool demand_is_fixed = false;
+
+  // The energy min of this event.
+  IntegerValue energy_min;
+
+  // If non empty, a decomposed view of the energy of this event.
+  // First value in each pair is x_size, second is y_size.
+  std::vector<LiteralValueValue> decomposed_energy;
+
+  // Indicates if the events used the optional energy information from the
+  // model.
+  bool use_decomposed_energy_min = false;
+
+  // Indicates if the cut is lifted, that is if it includes tasks that are not
+  // strictly contained in the current time window.
+  bool lifted = false;
+
+  std::string DebugString() const;
+};
+
+class CtExhaustiveHelper {
+ public:
+  CtExhaustiveHelper() = default;
+
+  int max_task_index() const { return max_task_index_; }
+  const CompactVectorVector<int>& predecessors() const { return predecessors_; }
+
+  // Temporary data.
+  std::vector<std::pair<IntegerValue, IntegerValue>> profile_;
+  std::vector<std::pair<IntegerValue, IntegerValue>> new_profile_;
+  std::vector<IntegerValue> assigned_ends_;
+  std::vector<int> task_to_index_;
+  DagTopologicalSortIterator valid_permutation_iterator_;
+  std::vector<CompletionTimeEvent*> residual_events_;
+
+  // Collect precedences, set max_task_index.
+  // TODO(user): Do some transitive closure.
+  void Init(absl::Span<std::unique_ptr<CompletionTimeEvent>> events,
+            Model* model);
+
+  bool PermutationIsCompatibleWithPrecedences(
+      absl::Span<std::unique_ptr<CompletionTimeEvent>> events,
+      absl::Span<const int> permutation);
+
+ private:
+  void BuildPredecessors(
+      absl::Span<std::unique_ptr<CompletionTimeEvent>> events, Model* model);
+
+  CompactVectorVector<int> predecessors_;
+  int max_task_index_ = 0;
+  std::vector<bool> visited_;
+};
+
+enum class CompletionTimeExplorationStatus {
+  FINISHED,
+  ABORTED,
+  NO_VALID_PERMUTATION,
+};
+
+template <typename Sink>
+void AbslStringify(Sink& sink, const CompletionTimeExplorationStatus& status) {
+  switch (status) {
+    case CompletionTimeExplorationStatus::FINISHED:
+      sink.Append("FINISHED");
+      break;
+    case CompletionTimeExplorationStatus::ABORTED:
+      sink.Append("ABORTED");
+      break;
+    case CompletionTimeExplorationStatus::NO_VALID_PERMUTATION:
+      sink.Append("NO_VALID_PERMUTATION");
+      break;
+  }
+}
+
+// Computes the minimum sum of the end min and the minimum sum of the end min
+// weighted by weight of all events. It returns false if no permutation is
+// valid w.r.t. the range of starts.
+//
+// Note that this is an exhaustive algorithm, so the number of events should be
+// small, like <= 10. They should also starts in index order.
+//
+// Optim: If both sums are proven <= to the corresponding threshold, we abort.
+CompletionTimeExplorationStatus ComputeMinSumOfWeightedEndMins(
+    absl::Span<CompletionTimeEvent*> events, IntegerValue capacity_max,
+    double unweighted_threshold, double weighted_threshold,
+    CtExhaustiveHelper& helper, double& min_sum_of_ends,
+    double& min_sum_of_weighted_ends, bool& cut_use_precedences,
+    int& exploration_credit);
+
+// Split the list of events in connected components. Two intervals are connected
+// if they overlap. It expects the events to have the start_min and end_max
+// fields. Note that events are semi-open intervals [start_min, end_max). This
+// will filter out components of size one.
+template <class E>
+std::vector<absl::Span<std::unique_ptr<E>>> SplitEventsInIndendentSets(
+    std::vector<std::unique_ptr<E>>& events) {
+  if (events.empty()) return {};
+
+  std::sort(events.begin(), events.end(),
+            [](const std::unique_ptr<E>& a, const std::unique_ptr<E>& b) {
+              return std::tie(a->start_min, a->end_max) <
+                     std::tie(b->start_min, b->end_max);
+            });
+  const int size = events.size();
+  std::vector<absl::Span<std::unique_ptr<E>>> result;
+  IntegerValue max_end_max = events[0]->end_max;
+  int start = 0;
+  for (int i = 1; i < size; ++i) {
+    const E& event = *events[i];
+    if (event.start_min >= max_end_max) {
+      if (i - start > 1) {
+        result.push_back(absl::MakeSpan(events.data() + start, i - start));
+      }
+      start = i;
+    }
+    max_end_max = std::max(max_end_max, event.end_max);
+  }
+  if (size - start > 1) {
+    result.push_back(absl::MakeSpan(events.data() + start, size - start));
+  }
+  return result;
+}
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_SCHEDULING_CUTS_H_
+#endif  // ORTOOLS_SAT_SCHEDULING_CUTS_H_

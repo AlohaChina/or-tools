@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,9 +13,13 @@
 
 #include "ortools/graph/util.h"
 
+#include <vector>
+
+#include "absl/types/span.h"
+
 namespace util {
 
-bool IsSubsetOf0N(const std::vector<int>& v, int n) {
+bool IsSubsetOf0N(absl::Span<const int> v, int n) {
   std::vector<bool> mask(n, false);
   for (const int i : v) {
     if (i < 0 || i >= n || mask[i]) return false;

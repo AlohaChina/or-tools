@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,13 +14,11 @@
 // The header defines an interface for functions taking and returning an int64_t
 // and supporting range queries over their domain and codomain.
 
-#ifndef OR_TOOLS_UTIL_RANGE_QUERY_FUNCTION_H_
-#define OR_TOOLS_UTIL_RANGE_QUERY_FUNCTION_H_
+#ifndef ORTOOLS_UTIL_RANGE_QUERY_FUNCTION_H_
+#define ORTOOLS_UTIL_RANGE_QUERY_FUNCTION_H_
 
+#include <cstdint>
 #include <functional>
-#include <memory>
-
-#include "ortools/base/integral_types.h"
 
 namespace operations_research {
 // RangeIntToIntFunction is an interface to int64_t->int64_t functions
@@ -86,4 +84,4 @@ RangeMinMaxIndexFunction* MakeCachedRangeMinMaxIndexFunction(
     int64_t domain_end);
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_UTIL_RANGE_QUERY_FUNCTION_H_
+#endif  // ORTOOLS_UTIL_RANGE_QUERY_FUNCTION_H_

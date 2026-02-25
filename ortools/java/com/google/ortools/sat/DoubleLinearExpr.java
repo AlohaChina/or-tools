@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,103 +15,103 @@ package com.google.ortools.sat;
 
 /** A linear expression interface that can be parsed. */
 public class DoubleLinearExpr {
-  private final IntVar[] variables;
+  private final int[] variableIndices;
   private final double[] coefficients;
   private double offset;
 
   /** Creates a sum expression. */
-  static DoubleLinearExpr sum(IntVar[] variables) {
+  public static DoubleLinearExpr sum(IntVar[] variables) {
     return sumWithOffset(variables, 0.0);
   }
 
+  /** Creates a sum expression. */
+  public static DoubleLinearExpr sum(Literal[] literals) {
+    // We need the scalar product for the negative coefficient of negated Boolean variables.
+    return sumWithOffset(literals, 0.0);
+  }
+
   /** Creates a sum expression with a double offset. */
-  static DoubleLinearExpr sumWithOffset(IntVar[] variables, double offset) {
+  public static DoubleLinearExpr sumWithOffset(IntVar[] variables, double offset) {
     return new DoubleLinearExpr(variables, offset);
   }
 
-  /** Creates a sum expression. */
-  static DoubleLinearExpr booleanSum(Literal[] literals) {
-    // We need the scalar product for the negative coefficient of negated Boolean variables.
-    return booleanSumWithOffset(literals, 0.0);
-  }
-
   /** Creates a sum expression with a double offset. */
-  static DoubleLinearExpr booleanSumWithOffset(Literal[] literals, double offset) {
+  public static DoubleLinearExpr sumWithOffset(Literal[] literals, double offset) {
     // We need the scalar product for the negative coefficient of negated Boolean variables.
     return new DoubleLinearExpr(literals, offset);
   }
 
   /** Creates a scalar product. */
-  static DoubleLinearExpr scalProd(IntVar[] variables, double[] coefficients) {
-    return scalProdWithOffset(variables, coefficients, 0.0);
+  public static DoubleLinearExpr weightedSum(IntVar[] variables, double[] coefficients) {
+    return weightedSumWithOffset(variables, coefficients, 0.0);
   }
 
   /** Creates a scalar product. */
-  static DoubleLinearExpr scalProdWithOffset(
+  public static DoubleLinearExpr weightedSum(Literal[] literals, double[] coefficients) {
+    return weightedSumWithOffset(literals, coefficients, 0.0);
+  }
+
+  /** Creates a scalar product. */
+  public static DoubleLinearExpr weightedSumWithOffset(
       IntVar[] variables, double[] coefficients, double offset) {
     if (variables.length != coefficients.length) {
       throw new CpModel.MismatchedArrayLengths(
-          "DoubleLinearExpr.scalProd", "variables", "coefficients");
+          "DoubleLinearExpr.weightedSum", "variables", "coefficients");
     }
     return new DoubleLinearExpr(variables, coefficients, offset);
   }
 
-  /** Creates a scalar product. */
-  static DoubleLinearExpr booleanScalProd(Literal[] literals, double[] coefficients) {
-    return booleanScalProdWithOffset(literals, coefficients, 0.0);
-  }
-
   /** Creates a scalar product with a double offset. */
-  static DoubleLinearExpr booleanScalProdWithOffset(
+  public static DoubleLinearExpr weightedSumWithOffset(
       Literal[] literals, double[] coefficients, double offset) {
     if (literals.length != coefficients.length) {
       throw new CpModel.MismatchedArrayLengths(
-          "DoubleLinearExpr.scalProd", "literals", "coefficients");
+          "DoubleLinearExpr.weightedSum", "literals", "coefficients");
     }
     return new DoubleLinearExpr(literals, coefficients, offset);
   }
 
   /** Creates a linear term (var * coefficient). */
-  static DoubleLinearExpr term(IntVar variable, double coefficient) {
+  public static DoubleLinearExpr term(IntVar variable, double coefficient) {
     return new DoubleLinearExpr(variable, coefficient, 0.0);
   }
 
   /** Creates a linear term (lit * coefficient). */
-  static DoubleLinearExpr term(Literal lit, double coefficient) {
+  public static DoubleLinearExpr term(Literal lit, double coefficient) {
     return new DoubleLinearExpr(lit, coefficient, 0.0);
   }
 
   /** Creates an affine expression (var * coefficient + offset). */
-  static DoubleLinearExpr affine(IntVar variable, double coefficient, double offset) {
+  public static DoubleLinearExpr affine(IntVar variable, double coefficient, double offset) {
     return new DoubleLinearExpr(variable, coefficient, offset);
   }
 
   /** Creates an affine expression (lit * coefficient + offset). */
-  static DoubleLinearExpr affine(Literal lit, double coefficient, double offset) {
+  public static DoubleLinearExpr affine(Literal lit, double coefficient, double offset) {
     return new DoubleLinearExpr(lit, coefficient, offset);
   }
 
-  /** Creates an constant expression. */
-  static DoubleLinearExpr constant(double value) {
+  /** Creates a constant expression. */
+  public static DoubleLinearExpr constant(double value) {
     return new DoubleLinearExpr(new IntVar[0], value);
   }
 
   /** Returns the number of elements in the interface. */
   public int numElements() {
-    return variables.length;
+    return variableIndices.length;
   }
 
   /** Returns the ith variable. */
-  public IntVar getVariable(int index) {
-    if (index < 0 || index >= variables.length) {
+  public int getVariableIndex(int index) {
+    if (index < 0 || index >= variableIndices.length) {
       throw new IllegalArgumentException("wrong index in LinearExpr.getVariable(): " + index);
     }
-    return variables[index];
+    return variableIndices[index];
   }
 
   /** Returns the ith coefficient. */
   public double getCoefficient(int index) {
-    if (index < 0 || index >= variables.length) {
+    if (index < 0 || index >= variableIndices.length) {
       throw new IllegalArgumentException("wrong index in LinearExpr.getCoefficient(): " + index);
     }
     return coefficients[index];
@@ -123,14 +123,17 @@ public class DoubleLinearExpr {
   }
 
   public DoubleLinearExpr(IntVar[] variables, double[] coefficients, double offset) {
-    this.variables = variables;
+    this.variableIndices = new int[variables.length];
+    for (int i = 0; i < variables.length; ++i) {
+      this.variableIndices[i] = variables[i].getIndex();
+    }
     this.coefficients = coefficients;
     this.offset = offset;
   }
 
   public DoubleLinearExpr(Literal[] literals, double[] coefficients, double offset) {
     int size = literals.length;
-    this.variables = new IntVar[size];
+    this.variableIndices = new int[size];
     this.coefficients = new double[size];
     this.offset = offset;
 
@@ -138,10 +141,10 @@ public class DoubleLinearExpr {
       Literal lit = literals[i];
       double coeff = coefficients[i];
       if (lit.getIndex() >= 0) {
-        this.variables[i] = (IntVar) lit;
+        this.variableIndices[i] = lit.getIndex();
         this.coefficients[i] = coeff;
       } else {
-        this.variables[i] = (IntVar) lit.not();
+        this.variableIndices[i] = lit.not().getIndex();
         this.coefficients[i] = -coeff;
         this.offset -= coeff;
       }
@@ -149,18 +152,18 @@ public class DoubleLinearExpr {
   }
 
   public DoubleLinearExpr(IntVar var, double coefficient, double offset) {
-    this.variables = new IntVar[] {var};
+    this.variableIndices = new int[] {var.getIndex()};
     this.coefficients = new double[] {coefficient};
     this.offset = offset;
   }
 
   public DoubleLinearExpr(Literal lit, double coefficient, double offset) {
     if (lit.getIndex() >= 0) {
-      this.variables = new IntVar[] {(IntVar) lit};
+      this.variableIndices = new int[] {lit.getIndex()};
       this.coefficients = new double[] {coefficient};
       this.offset = offset;
     } else {
-      this.variables = new IntVar[] {(IntVar) lit.not()};
+      this.variableIndices = new int[] {lit.not().getIndex()};
       this.coefficients = new double[] {-coefficient};
       this.offset = offset + coefficient;
     }
@@ -168,29 +171,29 @@ public class DoubleLinearExpr {
 
   public DoubleLinearExpr(IntVar[] vars, double offset) {
     int size = vars.length;
-    this.variables = new IntVar[size];
+    this.variableIndices = new int[size];
     this.coefficients = new double[size];
     this.offset = offset;
 
     for (int i = 0; i < size; ++i) {
-      this.variables[i] = vars[i];
+      this.variableIndices[i] = vars[i].getIndex();
       this.coefficients[i] = 1;
     }
   }
 
   public DoubleLinearExpr(Literal[] literals, double offset) {
     int size = literals.length;
-    this.variables = new IntVar[size];
+    this.variableIndices = new int[size];
     this.coefficients = new double[size];
     this.offset = offset;
 
     for (int i = 0; i < size; ++i) {
       Literal lit = literals[i];
       if (lit.getIndex() >= 0) {
-        this.variables[i] = (IntVar) lit;
+        this.variableIndices[i] = lit.getIndex();
         this.coefficients[i] = 1;
-      } else { // NotBooleanVar.
-        this.variables[i] = (IntVar) lit.not();
+      } else { // NotBoolVar.
+        this.variableIndices[i] = lit.not().getIndex();
         this.coefficients[i] = -1.0;
         this.offset -= 1.0;
       }

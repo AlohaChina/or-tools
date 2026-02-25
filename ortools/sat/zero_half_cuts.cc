@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -12,6 +12,18 @@
 // limitations under the License.
 
 #include "ortools/sat/zero_half_cuts.h"
+
+#include <algorithm>
+#include <utility>
+#include <vector>
+
+#include "absl/log/check.h"
+#include "absl/types/span.h"
+#include "ortools/base/logging.h"
+#include "ortools/lp_data/lp_types.h"
+#include "ortools/sat/integer_base.h"
+#include "ortools/sat/util.h"
+#include "ortools/util/strong_integers.h"
 
 namespace operations_research {
 namespace sat {
@@ -27,8 +39,8 @@ void ZeroHalfCutHelper::Reset(int size) {
 
 void ZeroHalfCutHelper::ProcessVariables(
     const std::vector<double>& lp_values,
-    const std::vector<IntegerValue>& lower_bounds,
-    const std::vector<IntegerValue>& upper_bounds) {
+    absl::Span<const IntegerValue> lower_bounds,
+    absl::Span<const IntegerValue> upper_bounds) {
   Reset(lp_values.size());
 
   // Shift all variables to their closest bound.
@@ -55,23 +67,24 @@ void ZeroHalfCutHelper::AddBinaryRow(const CombinationOfRows& binary_row) {
   rows_.push_back(binary_row);
 }
 
-void ZeroHalfCutHelper::AddOneConstraint(
-    const glop::RowIndex row,
-    const std::vector<std::pair<glop::ColIndex, IntegerValue>>& terms,
-    IntegerValue lb, IntegerValue ub) {
-  if (terms.size() > kMaxInputConstraintSize) return;
+void ZeroHalfCutHelper::AddOneConstraint(const glop::RowIndex row,
+                                         absl::Span<const glop::ColIndex> cols,
+                                         absl::Span<const IntegerValue> coeffs,
+                                         IntegerValue lb, IntegerValue ub) {
+  const int num_terms = cols.size();
+  if (num_terms > kMaxInputConstraintSize) return;
 
   double activity = 0.0;
   IntegerValue magnitude(0);
   CombinationOfRows binary_row;
   int rhs_adjust = 0;
-  for (const auto& term : terms) {
-    const int col = term.first.value();
-    activity += ToDouble(term.second) * lp_values_[col];
-    magnitude = std::max(magnitude, IntTypeAbs(term.second));
+  for (int i = 0; i < num_terms; ++i) {
+    const int col = cols[i].value();
+    activity += ToDouble(coeffs[i]) * lp_values_[col];
+    magnitude = std::max(magnitude, IntTypeAbs(coeffs[i]));
 
     // Only consider odd coefficient.
-    if ((term.second.value() & 1) == 0) continue;
+    if ((coeffs[i].value() & 1) == 0) continue;
 
     // Ignore column in the binary matrix if its lp value is almost zero.
     if (shifted_lp_values_[col] > 1e-2) {
@@ -86,6 +99,7 @@ void ZeroHalfCutHelper::AddOneConstraint(
   // to cancel them and because of that the efficacity of a generated cut will
   // be limited.
   if (magnitude > kMaxInputConstraintMagnitude) return;
+  if (binary_row.cols.empty()) return;
 
   // TODO(user): experiment with the best value. probably only tight rows are
   // best? and we could use the basis status rather than recomputing the
@@ -108,9 +122,8 @@ void ZeroHalfCutHelper::AddOneConstraint(
   }
 }
 
-void ZeroHalfCutHelper::SymmetricDifference(
-    std::function<bool(int)> extra_condition, const std::vector<int>& a,
-    std::vector<int>* b) {
+void ZeroHalfCutHelper::SymmetricDifference(absl::Span<const int> a,
+                                            std::vector<int>* b) {
   for (const int v : *b) tmp_marked_[v] = true;
   for (const int v : a) {
     if (tmp_marked_[v]) {
@@ -127,32 +140,11 @@ void ZeroHalfCutHelper::SymmetricDifference(
   int new_size = 0;
   for (const int v : *b) {
     if (tmp_marked_[v]) {
-      if (extra_condition(v)) {
-        (*b)[new_size++] = v;
-      }
+      (*b)[new_size++] = v;
       tmp_marked_[v] = false;
     }
   }
   b->resize(new_size);
-}
-
-void ZeroHalfCutHelper::ProcessSingletonColumns() {
-  for (const int singleton_col : singleton_cols_) {
-    if (col_to_rows_[singleton_col].empty()) continue;
-    CHECK_EQ(col_to_rows_[singleton_col].size(), 1);
-    const int row = col_to_rows_[singleton_col][0];
-    int new_size = 0;
-    auto& mutable_cols = rows_[row].cols;
-    for (const int col : mutable_cols) {
-      if (col == singleton_col) continue;
-      mutable_cols[new_size++] = col;
-    }
-    CHECK_LT(new_size, mutable_cols.size());
-    mutable_cols.resize(new_size);
-    col_to_rows_[singleton_col].clear();
-    rows_[row].slack += shifted_lp_values_[singleton_col];
-  }
-  singleton_cols_.clear();
 }
 
 // This is basically one step of a Gaussian elimination with the given pivot.
@@ -170,8 +162,7 @@ void ZeroHalfCutHelper::EliminateVarUsingRow(int eliminated_col,
     if (other_row == eliminated_row) continue;
     col_to_rows_[eliminated_col][new_size++] = other_row;
 
-    SymmetricDifference([](int i) { return true; }, rows_[eliminated_row].cols,
-                        &rows_[other_row].cols);
+    SymmetricDifference(rows_[eliminated_row].cols, &rows_[other_row].cols);
 
     // Update slack & parity.
     rows_[other_row].rhs_parity ^= rows_[eliminated_row].rhs_parity;
@@ -199,26 +190,26 @@ void ZeroHalfCutHelper::EliminateVarUsingRow(int eliminated_col,
   col_to_rows_[eliminated_col].resize(new_size);
 
   // Then update the col representation of the matrix.
-  //
-  // Note that we remove from the col-wise representation any rows with a large
-  // slack.
   {
     int new_size = 0;
     for (const int other_col : rows_[eliminated_row].cols) {
       if (other_col == eliminated_col) continue;
-      const int old_size = col_to_rows_[other_col].size();
-      rows_[eliminated_row].cols[new_size++] = other_col;
-      SymmetricDifference(
-          [this](int i) { return rows_[i].slack < kSlackThreshold; },
-          col_to_rows_[eliminated_col], &col_to_rows_[other_col]);
-      if (old_size != 1 && col_to_rows_[other_col].size() == 1) {
-        singleton_cols_.push_back(other_col);
+      SymmetricDifference(col_to_rows_[eliminated_col],
+                          &col_to_rows_[other_col]);
+      if (col_to_rows_[other_col].size() == 1) {
+        CHECK_EQ(col_to_rows_[other_col][0], eliminated_row);
+
+        // Eliminate new singleton column right away.
+        col_to_rows_[other_col].clear();
+        rows_[eliminated_row].slack += shifted_lp_values_[other_col];
+        continue;
       }
+      rows_[eliminated_row].cols[new_size++] = other_col;
     }
     rows_[eliminated_row].cols.resize(new_size);
   }
 
-  // Clear col.
+  // Clear col since it is now singleton.
   col_to_rows_[eliminated_col].clear();
   rows_[eliminated_row].slack += shifted_lp_values_[eliminated_col];
 }
@@ -227,10 +218,22 @@ std::vector<std::vector<std::pair<glop::RowIndex, IntegerValue>>>
 ZeroHalfCutHelper::InterestingCandidates(ModelRandomGenerator* random) {
   std::vector<std::vector<std::pair<glop::RowIndex, IntegerValue>>> result;
 
-  // Initialize singleton_cols_.
-  singleton_cols_.clear();
-  for (int col = 0; col < col_to_rows_.size(); ++col) {
-    if (col_to_rows_[col].size() == 1) singleton_cols_.push_back(col);
+  // Remove singleton column from the picture.
+  const int num_cols = col_to_rows_.size();
+  for (int singleton_col = 0; singleton_col < num_cols; ++singleton_col) {
+    if (col_to_rows_[singleton_col].size() != 1) continue;
+
+    const int row = col_to_rows_[singleton_col][0];
+    int new_size = 0;
+    auto& mutable_cols = rows_[row].cols;
+    for (const int col : mutable_cols) {
+      if (col == singleton_col) continue;
+      mutable_cols[new_size++] = col;
+    }
+    CHECK_LT(new_size, mutable_cols.size());
+    mutable_cols.resize(new_size);
+    col_to_rows_[singleton_col].clear();
+    rows_[row].slack += shifted_lp_values_[singleton_col];
   }
 
   // Process rows by increasing size, but randomize if same size.
@@ -242,8 +245,6 @@ ZeroHalfCutHelper::InterestingCandidates(ModelRandomGenerator* random) {
   });
 
   for (const int row : to_process) {
-    ProcessSingletonColumns();
-
     if (rows_[row].cols.empty()) continue;
     if (rows_[row].slack > 1e-6) continue;
     if (rows_[row].multipliers.size() > kMaxAggregationSize) continue;
@@ -269,7 +270,7 @@ ZeroHalfCutHelper::InterestingCandidates(ModelRandomGenerator* random) {
       result.push_back(row.multipliers);
     }
   }
-  VLOG(1) << "#candidates: " << result.size() << " / " << rows_.size();
+  VLOG(2) << "#candidates: " << result.size() << " / " << rows_.size();
   return result;
 }
 

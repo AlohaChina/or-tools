@@ -3,7 +3,6 @@
 
 .git
 .gitignore
-
 .travis.yml
 .travis
 .appveyor.yml
@@ -12,28 +11,27 @@
 .clang-format
 
 # Bazel
-bazel/doc
+bazel/docs
 bazel/README.md
 bazel/cache
 bazel/docker
 bazel/Makefile
 
 # CMake
-cmake/doc
+cmake/docs
 cmake/README.md
 cmake/cache
 cmake/docker
 cmake/Makefile
 
 # Makefile
-makefiles/doc
+makefiles/docs
 makefiles/README.md
 makefiles/cache
 makefiles/docker
 makefiles/Makefile
 Makefile.local
 
-binder
 docs
 tools/docker
 tools/release
@@ -44,24 +42,24 @@ CONTRIBUTING.md
 #LICENSE-2.0.txt
 
 # Native CMake/Make build
-classes
+.cache/
 dependencies/sources
 dependencies/install
 ortools/gen
-objs
-lib
+bazel-*
 bin
+classes
+lib
+objs
 packages
 build/
 build_cmake/
 build_cross/
-examples/data/vector_packing
-examples/data/rcpsp
-examples/data/binpacking
-examples/data/spp
-examples/data/scp
-examples/data/roadef_challenge_2011
-examples/data/cvrptw
+build_make/
+install_make/
+temp_*/
+export/
+export_meta/
 
 # Editor directories and files
 *.user

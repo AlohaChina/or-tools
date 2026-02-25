@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+# Copyright 2010-2025 Google LLC
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Build all the wheel artifacts for the platforms supported by manylinux2014 and
 # export them to the specified location.
 set -exo pipefail
@@ -22,7 +35,7 @@ DESCRIPTION
 
 \tYou MUST define the following variables before running this script:
 \t* PLATFORM: x86_64 aarch64
-\t* PYTHON_VERSION: 3 36 37 38 39 310
+\t* PYTHON_VERSION: 3 39 310 311 312 313
 note: PYTHON_VERSION=3 will generate for all pythons which could take time...
 
 OPTIONS
@@ -74,7 +87,7 @@ function build_wheel() {
   # shellcheck source=/dev/null
   source "${VENV_DIR}/bin/activate"
   pip install -U pip setuptools wheel absl-py  # absl-py is needed by make test_python
-  pip install -U mypy-protobuf  # need to generate protobuf mypy files
+  pip install -U mypy mypy-protobuf  # need to generate protobuf mypy files
 
   echo "current dir: $(pwd)"
 
@@ -82,7 +95,10 @@ function build_wheel() {
     >&2 echo "Can't find project's CMakeLists.txt or cmake"
     exit 2
   fi
-  cmake -S. -B"${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release -DBUILD_DEPS=ON -DBUILD_PYTHON=ON -DPython3_ROOT_DIR="$1" -DBUILD_TESTING=OFF #--debug-find
+  cmake -S. -B"${BUILD_DIR}" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_DEPS=ON -DBUILD_PYTHON=ON -DPython3_ROOT_DIR="$1" \
+    -DBUILD_TESTING=OFF -DBUILD_SAMPLES=OFF -DBUILD_EXAMPLES=OFF #--debug-find
   cmake --build "${BUILD_DIR}" -v -j4
 
   # Restore environment
@@ -91,6 +107,7 @@ function build_wheel() {
 
 function check_wheel() {
   assert_defined BUILD_DIR
+  assert_defined VENV_DIR
   # Check the wheel artifact
   # Arguments:
   #   $1 the python root directory
@@ -99,17 +116,48 @@ function check_wheel() {
     exit 1
   fi
 
+  # shellcheck source=/dev/null
+  source "${VENV_DIR}/bin/activate"
+  pip install -U auditwheel
+
+  # Check mypy files
+  declare -a MYPY_FILES=(
+    "ortools/algorithms/python/knapsack_solver.pyi"
+    "ortools/constraint_solver/pywrapcp.pyi"
+    "ortools/graph/python/linear_sum_assignment.pyi"
+    "ortools/graph/python/max_flow.pyi"
+    "ortools/graph/python/min_cost_flow.pyi"
+    "ortools/init/python/init.pyi"
+    "ortools/linear_solver/python/model_builder_helper.pyi"
+    "ortools/linear_solver/pywraplp.pyi"
+    "ortools/pdlp/python/pdlp.pyi"
+    "ortools/sat/python/cp_model_helper.pyi"
+    "ortools/scheduling/python/rcpsp.pyi"
+    "ortools/set_cover/python/set_cover.pyi"
+    "ortools/util/python/sorted_interval_list.pyi"
+  )
+  for FILE in "${MYPY_FILES[@]}"; do
+    if [[ ! -f "${BUILD_DIR}/python/${FILE}" ]]; then
+      echo "error: ${FILE} missing in the python project"
+      exit 1
+    fi
+  done
+
   # Check all generated wheel packages
+  ROOT_DIR=$(pwd)
   pushd "${BUILD_DIR}/python/dist"
   for FILE in *.whl; do
     # if no files found do nothing
     [[ -e "$FILE" ]] || continue
-    auditwheel show "$FILE" || true
-    auditwheel -v repair --plat "manylinux2014_$PLATFORM" "$FILE" -w "$export_root"
-    #auditwheel -v repair --plat manylinux2014_x86_64 "$FILE" -w "$export_root"
-    #auditwheel -v repair --plat manylinux2014_aarch64 "$FILE" -w "$export_root"
+    python -m auditwheel show "$FILE" || true
+    LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${ROOT_DIR}/${BUILD_DIR}/lib64" python -m auditwheel repair --plat "manylinux_2_28_$PLATFORM" "$FILE" -w .
+    #python -m auditwheel -v repair --plat manylinux_2_28_x86_64 "$FILE" -w .
+    #python -m auditwheel -v repair --plat manylinux_2_28_aarch64 "$FILE" -w .
   done
   popd
+
+  # Restore environment
+  deactivate
 }
 
 function test_wheel() {
@@ -138,6 +186,20 @@ function test_wheel() {
   echo "WHEEL file: ${WHEEL_FILE}"
   pip install --no-cache-dir "$WHEEL_FILE"
   pip show ortools
+
+  # Python scripts to be used as tests for the installed wheel. This list of files
+  # has been taken from the 'test_python' make target.
+  declare -a TESTS=(
+    "ortools/algorithms/samples/simple_knapsack_program.py"
+    "ortools/graph/samples/simple_max_flow_program.py"
+    "ortools/graph/samples/simple_min_cost_flow_program.py"
+    "ortools/linear_solver/samples/simple_lp_program.py"
+    "ortools/linear_solver/samples/simple_mip_program.py"
+    "ortools/sat/samples/simple_sat_program.py"
+    "ortools/constraint_solver/samples/tsp.py"
+    "ortools/constraint_solver/samples/vrp.py"
+    "ortools/constraint_solver/samples/cvrptw_break.py"
+  )
 
   # Run all the specified test scripts using the current environment.
   local -r ROOT_DIR=$(pwd)
@@ -202,20 +264,7 @@ function main() {
   assert_defined PYTHON_VERSION
 
   # Setup
-  # Python scripts to be used as tests for the installed wheel. This list of files
-  # has been taken from the 'test_python' make target.
-  declare -a TESTS=(
-    "ortools/algorithms/samples/simple_knapsack_program.py"
-    "ortools/graph/samples/simple_max_flow_program.py"
-    "ortools/graph/samples/simple_min_cost_flow_program.py"
-    "ortools/linear_solver/samples/simple_lp_program.py"
-    "ortools/linear_solver/samples/simple_mip_program.py"
-    "ortools/sat/samples/simple_sat_program.py"
-    "ortools/constraint_solver/samples/tsp.py"
-    "ortools/constraint_solver/samples/vrp.py"
-    "ortools/constraint_solver/samples/cvrptw_break.py"
-  )
-  declare -a SKIPS=( "pp37-pypy37_pp73" )
+  declare -a SKIPS=( "cp38-cp38" )
 
   case ${1} in
     build)

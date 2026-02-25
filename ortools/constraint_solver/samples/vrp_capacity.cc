@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,9 +14,13 @@
 // [START program]
 // [START import]
 #include <cstdint>
+#include <cstdlib>
+#include <sstream>
 #include <vector>
 
 #include "google/protobuf/duration.pb.h"
+#include "ortools/base/logging.h"
+#include "ortools/constraint_solver/constraint_solver.h"
 #include "ortools/constraint_solver/routing.h"
 #include "ortools/constraint_solver/routing_enums.pb.h"
 #include "ortools/constraint_solver/routing_index_manager.h"
@@ -81,19 +85,22 @@ struct DataModel {
 //! @param[in] solution Solution found by the solver.
 void PrintSolution(const DataModel& data, const RoutingIndexManager& manager,
                    const RoutingModel& routing, const Assignment& solution) {
-  int64_t total_distance{0};
-  int64_t total_load{0};
+  int64_t total_distance = 0;
+  int64_t total_load = 0;
   for (int vehicle_id = 0; vehicle_id < data.num_vehicles; ++vehicle_id) {
+    if (!routing.IsVehicleUsed(solution, vehicle_id)) {
+      continue;
+    }
     int64_t index = routing.Start(vehicle_id);
     LOG(INFO) << "Route for Vehicle " << vehicle_id << ":";
-    int64_t route_distance{0};
-    int64_t route_load{0};
+    int64_t route_distance = 0;
+    int64_t route_load = 0;
     std::stringstream route;
-    while (routing.IsEnd(index) == false) {
-      int64_t node_index = manager.IndexToNode(index).value();
+    while (!routing.IsEnd(index)) {
+      const int node_index = manager.IndexToNode(index).value();
       route_load += data.demands[node_index];
       route << node_index << " Load(" << route_load << ") -> ";
-      int64_t previous_index = index;
+      const int64_t previous_index = index;
       index = solution.Value(routing.NextVar(index));
       route_distance += routing.GetArcCostForVehicle(previous_index, index,
                                                      int64_t{vehicle_id});
@@ -132,10 +139,11 @@ void VrpCapacity() {
   // Create and register a transit callback.
   // [START transit_callback]
   const int transit_callback_index = routing.RegisterTransitCallback(
-      [&data, &manager](int64_t from_index, int64_t to_index) -> int64_t {
+      [&data, &manager](const int64_t from_index,
+                        const int64_t to_index) -> int64_t {
         // Convert from routing variable Index to distance matrix NodeIndex.
-        int from_node = manager.IndexToNode(from_index).value();
-        int to_node = manager.IndexToNode(to_index).value();
+        const int from_node = manager.IndexToNode(from_index).value();
+        const int to_node = manager.IndexToNode(to_index).value();
         return data.distance_matrix[from_node][to_node];
       });
   // [END transit_callback]
@@ -148,9 +156,9 @@ void VrpCapacity() {
   // Add Capacity constraint.
   // [START capacity_constraint]
   const int demand_callback_index = routing.RegisterUnaryTransitCallback(
-      [&data, &manager](int64_t from_index) -> int64_t {
+      [&data, &manager](const int64_t from_index) -> int64_t {
         // Convert from routing variable Index to demand NodeIndex.
-        int from_node = manager.IndexToNode(from_index).value();
+        const int from_node = manager.IndexToNode(from_index).value();
         return data.demands[from_node];
       });
   routing.AddDimensionWithVehicleCapacity(
@@ -183,7 +191,7 @@ void VrpCapacity() {
 }
 }  // namespace operations_research
 
-int main(int argc, char** argv) {
+int main(int /*argc*/, char* /*argv*/[]) {
   operations_research::VrpCapacity();
   return EXIT_SUCCESS;
 }

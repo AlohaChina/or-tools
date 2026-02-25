@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,27 +13,218 @@
 
 #include "ortools/sat/linear_constraint_manager.h"
 
+#include <stdint.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <limits>
+#include <numeric>
+#include <string>
 #include <utility>
+#include <vector>
 
-#include "absl/container/flat_hash_set.h"
+#include "absl/container/btree_map.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/log/vlog_is_on.h"
+#include "absl/numeric/int128.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "ortools/base/hash.h"
+#include "ortools/base/logging.h"
 #include "ortools/base/strong_vector.h"
+#include "ortools/glop/variables_info.h"
+#include "ortools/lp_data/lp_types.h"
 #include "ortools/sat/integer.h"
+#include "ortools/sat/integer_base.h"
 #include "ortools/sat/linear_constraint.h"
+#include "ortools/sat/model.h"
+#include "ortools/sat/sat_base.h"
+#include "ortools/sat/sat_parameters.pb.h"
+#include "ortools/sat/synchronization.h"
+#include "ortools/sat/util.h"
+#include "ortools/util/saturated_arithmetic.h"
+#include "ortools/util/strong_integers.h"
+#include "ortools/util/time_limit.h"
 
 namespace operations_research {
 namespace sat {
+
+LinearConstraintSymmetrizer::~LinearConstraintSymmetrizer() {
+  if (!VLOG_IS_ON(1)) return;
+  std::vector<std::pair<std::string, int64_t>> stats;
+  stats.push_back({"symmetrizer/overflows", num_overflows_});
+  shared_stats_->AddStats(stats);
+}
+
+void LinearConstraintSymmetrizer::AddSymmetryOrbit(
+    IntegerVariable sum_var, absl::Span<const IntegerVariable> orbit) {
+  CHECK_GT(orbit.size(), 1);
+
+  // Store the orbit info.
+  const int orbit_index = orbits_.size();
+  has_symmetry_ = true;
+  orbit_sum_vars_.push_back(sum_var);
+  orbits_.Add(orbit);
+
+  // And fill var_to_orbit_index_.
+  const int new_size = integer_trail_->NumIntegerVariables().value() / 2;
+  if (var_to_orbit_index_.size() < new_size) {
+    var_to_orbit_index_.resize(new_size, -1);
+  }
+  DCHECK(VariableIsPositive(sum_var));
+  DCHECK_EQ(var_to_orbit_index_[GetPositiveOnlyIndex(sum_var)], -1);
+  var_to_orbit_index_[GetPositiveOnlyIndex(sum_var)] = orbit_index;
+  for (const IntegerVariable var : orbit) {
+    DCHECK(VariableIsPositive(var));
+    DCHECK_EQ(var_to_orbit_index_[GetPositiveOnlyIndex(var)], -1);
+    var_to_orbit_index_[GetPositiveOnlyIndex(var)] = orbit_index;
+  }
+}
+
+// What we do here is basically equivalent to adding all the possible
+// permutations (under the problem symmetry group) of the constraint together.
+// When we do that all variables in the same orbit will have the same
+// coefficient (TODO(user): think how to prove this properly and especially
+// that the scaling is in 1/orbit_size) and will each appear once. We then
+// substitute each sum by the sum over the orbit, and divide coefficient by
+// their gcd.
+//
+// Any solution of the original LP can be transformed to a solution of the
+// folded LP with the same objective. So the folded LP will give us a tight and
+// valid objective lower bound but with a lot less variables! This is an
+// adaptation of "LP folding" to use in a MIP context. Introducing the orbit sum
+// allow to propagates and add cuts as these sum are still integer for us.
+//
+// The only issue is regarding scaling of the constraints. Basically each
+// orbit sum variable will appear with a factor 1/orbit_size in the original
+// constraint.
+//
+// We will remap & scale the constraint.
+// If not possible, we will drop it for now.
+bool LinearConstraintSymmetrizer::FoldLinearConstraint(LinearConstraint* ct,
+                                                       bool* folded) {
+  if (!has_symmetry_) return true;
+
+  // We assume the constraint had basic preprocessing with tight lb/ub for
+  // instance. First pass is to compute the scaling factor.
+  int64_t scaling_factor = 1;
+  for (int i = 0; i < ct->num_terms; ++i) {
+    const IntegerVariable var = ct->vars[i];
+    CHECK(VariableIsPositive(var));
+
+    const int orbit_index = var_to_orbit_index_[GetPositiveOnlyIndex(var)];
+    if (orbit_index == -1 || orbit_sum_vars_[orbit_index] == var) {
+      // If we have an orbit of size one, or the variable is its own
+      // representative (orbit sum), skip.
+      continue;
+    }
+
+    // Update the scaling factor.
+    const int orbit_size = orbits_[orbit_index].size();
+    if (AtMinOrMaxInt64(CapProd(orbit_size, scaling_factor))) {
+      ++num_overflows_;
+      VLOG(2) << "SYMMETRY skip constraint due to overflow";
+      return false;
+    }
+    scaling_factor = std::lcm(scaling_factor, orbit_size);
+  }
+
+  if (scaling_factor == 1) {
+    // No symmetric variables.
+    return true;
+  }
+
+  if (folded != nullptr) *folded = true;
+
+  // We need to multiply each term by scaling_factor / orbit_size.
+  //
+  // TODO(user): Now that we know the actual coefficient we could scale less.
+  // Maybe the coefficient of an orbit_var is already divisible by orbit_size.
+  builder_.Clear();
+  for (int i = 0; i < ct->num_terms; ++i) {
+    const IntegerVariable var = ct->vars[i];
+    const IntegerValue coeff = ct->coeffs[i];
+
+    const int orbit_index = var_to_orbit_index_[GetPositiveOnlyIndex(var)];
+    if (orbit_index == -1 || orbit_sum_vars_[orbit_index] == var) {
+      const int64_t scaled_coeff = CapProd(coeff.value(), scaling_factor);
+      if (AtMinOrMaxInt64(scaled_coeff)) {
+        ++num_overflows_;
+        VLOG(2) << "SYMMETRY skip constraint due to overflow";
+        return false;
+      }
+      builder_.AddTerm(var, scaled_coeff);
+    } else {
+      const int64_t orbit_size = orbits_[orbit_index].size();
+      const int64_t factor = scaling_factor / orbit_size;
+      const int64_t scaled_coeff = CapProd(coeff.value(), factor);
+      if (AtMinOrMaxInt64(scaled_coeff)) {
+        ++num_overflows_;
+        VLOG(2) << "SYMMETRY skip constraint due to overflow";
+        return false;
+      }
+      builder_.AddTerm(orbit_sum_vars_[orbit_index], scaled_coeff);
+    }
+  }
+
+  if (AtMinOrMaxInt64(CapProd(ct->lb.value(), scaling_factor)) ||
+      AtMinOrMaxInt64(CapProd(ct->ub.value(), scaling_factor))) {
+    ++num_overflows_;
+    VLOG(2) << "SYMMETRY skip constraint due to lb/ub overflow";
+    return false;
+  }
+  if (!builder_.BuildIntoConstraintAndCheckOverflow(
+          ct->lb * scaling_factor, ct->ub * scaling_factor, ct)) {
+    ++num_overflows_;
+    VLOG(2) << "SYMMETRY skip constraint due to overflow";
+    return false;
+  }
+
+  // Dividing by gcd can help.
+  DivideByGCD(ct);
+  if (PossibleOverflow(*integer_trail_, *ct)) {
+    ++num_overflows_;
+    VLOG(2) << "SYMMETRY skip constraint due to overflow factor = "
+            << scaling_factor;
+    return false;
+  }
+
+  // TODO(user): In some cases, this constraint will propagate/fix directly
+  // the orbit sum variables, we might want to propagate this in the cp world?
+  // This migth also remove bad scaling.
+  return true;
+}
+
+int LinearConstraintSymmetrizer::OrbitIndex(IntegerVariable var) const {
+  if (!has_symmetry_) return -1;
+  return var_to_orbit_index_[GetPositiveOnlyIndex(var)];
+}
+
+bool LinearConstraintSymmetrizer::IsOrbitSumVar(IntegerVariable var) const {
+  if (!has_symmetry_) return false;
+  const int orbit_index = var_to_orbit_index_[GetPositiveOnlyIndex(var)];
+  return orbit_index >= 0 && orbit_sum_vars_[orbit_index] == var;
+}
+
+bool LinearConstraintSymmetrizer::AppearInFoldedProblem(
+    IntegerVariable var) const {
+  if (!has_symmetry_) return true;
+  const int orbit_index = var_to_orbit_index_[GetPositiveOnlyIndex(var)];
+  return orbit_index == -1 || orbit_sum_vars_[orbit_index] == var;
+}
 
 namespace {
 
 const LinearConstraintManager::ConstraintIndex kInvalidConstraintIndex(-1);
 
 size_t ComputeHashOfTerms(const LinearConstraint& ct) {
-  DCHECK(std::is_sorted(ct.vars.begin(), ct.vars.end()));
+  DCHECK(std::is_sorted(ct.vars.get(), ct.vars.get() + ct.num_terms));
   size_t hash = 0;
-  const int num_terms = ct.vars.size();
+  const int num_terms = ct.num_terms;
   for (int i = 0; i < num_terms; ++i) {
     hash = util_hash::Hash(ct.vars[i].value(), hash);
     hash = util_hash::Hash(ct.coeffs[i].value(), hash);
@@ -43,38 +234,15 @@ size_t ComputeHashOfTerms(const LinearConstraint& ct) {
 
 }  // namespace
 
-std::string LinearConstraintManager::Statistics() const {
-  std::string result;
-  absl::StrAppend(&result, "  managed constraints: ", constraint_infos_.size(),
-                  "\n");
-  if (num_merged_constraints_ > 0) {
-    absl::StrAppend(&result, "  merged constraints: ", num_merged_constraints_,
-                    "\n");
-  }
-  if (num_shortened_constraints_ > 0) {
-    absl::StrAppend(
-        &result, "  shortened constraints: ", num_shortened_constraints_, "\n");
-  }
-  if (num_splitted_constraints_ > 0) {
-    absl::StrAppend(
-        &result, "  splitted constraints: ", num_splitted_constraints_, "\n");
-  }
-  if (num_coeff_strenghtening_ > 0) {
-    absl::StrAppend(&result,
-                    "  coefficient strenghtenings: ", num_coeff_strenghtening_,
-                    "\n");
-  }
-  if (num_simplifications_ > 0) {
-    absl::StrAppend(&result, "  num simplifications: ", num_simplifications_,
-                    "\n");
-  }
-  absl::StrAppend(&result, "  total cuts added: ", num_cuts_, " (out of ",
-                  num_add_cut_calls_, " calls)\n");
+LinearConstraintManager::~LinearConstraintManager() {
+  if (!VLOG_IS_ON(1)) return;
+  if (model_->Get<SharedStatistics>() == nullptr) return;
+
+  std::vector<std::pair<std::string, int64_t>> cut_stats;
   for (const auto& entry : type_to_num_cuts_) {
-    absl::StrAppend(&result, "    - '", entry.first, "': ", entry.second, "\n");
+    cut_stats.push_back({absl::StrCat("cut/", entry.first), entry.second});
   }
-  if (!result.empty()) result.pop_back();  // Remove last \n.
-  return result;
+  model_->Mutable<SharedStatistics>()->AddStats(cut_stats);
 }
 
 void LinearConstraintManager::RescaleActiveCounts(const double scaling_factor) {
@@ -82,7 +250,7 @@ void LinearConstraintManager::RescaleActiveCounts(const double scaling_factor) {
     constraint_infos_[i].active_count *= scaling_factor;
   }
   constraint_active_count_increase_ *= scaling_factor;
-  VLOG(2) << "Rescaled active counts by " << scaling_factor;
+  VLOG(3) << "Rescaled active counts by " << scaling_factor;
 }
 
 bool LinearConstraintManager::MaybeRemoveSomeInactiveConstraints(
@@ -94,6 +262,15 @@ bool LinearConstraintManager::MaybeRemoveSomeInactiveConstraints(
   int new_size = 0;
   for (int i = 0; i < num_rows; ++i) {
     const ConstraintIndex constraint_index = lp_constraints_[i];
+    if (constraint_infos_[constraint_index].constraint.num_terms == 0) {
+      // Remove empty constraint.
+      //
+      // TODO(user): If the constraint is infeasible we could detect unsat
+      // right away, but hopefully this is a case where the propagation part
+      // of the solver can detect that too.
+      constraint_infos_[constraint_index].is_in_lp = false;
+      continue;
+    }
 
     // Constraints that are not tight in the current solution have a basic
     // status. We remove the ones that have been inactive in the last recent
@@ -123,7 +300,7 @@ bool LinearConstraintManager::MaybeRemoveSomeInactiveConstraints(
   lp_constraints_.resize(new_size);
   solution_state->statuses.resize(num_cols + glop::ColIndex(new_size));
   if (num_removed_constraints > 0) {
-    VLOG(2) << "Removed " << num_removed_constraints << " constraints";
+    VLOG(3) << "Removed " << num_removed_constraints << " constraints";
   }
   return num_removed_constraints > 0;
 }
@@ -132,32 +309,44 @@ bool LinearConstraintManager::MaybeRemoveSomeInactiveConstraints(
 // to detect duplicate constraints and merge bounds. This is also relevant if
 // we regenerate identical cuts for some reason.
 LinearConstraintManager::ConstraintIndex LinearConstraintManager::Add(
-    LinearConstraint ct, bool* added) {
-  CHECK(!ct.vars.empty());
+    LinearConstraint ct, bool* added, bool* folded) {
+  DCHECK_GT(ct.num_terms, 0);
+  DCHECK(!PossibleOverflow(integer_trail_, ct)) << ct.DebugString();
   DCHECK(NoDuplicateVariable(ct));
   SimplifyConstraint(&ct);
   DivideByGCD(&ct);
-  CanonicalizeConstraint(&ct);
+  MakeAllVariablesPositive(&ct);
   DCHECK(DebugCheckConstraint(ct));
+
+  // If configured, store instead the folded version of this constraint.
+  // TODO(user): Shall we simplify again?
+  if (symmetrizer_->HasSymmetry() &&
+      !symmetrizer_->FoldLinearConstraint(&ct, folded)) {
+    return kInvalidConstraintIndex;
+  }
+  CHECK(std::is_sorted(ct.VarsAsSpan().begin(), ct.VarsAsSpan().end()));
 
   // If an identical constraint exists, only updates its bound.
   const size_t key = ComputeHashOfTerms(ct);
   if (equiv_constraints_.contains(key)) {
     const ConstraintIndex ct_index = equiv_constraints_[key];
-    if (constraint_infos_[ct_index].constraint.vars == ct.vars &&
-        constraint_infos_[ct_index].constraint.coeffs == ct.coeffs) {
-      if (added != nullptr) *added = false;
+    if (constraint_infos_[ct_index].constraint.IsEqualIgnoringBounds(ct)) {
+      bool tightened = false;
       if (ct.lb > constraint_infos_[ct_index].constraint.lb) {
+        tightened = true;
         if (constraint_infos_[ct_index].is_in_lp) current_lp_is_changed_ = true;
         constraint_infos_[ct_index].constraint.lb = ct.lb;
-        if (added != nullptr) *added = true;
       }
       if (ct.ub < constraint_infos_[ct_index].constraint.ub) {
+        tightened = true;
         if (constraint_infos_[ct_index].is_in_lp) current_lp_is_changed_ = true;
         constraint_infos_[ct_index].constraint.ub = ct.ub;
-        if (added != nullptr) *added = true;
       }
-      ++num_merged_constraints_;
+      if (added != nullptr) *added = tightened;
+      if (tightened) {
+        ++num_merged_constraints_;
+        FillDerivedFields(&constraint_infos_[ct_index]);
+      }
       return ct_index;
     }
   }
@@ -167,11 +356,34 @@ LinearConstraintManager::ConstraintIndex LinearConstraintManager::Add(
   ConstraintInfo ct_info;
   ct_info.constraint = std::move(ct);
   ct_info.l2_norm = ComputeL2Norm(ct_info.constraint);
+  FillDerivedFields(&ct_info);
   ct_info.hash = key;
   equiv_constraints_[key] = ct_index;
   ct_info.active_count = constraint_active_count_increase_;
   constraint_infos_.push_back(std::move(ct_info));
   return ct_index;
+}
+
+bool LinearConstraintManager::UpdateConstraintLb(glop::RowIndex index_in_lp,
+                                                 IntegerValue new_lb) {
+  const ConstraintIndex index = lp_constraints_[index_in_lp.value()];
+  ConstraintInfo& info = constraint_infos_[index];
+  if (new_lb <= info.constraint.lb) return false;
+  ++num_constraint_updates_;
+  current_lp_is_changed_ = true;
+  info.constraint.lb = new_lb;
+  return true;
+}
+
+bool LinearConstraintManager::UpdateConstraintUb(glop::RowIndex index_in_lp,
+                                                 IntegerValue new_ub) {
+  const ConstraintIndex index = lp_constraints_[index_in_lp.value()];
+  ConstraintInfo& info = constraint_infos_[index];
+  if (new_ub >= info.constraint.ub) return false;
+  ++num_constraint_updates_;
+  current_lp_is_changed_ = true;
+  info.constraint.ub = new_ub;
+  return true;
 }
 
 void LinearConstraintManager::ComputeObjectiveParallelism(
@@ -192,7 +404,7 @@ void LinearConstraintManager::ComputeObjectiveParallelism(
 
   const LinearConstraint& lc = constraint_infos_[ct_index].constraint;
   double unscaled_objective_parallelism = 0.0;
-  for (int i = 0; i < lc.vars.size(); ++i) {
+  for (int i = 0; i < lc.num_terms; ++i) {
     const IntegerVariable var = lc.vars[i];
     const auto it = objective_map_.find(var);
     if (it == objective_map_.end()) continue;
@@ -207,20 +419,31 @@ void LinearConstraintManager::ComputeObjectiveParallelism(
 
 // Same as Add(), but logs some information about the newly added constraint.
 // Cuts are also handled slightly differently than normal constraints.
-bool LinearConstraintManager::AddCut(
-    LinearConstraint ct, std::string type_name,
-    const absl::StrongVector<IntegerVariable, double>& lp_solution,
-    std::string extra_info) {
+bool LinearConstraintManager::AddCut(LinearConstraint ct, std::string type_name,
+                                     std::string extra_info) {
   ++num_add_cut_calls_;
-  if (ct.vars.empty()) return false;
+  if (ct.num_terms == 0) return false;
 
-  const double activity = ComputeActivity(ct, lp_solution);
+  const double activity = ComputeActivity(ct, expanded_lp_solution_);
   const double violation =
       std::max(activity - ToDouble(ct.ub), ToDouble(ct.lb) - activity);
   const double l2_norm = ComputeL2Norm(ct);
 
   // Only add cut with sufficient efficacy.
-  if (violation / l2_norm < 1e-5) return false;
+  if (violation / l2_norm < 1e-4) {
+    VLOG(3) << "BAD Cut '" << type_name << "'"
+            << " size=" << ct.num_terms
+            << " max_magnitude=" << ComputeInfinityNorm(ct)
+            << " norm=" << l2_norm << " violation=" << violation
+            << " eff=" << violation / l2_norm << " " << extra_info;
+    return false;
+  }
+
+  // TODO(user): We could prevent overflow by dividing more. Note that mainly
+  // happen with super large variable domain since we usually restrict the size
+  // of the generated coefficients in our cuts. So it shouldn't be that
+  // important.
+  if (PossibleOverflow(integer_trail_, ct)) return false;
 
   bool added = false;
   const ConstraintIndex ct_index = Add(std::move(ct), &added);
@@ -233,8 +456,8 @@ bool LinearConstraintManager::AddCut(
   // them undeletable.
   constraint_infos_[ct_index].is_deletable = true;
 
-  VLOG(1) << "Cut '" << type_name << "'"
-          << " size=" << constraint_infos_[ct_index].constraint.vars.size()
+  VLOG(2) << "Cut '" << type_name << "'"
+          << " size=" << constraint_infos_[ct_index].constraint.num_terms
           << " max_magnitude="
           << ComputeInfinityNorm(constraint_infos_[ct_index].constraint)
           << " norm=" << l2_norm << " violation=" << violation
@@ -268,7 +491,7 @@ void LinearConstraintManager::PermanentlyRemoveSomeConstraints() {
 
   ConstraintIndex new_size(0);
   equiv_constraints_.clear();
-  absl::StrongVector<ConstraintIndex, ConstraintIndex> index_mapping(
+  util_intops::StrongVector<ConstraintIndex, ConstraintIndex> index_mapping(
       constraint_infos_.size());
   int num_deleted_constraints = 0;
   for (ConstraintIndex i(0); i < constraint_infos_.size(); ++i) {
@@ -296,7 +519,7 @@ void LinearConstraintManager::PermanentlyRemoveSomeConstraints() {
   }
 
   if (num_deleted_constraints > 0) {
-    VLOG(1) << "Constraint manager cleanup: #deleted:"
+    VLOG(3) << "Constraint manager cleanup: #deleted:"
             << num_deleted_constraints;
   }
   num_deletable_constraints_ -= num_deleted_constraints;
@@ -317,14 +540,16 @@ void LinearConstraintManager::SetObjectiveCoefficient(IntegerVariable var,
   sum_of_squared_objective_coeffs_ += coeff_as_double * coeff_as_double;
 }
 
+// TODO(user): Also consider partial gcd simplification? see presolve.
 bool LinearConstraintManager::SimplifyConstraint(LinearConstraint* ct) {
   bool term_changed = false;
 
   IntegerValue min_sum(0);
   IntegerValue max_sum(0);
   IntegerValue max_magnitude(0);
+  IntegerValue min_magnitude = kMaxIntegerValue;
   int new_size = 0;
-  const int num_terms = ct->vars.size();
+  const int num_terms = ct->num_terms;
   for (int i = 0; i < num_terms; ++i) {
     const IntegerVariable var = ct->vars[i];
     const IntegerValue coeff = ct->coeffs[i];
@@ -336,7 +561,9 @@ bool LinearConstraintManager::SimplifyConstraint(LinearConstraint* ct) {
     if (lb == ub) continue;
     ++new_size;
 
-    max_magnitude = std::max(max_magnitude, IntTypeAbs(coeff));
+    const IntegerValue magnitude = IntTypeAbs(coeff);
+    max_magnitude = std::max(max_magnitude, magnitude);
+    min_magnitude = std::min(min_magnitude, magnitude);
     if (coeff > 0.0) {
       min_sum += coeff * lb;
       max_sum += coeff * ub;
@@ -347,6 +574,7 @@ bool LinearConstraintManager::SimplifyConstraint(LinearConstraint* ct) {
   }
 
   // Shorten the constraint if needed.
+  IntegerValue fixed_part = 0;
   if (new_size < num_terms) {
     term_changed = true;
     ++num_shortened_constraints_;
@@ -357,84 +585,90 @@ bool LinearConstraintManager::SimplifyConstraint(LinearConstraint* ct) {
       const IntegerValue lb = integer_trail_.LevelZeroLowerBound(var);
       const IntegerValue ub = integer_trail_.LevelZeroUpperBound(var);
       if (lb == ub) {
-        const IntegerValue rhs_adjust = lb * coeff;
-        if (ct->lb > kMinIntegerValue) ct->lb -= rhs_adjust;
-        if (ct->ub < kMaxIntegerValue) ct->ub -= rhs_adjust;
+        fixed_part += coeff * lb;
         continue;
       }
       ct->vars[new_size] = var;
       ct->coeffs[new_size] = coeff;
       ++new_size;
     }
-    ct->vars.resize(new_size);
-    ct->coeffs.resize(new_size);
+    ct->resize(new_size);
   }
-
-  // Relax the bound if needed, note that this doesn't require a change to
-  // the equiv map.
-  if (min_sum >= ct->lb) ct->lb = kMinIntegerValue;
-  if (max_sum <= ct->ub) ct->ub = kMaxIntegerValue;
 
   // Clear constraints that are always true.
   // We rely on the deletion code to remove them eventually.
-  if (ct->lb == kMinIntegerValue && ct->ub == kMaxIntegerValue) {
-    ct->vars.clear();
-    ct->coeffs.clear();
+  if (min_sum + fixed_part >= ct->lb && max_sum + fixed_part <= ct->ub) {
+    ct->resize(0);
+    ct->lb = 0;
+    ct->ub = 0;
     return true;
   }
 
-  // TODO(user): Split constraint in two if it is boxed and there is possible
-  // reduction?
-  //
-  // TODO(user): Make sure there cannot be any overflow. They shouldn't, but
-  // I am not sure all the generated cuts are safe regarding min/max sum
-  // computation. We should check this.
-  if (ct->ub != kMaxIntegerValue && max_magnitude > max_sum - ct->ub) {
-    if (ct->lb != kMinIntegerValue) {
-      ++num_splitted_constraints_;
-    } else {
-      term_changed = true;
-      ++num_coeff_strenghtening_;
-      const int num_terms = ct->vars.size();
-      const IntegerValue target = max_sum - ct->ub;
-      for (int i = 0; i < num_terms; ++i) {
-        const IntegerValue coeff = ct->coeffs[i];
-        if (coeff > target) {
-          const IntegerVariable var = ct->vars[i];
-          const IntegerValue ub = integer_trail_.LevelZeroUpperBound(var);
-          ct->coeffs[i] = target;
-          ct->ub -= (coeff - target) * ub;
-        } else if (coeff < -target) {
-          const IntegerVariable var = ct->vars[i];
-          const IntegerValue lb = integer_trail_.LevelZeroLowerBound(var);
-          ct->coeffs[i] = -target;
-          ct->ub += (-target - coeff) * lb;
-        }
-      }
+  // Make sure bounds are finite.
+  ct->lb = std::max(ct->lb, min_sum + fixed_part);
+  ct->ub = std::min(ct->ub, max_sum + fixed_part);
+  ct->lb -= fixed_part;
+  ct->ub -= fixed_part;
+
+  // The variable can be shifted and complemented so we have constraints of
+  // the form:
+  // ... + |coeff| * X  >= threshold_ub
+  // ... + |coeff| * X' >= threshold_lb
+  // In both case if coeff is big, we can reduce it and update the rhs
+  // accordingly.
+  const IntegerValue threshold_ub = max_sum - ct->ub;
+  const IntegerValue threshold_lb = ct->lb - min_sum;
+  const IntegerValue threshold = std::max(threshold_lb, threshold_ub);
+  CHECK_GT(threshold, 0);  // Since we aborted for trivial constraint.
+
+  // TODO(user): In some case, we could split the constraint to reduce one of
+  // them further. But not sure that is a good thing.
+  if (threshold_ub > 0 && threshold_lb > 0 && threshold_lb != threshold_ub) {
+    if (max_magnitude > std::min(threshold_lb, threshold_ub)) {
+      ++num_split_constraints_;
     }
   }
 
-  if (ct->lb != kMinIntegerValue && max_magnitude > ct->lb - min_sum) {
-    if (ct->ub != kMaxIntegerValue) {
-      ++num_splitted_constraints_;
-    } else {
-      term_changed = true;
-      ++num_coeff_strenghtening_;
-      const int num_terms = ct->vars.size();
-      const IntegerValue target = ct->lb - min_sum;
-      for (int i = 0; i < num_terms; ++i) {
-        const IntegerValue coeff = ct->coeffs[i];
-        if (coeff > target) {
-          const IntegerVariable var = ct->vars[i];
-          const IntegerValue lb = integer_trail_.LevelZeroLowerBound(var);
-          ct->coeffs[i] = target;
-          ct->lb -= (coeff - target) * lb;
-        } else if (coeff < -target) {
-          const IntegerVariable var = ct->vars[i];
-          const IntegerValue ub = integer_trail_.LevelZeroUpperBound(var);
-          ct->coeffs[i] = -target;
-          ct->lb += (-target - coeff) * ub;
-        }
+  // TODO(user): For constraint with both bound, we could reduce further for
+  // coefficient between threshold - min_magnitude and min(t_lb, t_ub).
+  const IntegerValue second_threshold = std::max(
+      {CeilRatio(threshold, IntegerValue(2)), threshold - min_magnitude,
+       std::min(threshold_lb, threshold_ub)});
+  if (max_magnitude > second_threshold) {
+    const int num_terms = ct->num_terms;
+    for (int i = 0; i < num_terms; ++i) {
+      // In all cases, we reason on a transformed constraint where the term
+      // is max_value - |coeff| * positive_X. If we change coeff, and
+      // retransform the constraint, we need to change the rhs by the
+      // constant term left.
+      const IntegerValue coeff = ct->coeffs[i];
+      const IntegerVariable var = ct->vars[i];
+      const IntegerValue lb = integer_trail_.LevelZeroLowerBound(var);
+      const IntegerValue ub = integer_trail_.LevelZeroUpperBound(var);
+      if (coeff > threshold) {
+        term_changed = true;
+        ++num_coeff_strenghtening_;
+        ct->coeffs[i] = threshold;
+        ct->ub -= (coeff - threshold) * ub;
+        ct->lb -= (coeff - threshold) * lb;
+      } else if (coeff > second_threshold && coeff < threshold) {
+        term_changed = true;
+        ++num_coeff_strenghtening_;
+        ct->coeffs[i] = second_threshold;
+        ct->ub -= (coeff - second_threshold) * ub;
+        ct->lb -= (coeff - second_threshold) * lb;
+      } else if (coeff < -threshold) {
+        term_changed = true;
+        ++num_coeff_strenghtening_;
+        ct->coeffs[i] = -threshold;
+        ct->ub -= (coeff + threshold) * lb;
+        ct->lb -= (coeff + threshold) * ub;
+      } else if (coeff < -second_threshold && coeff > -threshold) {
+        term_changed = true;
+        ++num_coeff_strenghtening_;
+        ct->coeffs[i] = -second_threshold;
+        ct->ub -= (coeff + second_threshold) * lb;
+        ct->lb -= (coeff + second_threshold) * ub;
       }
     }
   }
@@ -442,13 +676,37 @@ bool LinearConstraintManager::SimplifyConstraint(LinearConstraint* ct) {
   return term_changed;
 }
 
-bool LinearConstraintManager::ChangeLp(
-    const absl::StrongVector<IntegerVariable, double>& lp_solution,
-    glop::BasisState* solution_state) {
+void LinearConstraintManager::FillDerivedFields(ConstraintInfo* info) {
+  IntegerValue min_sum(0);
+  IntegerValue max_sum(0);
+  const int num_terms = info->constraint.num_terms;
+  for (int i = 0; i < num_terms; ++i) {
+    const IntegerVariable var = info->constraint.vars[i];
+    const IntegerValue coeff = info->constraint.coeffs[i];
+    const IntegerValue lb = integer_trail_.LevelZeroLowerBound(var);
+    const IntegerValue ub = integer_trail_.LevelZeroUpperBound(var);
+    if (coeff > 0.0) {
+      min_sum += coeff * lb;
+      max_sum += coeff * ub;
+    } else {
+      min_sum += coeff * ub;
+      max_sum += coeff * lb;
+    }
+  }
+  info->constraint.lb = std::max(min_sum, info->constraint.lb);
+  info->constraint.ub = std::min(max_sum, info->constraint.ub);
+  CHECK_NE(CapSub(info->constraint.ub.value(), info->constraint.lb.value()),
+           std::numeric_limits<int64_t>::max());
+  info->lb_is_trivial = min_sum >= info->constraint.lb;
+  info->ub_is_trivial = max_sum <= info->constraint.ub;
+}
+
+bool LinearConstraintManager::ChangeLp(glop::BasisState* solution_state,
+                                       int* num_new_constraints) {
   VLOG(3) << "Enter ChangeLP, scan " << constraint_infos_.size()
           << " constraints";
   const double saved_dtime = dtime_;
-  std::vector<ConstraintIndex> new_constraints;
+  std::vector<std::pair<ConstraintIndex, double>> new_constraints_by_score;
   std::vector<double> new_constraints_efficacies;
   std::vector<double> new_constraints_orthogonalities;
 
@@ -476,6 +734,7 @@ bool LinearConstraintManager::ChangeLp(
       constraint_infos_[i].objective_parallelism_computed = false;
       constraint_infos_[i].l2_norm =
           ComputeL2Norm(constraint_infos_[i].constraint);
+      FillDerivedFields(&constraint_infos_[i]);
 
       if (constraint_infos_[i].is_in_lp) current_lp_is_changed_ = true;
       equiv_constraints_.erase(constraint_infos_[i].hash);
@@ -491,10 +750,10 @@ bool LinearConstraintManager::ChangeLp(
 
     // ComputeActivity() often represent the bulk of the time spent in
     // ChangeLP().
-    dtime_ += 1.7e-9 *
-              static_cast<double>(constraint_infos_[i].constraint.vars.size());
+    dtime_ +=
+        1.7e-9 * static_cast<double>(constraint_infos_[i].constraint.num_terms);
     const double activity =
-        ComputeActivity(constraint_infos_[i].constraint, lp_solution);
+        ComputeActivity(constraint_infos_[i].constraint, expanded_lp_solution_);
     const double lb_violation =
         ToDouble(constraint_infos_[i].constraint.lb) - activity;
     const double ub_violation =
@@ -502,11 +761,6 @@ bool LinearConstraintManager::ChangeLp(
     const double violation = std::max(lb_violation, ub_violation);
     if (violation >= tolerance) {
       constraint_infos_[i].inactive_count = 0;
-      new_constraints.push_back(i);
-      new_constraints_efficacies.push_back(violation /
-                                           constraint_infos_[i].l2_norm);
-      new_constraints_orthogonalities.push_back(1.0);
-
       if (objective_is_defined_ &&
           !constraint_infos_[i].objective_parallelism_computed) {
         ComputeObjectiveParallelism(i);
@@ -514,9 +768,9 @@ bool LinearConstraintManager::ChangeLp(
         constraint_infos_[i].objective_parallelism = 0.0;
       }
 
-      constraint_infos_[i].current_score =
-          new_constraints_efficacies.back() +
-          constraint_infos_[i].objective_parallelism;
+      const double score = violation / constraint_infos_[i].l2_norm +
+                           constraint_infos_[i].objective_parallelism;
+      new_constraints_by_score.push_back({i, score});
 
       if (constraint_infos_[i].is_deletable) {
         constraint_infos_[i].active_count += constraint_active_count_increase_;
@@ -577,53 +831,54 @@ bool LinearConstraintManager::ChangeLp(
   // TODO(user): This blowup factor could be adaptative w.r.t. the constraint
   // limit.
   const int kBlowupFactor = 4;
-  int constraint_limit = std::min(sat_parameters_.new_constraints_batch_size(),
-                                  static_cast<int>(new_constraints.size()));
+  const int current_size = static_cast<int>(new_constraints_by_score.size());
+  int constraint_limit =
+      std::min(sat_parameters_.new_constraints_batch_size(), current_size);
   if (lp_constraints_.empty()) {
-    constraint_limit = std::min(1000, static_cast<int>(new_constraints.size()));
+    constraint_limit = std::min(1000, current_size);
   }
-  VLOG(3) << "   - size = " << new_constraints.size()
-          << ", limit = " << constraint_limit;
+  VLOG(3) << "   - size = " << current_size << ", limit = " << constraint_limit;
 
-  std::stable_sort(new_constraints.begin(), new_constraints.end(),
-                   [&](ConstraintIndex a, ConstraintIndex b) {
-                     return constraint_infos_[a].current_score >
-                            constraint_infos_[b].current_score;
+  std::stable_sort(new_constraints_by_score.begin(),
+                   new_constraints_by_score.end(),
+                   [&](std::pair<ConstraintIndex, double> a,
+                       std::pair<ConstraintIndex, double> b) {
+                     return a.second > b.second;
                    });
-  if (new_constraints.size() > kBlowupFactor * constraint_limit) {
-    VLOG(3) << "Resize candidate constraints from " << new_constraints.size()
-            << " down to " << kBlowupFactor * constraint_limit;
-    new_constraints.resize(kBlowupFactor * constraint_limit);
+  if (new_constraints_by_score.size() > kBlowupFactor * constraint_limit) {
+    VLOG(3) << "Resize candidate constraints from "
+            << new_constraints_by_score.size() << " down to "
+            << kBlowupFactor * constraint_limit;
+    new_constraints_by_score.resize(kBlowupFactor * constraint_limit);
   }
 
   int num_added = 0;
-  int num_skipped_checks = 0;
-  const int kCheckFrequency = 100;
+  TimeLimitCheckEveryNCalls time_limit_check(1000, time_limit_);
   ConstraintIndex last_added_candidate = kInvalidConstraintIndex;
+  std::vector<double> orthogonality_score(new_constraints_by_score.size(), 1.0);
   for (int i = 0; i < constraint_limit; ++i) {
     // Iterate through all new constraints and select the one with the best
     // score.
+    //
+    // TODO(user): find better algo, this does 1000 * 4000 scalar product!
     double best_score = 0.0;
     ConstraintIndex best_candidate = kInvalidConstraintIndex;
-    for (int j = 0; j < new_constraints.size(); ++j) {
+    for (int j = 0; j < new_constraints_by_score.size(); ++j) {
       // Checks the time limit, and returns if the lp has changed.
-      if (++num_skipped_checks >= kCheckFrequency) {
-        if (time_limit_->LimitReached()) return current_lp_is_changed_;
-        num_skipped_checks = 0;
-      }
+      if (time_limit_check.LimitReached()) return current_lp_is_changed_;
 
-      const ConstraintIndex new_constraint = new_constraints[j];
-      if (constraint_infos_[new_constraint].is_in_lp) continue;
+      const ConstraintIndex new_index = new_constraints_by_score[j].first;
+      if (constraint_infos_[new_index].is_in_lp) continue;
 
       if (last_added_candidate != kInvalidConstraintIndex) {
         const double current_orthogonality =
             1.0 - (std::abs(ScalarProduct(
                        constraint_infos_[last_added_candidate].constraint,
-                       constraint_infos_[new_constraint].constraint)) /
+                       constraint_infos_[new_index].constraint)) /
                    (constraint_infos_[last_added_candidate].l2_norm *
-                    constraint_infos_[new_constraint].l2_norm));
-        new_constraints_orthogonalities[j] =
-            std::min(new_constraints_orthogonalities[j], current_orthogonality);
+                    constraint_infos_[new_index].l2_norm));
+        orthogonality_score[j] =
+            std::min(orthogonality_score[j], current_orthogonality);
       }
 
       // NOTE(user): It is safe to not add this constraint as the constraint
@@ -631,19 +886,19 @@ bool LinearConstraintManager::ChangeLp(
       // inactive for a long time and is removed from the LP. In either case,
       // this constraint is not adding significant value and is only making the
       // LP larger.
-      if (new_constraints_orthogonalities[j] <
+      if (orthogonality_score[j] <
           sat_parameters_.min_orthogonality_for_lp_constraints()) {
         continue;
       }
 
       // TODO(user): Experiment with different weights or different
       // functions for computing score.
-      const double score = new_constraints_orthogonalities[j] +
-                           constraint_infos_[new_constraint].current_score;
+      const double score =
+          orthogonality_score[j] + new_constraints_by_score[j].second;
       CHECK_GE(score, 0.0);
       if (score > best_score || best_candidate == kInvalidConstraintIndex) {
         best_score = score;
-        best_candidate = new_constraint;
+        best_candidate = new_index;
       }
     }
 
@@ -657,12 +912,18 @@ bool LinearConstraintManager::ChangeLp(
       current_lp_is_changed_ = true;
       lp_constraints_.push_back(best_candidate);
       last_added_candidate = best_candidate;
+    } else {
+      // Abort the addition loop.
+      break;
     }
   }
 
+  if (num_new_constraints != nullptr) {
+    *num_new_constraints = num_added;
+  }
   if (num_added > 0) {
     // We update the solution sate to match the new LP size.
-    VLOG(2) << "Added " << num_added << " constraints.";
+    VLOG(3) << "Added " << num_added << " constraints.";
     solution_state->statuses.resize(solution_state->statuses.size() + num_added,
                                     glop::VariableStatus::BASIC);
   }
@@ -687,6 +948,8 @@ bool LinearConstraintManager::ChangeLp(
 void LinearConstraintManager::AddAllConstraintsToLp() {
   for (ConstraintIndex i(0); i < constraint_infos_.size(); ++i) {
     if (constraint_infos_[i].is_in_lp) continue;
+    if (constraint_infos_[i].constraint.num_terms == 0) continue;
+
     constraint_infos_[i].is_in_lp = true;
     lp_constraints_.push_back(i);
   }
@@ -694,17 +957,24 @@ void LinearConstraintManager::AddAllConstraintsToLp() {
 
 bool LinearConstraintManager::DebugCheckConstraint(
     const LinearConstraint& cut) {
-  if (model_->Get<DebugSolution>() == nullptr) return true;
-  const auto& debug_solution = *(model_->Get<DebugSolution>());
-  if (debug_solution.empty()) return true;
+  const DebugSolution* debug_solution = model_->Get<DebugSolution>();
+  if (debug_solution == nullptr || debug_solution->proto_values.empty()) {
+    return true;
+  }
 
-  IntegerValue activity(0);
-  for (int i = 0; i < cut.vars.size(); ++i) {
+  absl::int128 activity(0);
+  for (int i = 0; i < cut.num_terms; ++i) {
     const IntegerVariable var = cut.vars[i];
     const IntegerValue coeff = cut.coeffs[i];
-    activity += coeff * debug_solution[var];
+    if (var >= debug_solution->ivar_has_value.size() ||
+        !debug_solution->ivar_has_value[var]) {
+      return true;
+    }
+    activity +=
+        absl::int128(coeff.value()) * debug_solution->ivar_values[var].value();
   }
-  if (activity > cut.ub || activity < cut.lb) {
+  if (activity > cut.ub.value() || activity < cut.lb.value()) {
+    LOG(INFO) << cut.DebugString();
     LOG(INFO) << "activity " << activity << " not in [" << cut.lb << ","
               << cut.ub << "]";
     return false;
@@ -712,22 +982,50 @@ bool LinearConstraintManager::DebugCheckConstraint(
   return true;
 }
 
-void TopNCuts::AddCut(
-    LinearConstraint ct, const std::string& name,
-    const absl::StrongVector<IntegerVariable, double>& lp_solution) {
-  if (ct.vars.empty()) return;
-  const double activity = ComputeActivity(ct, lp_solution);
-  const double violation =
-      std::max(activity - ToDouble(ct.ub), ToDouble(ct.lb) - activity);
-  const double l2_norm = ComputeL2Norm(ct);
-  cuts_.Add({name, ct}, violation / l2_norm);
+void LinearConstraintManager::CacheReducedCostsInfo() {
+  if (reduced_costs_is_cached_) return;
+  reduced_costs_is_cached_ = true;
+
+  const absl::int128 ub = reduced_cost_constraint_.ub.value();
+  absl::int128 level_zero_lb = 0;
+  for (int i = 0; i < reduced_cost_constraint_.num_terms; ++i) {
+    IntegerVariable var = reduced_cost_constraint_.vars[i];
+    IntegerValue coeff = reduced_cost_constraint_.coeffs[i];
+    if (coeff < 0) {
+      coeff = -coeff;
+      var = NegationOf(var);
+    }
+
+    const IntegerValue lb = integer_trail_.LevelZeroLowerBound(var);
+    level_zero_lb += absl::int128(coeff.value()) * absl::int128(lb.value());
+
+    if (lb == integer_trail_.LevelZeroUpperBound(var)) continue;
+    const LiteralIndex lit = integer_encoder_.GetAssociatedLiteral(
+        IntegerLiteral::GreaterOrEqual(var, lb + 1));
+    if (lit != kNoLiteralIndex) {
+      reduced_costs_map_[Literal(lit)] = coeff;
+    }
+  }
+  const absl::int128 gap = ub - level_zero_lb;
+  if (gap > 0) {
+    reduced_costs_gap_ = gap;
+  } else {
+    reduced_costs_gap_ = 0;
+    reduced_costs_map_.clear();
+  }
 }
 
-void TopNCuts::TransferToManager(
-    const absl::StrongVector<IntegerVariable, double>& lp_solution,
-    LinearConstraintManager* manager) {
-  for (const CutCandidate& candidate : cuts_.UnorderedElements()) {
-    manager->AddCut(candidate.cut, candidate.name, lp_solution);
+void TopNCuts::AddCut(
+    LinearConstraint ct, absl::string_view name,
+    const util_intops::StrongVector<IntegerVariable, double>& lp_solution) {
+  if (ct.num_terms == 0) return;
+  const double normalized_violation = ct.NormalizedViolation(lp_solution);
+  cuts_.Add({std::string(name), std::move(ct)}, normalized_violation);
+}
+
+void TopNCuts::TransferToManager(LinearConstraintManager* manager) {
+  for (CutCandidate& candidate : *cuts_.MutableUnorderedElements()) {
+    manager->AddCut(std::move(candidate.cut), candidate.name);
   }
   cuts_.Clear();
 }

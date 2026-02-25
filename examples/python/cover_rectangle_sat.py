@@ -1,4 +1,5 @@
-# Copyright 2010-2021 Google LLC
+#!/usr/bin/env python3
+# Copyright 2010-2025 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -10,16 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Fill a 72x37 rectangle by a minimum number of non-overlapping squares."""
 
+"""Fill a 60x50 rectangle by a minimum number of non-overlapping squares."""
 
+from typing import Sequence
+from absl import app
 from ortools.sat.python import cp_model
 
 
-def cover_rectangle(num_squares):
+def cover_rectangle(num_squares: int) -> bool:
     """Try to fill the rectangle with a given number of squares."""
-    size_x = 72
-    size_y = 37
+    size_x = 60
+    size_y = 50
 
     model = cp_model.CpModel()
 
@@ -32,17 +35,17 @@ def cover_rectangle(num_squares):
 
     # Creates intervals for the NoOverlap2D and size variables.
     for i in range(num_squares):
-        size = model.NewIntVar(1, size_y, 'size_%i' % i)
-        start_x = model.NewIntVar(0, size_x, 'sx_%i' % i)
-        end_x = model.NewIntVar(0, size_x, 'ex_%i' % i)
-        start_y = model.NewIntVar(0, size_y, 'sy_%i' % i)
-        end_y = model.NewIntVar(0, size_y, 'ey_%i' % i)
+        size = model.new_int_var(1, size_y, "size_%i" % i)
+        start_x = model.new_int_var(0, size_x, "sx_%i" % i)
+        end_x = model.new_int_var(0, size_x, "ex_%i" % i)
+        start_y = model.new_int_var(0, size_y, "sy_%i" % i)
+        end_y = model.new_int_var(0, size_y, "ey_%i" % i)
 
-        interval_x = model.NewIntervalVar(start_x, size, end_x, 'ix_%i' % i)
-        interval_y = model.NewIntervalVar(start_y, size, end_y, 'iy_%i' % i)
+        interval_x = model.new_interval_var(start_x, size, end_x, "ix_%i" % i)
+        interval_y = model.new_interval_var(start_y, size, end_y, "iy_%i" % i)
 
-        area = model.NewIntVar(1, size_y * size_y, 'area_%i' % i)
-        model.AddProdEquality(area, [size, size])
+        area = model.new_int_var(1, size_y * size_y, "area_%i" % i)
+        model.add_multiplication_equality(area, [size, size])
 
         areas.append(area)
         x_intervals.append(interval_x)
@@ -52,57 +55,69 @@ def cover_rectangle(num_squares):
         y_starts.append(start_y)
 
     # Main constraint.
-    model.AddNoOverlap2D(x_intervals, y_intervals)
+    model.add_no_overlap_2d(x_intervals, y_intervals)
 
     # Redundant constraints.
-    model.AddCumulative(x_intervals, sizes, size_y)
-    model.AddCumulative(y_intervals, sizes, size_x)
+    model.add_cumulative(x_intervals, sizes, size_y)
+    model.add_cumulative(y_intervals, sizes, size_x)
 
     # Forces the rectangle to be exactly covered.
-    model.Add(sum(areas) == size_x * size_y)
+    model.add(sum(areas) == size_x * size_y)
 
     # Symmetry breaking 1: sizes are ordered.
     for i in range(num_squares - 1):
-        model.Add(sizes[i] <= sizes[i + 1])
+        model.add(sizes[i] <= sizes[i + 1])
 
         # Define same to be true iff sizes[i] == sizes[i + 1]
-        same = model.NewBoolVar('')
-        model.Add(sizes[i] == sizes[i + 1]).OnlyEnforceIf(same)
-        model.Add(sizes[i] < sizes[i + 1]).OnlyEnforceIf(same.Not())
+        same = model.new_bool_var("")
+        model.add(sizes[i] == sizes[i + 1]).only_enforce_if(same)
+        model.add(sizes[i] < sizes[i + 1]).only_enforce_if(~same)
 
         # Tie break with starts.
-        model.Add(x_starts[i] <= x_starts[i + 1]).OnlyEnforceIf(same)
+        model.add(x_starts[i] <= x_starts[i + 1]).only_enforce_if(same)
 
     # Symmetry breaking 2: first square in one quadrant.
-    model.Add(x_starts[0] < 36)
-    model.Add(y_starts[0] < 19)
+    model.add(x_starts[0] < (size_x + 1) // 2)
+    model.add(y_starts[0] < (size_y + 1) // 2)
 
     # Creates a solver and solves.
     solver = cp_model.CpSolver()
-    status = solver.Solve(model)
-    print('%s found in %0.2fs' % (solver.StatusName(status), solver.WallTime()))
+    solver.parameters.num_workers = 8
+    solver.parameters.max_time_in_seconds = 10.0
+    status = solver.solve(model)
+    print("%s found in %0.2fs" % (solver.status_name(status), solver.wall_time))
 
     # Prints solution.
-    if status == cp_model.OPTIMAL:
-        display = [[' ' for _ in range(size_x)] for _ in range(size_y)]
+    solution_found = status == cp_model.OPTIMAL or status == cp_model.FEASIBLE
+    if solution_found:
+        display = [[" " for _ in range(size_x)] for _ in range(size_y)]
         for i in range(num_squares):
-            sol_x = solver.Value(x_starts[i])
-            sol_y = solver.Value(y_starts[i])
-            sol_s = solver.Value(sizes[i])
-            char = format(i, '01x')
+            sol_x = solver.value(x_starts[i])
+            sol_y = solver.value(y_starts[i])
+            sol_s = solver.value(sizes[i])
+            char = format(i, "01x")
             for j in range(sol_s):
                 for k in range(sol_s):
-                    if display[sol_y + j][sol_x + k] != ' ':
-                        print('ERROR between %s and %s' %
-                              (display[sol_y + j][sol_x + k], char))
+                    if display[sol_y + j][sol_x + k] != " ":
+                        print(
+                            "ERROR between %s and %s"
+                            % (display[sol_y + j][sol_x + k], char)
+                        )
                     display[sol_y + j][sol_x + k] = char
 
         for line in range(size_y):
-            print(' '.join(display[line]))
-    return status == cp_model.FEASIBLE
+            print(" ".join(display[line]))
+    return solution_found
 
 
-for num in range(1, 15):
-    print('Trying with size =', num)
-    if cover_rectangle(num):
-        break
+def main(argv: Sequence[str]) -> None:
+    if len(argv) > 1:
+        raise app.UsageError("Too many command-line arguments.")
+    for num_squares in range(1, 15):
+        print("Trying with size =", num_squares)
+        if cover_rectangle(num_squares):
+            break
+
+
+if __name__ == "__main__":
+    app.run(main)

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,64 +13,131 @@
 
 #include "ortools/sat/cp_model_presolve.h"
 
-#include <sys/stat.h>
-
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
+#include <functional>
 #include <limits>
-#include <map>
 #include <memory>
 #include <numeric>
-#include <set>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"
 #include "absl/base/attributes.h"
+#include "absl/container/btree_map.h"
+#include "absl/container/btree_set.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/container/inlined_vector.h"
+#include "absl/flags/flag.h"
 #include "absl/hash/hash.h"
-#include "absl/random/random.h"
-#include "absl/strings/str_join.h"
-#include "ortools/base/integral_types.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/log/vlog_is_on.h"
+#include "absl/numeric/int128.h"
+#include "absl/random/distributions.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
+#include "absl/types/span.h"
+#include "google/protobuf/arena.h"
+#include "google/protobuf/repeated_field.h"
+#include "google/protobuf/repeated_ptr_field.h"
 #include "ortools/base/logging.h"
-#include "ortools/base/map_util.h"
 #include "ortools/base/mathutil.h"
+#include "ortools/base/protobuf_util.h"
 #include "ortools/base/stl_util.h"
+#include "ortools/base/strong_vector.h"
+#include "ortools/base/timer.h"
+#include "ortools/graph/strongly_connected_components.h"
+#include "ortools/graph/topologicalsorter.h"
 #include "ortools/port/proto_utils.h"
+#include "ortools/sat/2d_rectangle_presolve.h"
 #include "ortools/sat/circuit.h"
+#include "ortools/sat/clause.h"
 #include "ortools/sat/cp_model.pb.h"
 #include "ortools/sat/cp_model_checker.h"
 #include "ortools/sat/cp_model_expand.h"
-#include "ortools/sat/cp_model_loader.h"
 #include "ortools/sat/cp_model_mapping.h"
-#include "ortools/sat/cp_model_objective.h"
 #include "ortools/sat/cp_model_symmetries.h"
+#include "ortools/sat/cp_model_table.h"
 #include "ortools/sat/cp_model_utils.h"
 #include "ortools/sat/diffn_util.h"
+#include "ortools/sat/diophantine.h"
+#include "ortools/sat/inclusion.h"
+#include "ortools/sat/integer.h"
+#include "ortools/sat/integer_base.h"
+#include "ortools/sat/model.h"
+#include "ortools/sat/precedences.h"
+#include "ortools/sat/presolve_context.h"
+#include "ortools/sat/presolve_encoding.h"
 #include "ortools/sat/presolve_util.h"
 #include "ortools/sat/probing.h"
 #include "ortools/sat/sat_base.h"
+#include "ortools/sat/sat_inprocessing.h"
 #include "ortools/sat/sat_parameters.pb.h"
+#include "ortools/sat/sat_solver.h"
 #include "ortools/sat/simplification.h"
+#include "ortools/sat/solution_crush.h"
+#include "ortools/sat/util.h"
 #include "ortools/sat/var_domination.h"
+#include "ortools/sat/variable_expand.h"
+#include "ortools/util/affine_relation.h"
+#include "ortools/util/bitset.h"
+#include "ortools/util/logging.h"
+#include "ortools/util/saturated_arithmetic.h"
+#include "ortools/util/sorted_interval_list.h"
+#include "ortools/util/strong_integers.h"
+#include "ortools/util/time_limit.h"
 
 namespace operations_research {
 namespace sat {
+
+namespace {
+
+LinearExpression2 GetLinearExpression2FromProto(int a, int64_t coeff_a, int b,
+                                                int64_t coeff_b) {
+  LinearExpression2 result;
+  DCHECK(RefIsPositive(a));
+  DCHECK(RefIsPositive(b));
+  result.vars[0] = IntegerVariable(2 * a);
+  result.vars[1] = IntegerVariable(2 * b);
+  result.coeffs[0] = IntegerValue(coeff_a);
+  result.coeffs[1] = IntegerValue(coeff_b);
+  return result;
+}
+
+// TODO(user): Just make sure this invariant is enforced in all our linear
+// constraint after copy, and simplify the code!
+bool LinearConstraintIsClean(const LinearConstraintProto& linear) {
+  const int num_vars = linear.vars().size();
+  for (int i = 0; i < num_vars; ++i) {
+    if (!RefIsPositive(linear.vars(i))) return false;
+    if (linear.coeffs(i) == 0) return false;
+  }
+  return true;
+}
+
+}  // namespace
 
 bool CpModelPresolver::RemoveConstraint(ConstraintProto* ct) {
   ct->Clear();
   return true;
 }
 
-// Remove all empty constraints. Note that we need to remap the interval
-// references.
+// Remove all empty constraints and duplicated intervals. Note that we need to
+// remap the interval references.
 //
 // Now that they have served their purpose, we also remove dummy constraints,
 // otherwise that causes issue because our model are invalid in tests.
 void CpModelPresolver::RemoveEmptyConstraints() {
+  interval_representative_.clear();
   std::vector<int> interval_mapping(context_->working_model->constraints_size(),
                                     -1);
   int new_num_constraints = 0;
@@ -78,16 +145,27 @@ void CpModelPresolver::RemoveEmptyConstraints() {
       context_->working_model->constraints_size();
   for (int c = 0; c < old_num_non_empty_constraints; ++c) {
     const auto type = context_->working_model->constraints(c).constraint_case();
-    if (type == ConstraintProto::ConstraintCase::CONSTRAINT_NOT_SET) continue;
-    if (type == ConstraintProto::ConstraintCase::kDummyConstraint) continue;
-    if (type == ConstraintProto::ConstraintCase::kInterval) {
-      interval_mapping[c] = new_num_constraints;
-    }
-    context_->working_model->mutable_constraints(new_num_constraints++)
+    if (type == ConstraintProto::CONSTRAINT_NOT_SET) continue;
+    if (type == ConstraintProto::kDummyConstraint) continue;
+    context_->working_model->mutable_constraints(new_num_constraints)
         ->Swap(context_->working_model->mutable_constraints(c));
+    if (type == ConstraintProto::kInterval) {
+      // Warning: interval_representative_ holds a pointer to the working model
+      // to compute hashes, so we need to be careful about not changing a
+      // constraint after its index is added to the map.
+      const auto [it, inserted] = interval_representative_.insert(
+          {new_num_constraints, new_num_constraints});
+      interval_mapping[c] = it->second;
+      if (it->second != new_num_constraints) {
+        context_->UpdateRuleStats(
+            "intervals: change duplicate index across constraints");
+        continue;
+      }
+    }
+    new_num_constraints++;
   }
-  context_->working_model->mutable_constraints()->DeleteSubrange(
-      new_num_constraints, old_num_non_empty_constraints - new_num_constraints);
+  google::protobuf::util::Truncate(
+      context_->working_model->mutable_constraints(), new_num_constraints);
   for (ConstraintProto& ct_ref :
        *context_->working_model->mutable_constraints()) {
     ApplyToAllIntervalIndices(
@@ -103,25 +181,34 @@ bool CpModelPresolver::PresolveEnforcementLiteral(ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
   if (!HasEnforcementLiteral(*ct)) return false;
 
+  auto remove_if_not_interval = [this, ct]() {
+    if (ct->constraint_case() == ConstraintProto::kInterval) {
+      return MarkOptionalIntervalAsFalse(ct);
+    } else {
+      return RemoveConstraint(ct);
+    }
+  };
+
   int new_size = 0;
   const int old_size = ct->enforcement_literal().size();
+  context_->tmp_literal_set.clear();
   for (const int literal : ct->enforcement_literal()) {
     if (context_->LiteralIsTrue(literal)) {
       // We can remove a literal at true.
-      context_->UpdateRuleStats("true enforcement literal");
+      context_->UpdateRuleStats("enforcement: true literal");
       continue;
     }
 
     if (context_->LiteralIsFalse(literal)) {
-      context_->UpdateRuleStats("false enforcement literal");
-      return RemoveConstraint(ct);
+      context_->UpdateRuleStats("enforcement: false literal");
+      return remove_if_not_interval();
     }
 
     if (context_->VariableIsUniqueAndRemovable(literal)) {
       // We can simply set it to false and ignore the constraint in this case.
-      context_->UpdateRuleStats("enforcement literal not used");
+      context_->UpdateRuleStats("enforcement: literal not used");
       CHECK(context_->SetLiteralToFalse(literal));
-      return RemoveConstraint(ct);
+      return remove_if_not_interval();
     }
 
     // If the literal only appear in the objective, we might be able to fix it
@@ -132,9 +219,25 @@ bool CpModelPresolver::PresolveEnforcementLiteral(ConstraintProto* ct) {
           context_->ObjectiveMap().at(PositiveRef(literal));
       if (RefIsPositive(literal) == (obj_coeff > 0)) {
         // It is just more advantageous to set it to false!
-        context_->UpdateRuleStats("enforcement literal with unique direction");
+        context_->UpdateRuleStats("enforcement: literal with unique direction");
         CHECK(context_->SetLiteralToFalse(literal));
-        return RemoveConstraint(ct);
+        return remove_if_not_interval();
+      }
+    }
+
+    // Deals with duplicate literals.
+    //
+    // TODO(user): Ideally we could do that just once during the first copy,
+    // and later never create such constraint.
+    if (old_size > 1) {
+      const auto [_, inserted] = context_->tmp_literal_set.insert(literal);
+      if (!inserted) {
+        context_->UpdateRuleStats("enforcement: removed duplicate literal");
+        continue;
+      }
+      if (context_->tmp_literal_set.contains(NegatedRef(literal))) {
+        context_->UpdateRuleStats("enforcement: can never be true");
+        return remove_if_not_interval();
       }
     }
 
@@ -146,7 +249,6 @@ bool CpModelPresolver::PresolveEnforcementLiteral(ConstraintProto* ct) {
 
 bool CpModelPresolver::PresolveBoolXor(ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
-  if (HasEnforcementLiteral(*ct)) return false;
 
   int new_size = 0;
   bool changed = false;
@@ -178,12 +280,13 @@ bool CpModelPresolver::PresolveBoolXor(ConstraintProto* ct) {
 
   if (new_size == 0) {
     if (num_true_literals % 2 == 0) {
-      return context_->NotifyThatModelIsUnsat("bool_xor: always false");
+      return MarkConstraintAsFalse(ct, "bool_xor: always false");
     } else {
       context_->UpdateRuleStats("bool_xor: always true");
       return RemoveConstraint(ct);
     }
-  } else if (new_size == 1) {  // We can fix the only active literal.
+  } else if (new_size == 1 && !HasEnforcementLiteral(*ct)) {
+    // We can fix the only active literal.
     if (num_true_literals % 2 == 0) {
       if (!context_->SetLiteralToTrue(ct->bool_xor().literals(0))) {
         return context_->NotifyThatModelIsUnsat(
@@ -202,7 +305,7 @@ bool CpModelPresolver::PresolveBoolXor(ConstraintProto* ct) {
     const int b = ct->bool_xor().literals(1);
     if (a == b) {
       if (num_true_literals % 2 == 0) {
-        return context_->NotifyThatModelIsUnsat("bool_xor: always false");
+        return MarkConstraintAsFalse(ct, "bool_xor: always false");
       } else {
         context_->UpdateRuleStats("bool_xor: always true");
         return RemoveConstraint(ct);
@@ -210,20 +313,26 @@ bool CpModelPresolver::PresolveBoolXor(ConstraintProto* ct) {
     }
     if (a == NegatedRef(b)) {
       if (num_true_literals % 2 == 1) {
-        return context_->NotifyThatModelIsUnsat("bool_xor: always false");
+        return MarkConstraintAsFalse(ct, "bool_xor: always false");
       } else {
         context_->UpdateRuleStats("bool_xor: always true");
         return RemoveConstraint(ct);
       }
     }
-    if (num_true_literals % 2 == 0) {  // a == not(b).
-      context_->StoreBooleanEqualityRelation(a, NegatedRef(b));
-    } else {  // a == b.
-      context_->StoreBooleanEqualityRelation(a, b);
-    }
-    context_->UpdateNewConstraintsVariableUsage();
-    context_->UpdateRuleStats("bool_xor: two active literals");
-    return RemoveConstraint(ct);
+    if (!HasEnforcementLiteral(*ct)) {
+      if (num_true_literals % 2 == 0) {  // a == not(b).
+        if (!context_->StoreBooleanEqualityRelation(a, NegatedRef(b))) {
+          return false;
+        }
+      } else {  // a == b.
+        if (!context_->StoreBooleanEqualityRelation(a, b)) {
+          return false;
+        }
+      }
+      context_->UpdateNewConstraintsVariableUsage();
+      context_->UpdateRuleStats("bool_xor: two active literals");
+      return RemoveConstraint(ct);
+    }  // TODO(user): maybe replace the enforced XOR by an enforced equality?
   }
 
   if (num_true_literals % 2 == 1) {
@@ -252,6 +361,10 @@ bool CpModelPresolver::PresolveBoolOr(ConstraintProto* ct) {
   }
 
   // Inspects the literals and deal with fixed ones.
+  //
+  // TODO(user): Because we remove literal on the first copy, maybe we can get
+  // rid of the set here. However we still need to be careful when remapping
+  // literals to their representatives.
   bool changed = false;
   context_->tmp_literals.clear();
   context_->tmp_literal_set.clear();
@@ -314,30 +427,38 @@ bool CpModelPresolver::PresolveBoolOr(ConstraintProto* ct) {
   return changed;
 }
 
-// Note this constraint does not update the constraint graph. Therefore, it
-// assumes that the constraint being marked as false is the constraint being
-// presolved.
+// Note this function does not update the constraint graph. It assumes this is
+// done elsewhere.
 ABSL_MUST_USE_RESULT bool CpModelPresolver::MarkConstraintAsFalse(
+    ConstraintProto* ct, std::string_view reason) {
+  if (!context_->MarkConstraintAsFalse(ct, reason)) return false;
+  if (ct->constraint_case() == ConstraintProto::kBoolOr) PresolveBoolOr(ct);
+  return true;
+}
+
+ABSL_MUST_USE_RESULT bool CpModelPresolver::MarkOptionalIntervalAsFalse(
     ConstraintProto* ct) {
-  if (HasEnforcementLiteral(*ct)) {
-    // Change the constraint to a bool_or.
-    ct->mutable_bool_or()->clear_literals();
-    for (const int lit : ct->enforcement_literal()) {
-      ct->mutable_bool_or()->add_literals(NegatedRef(lit));
-    }
-    ct->clear_enforcement_literal();
-    PresolveBoolOr(ct);
-    return true;
-  } else {
-    return context_->NotifyThatModelIsUnsat();
+  DCHECK_EQ(ct->constraint_case(), ConstraintProto::kInterval);
+  CHECK_EQ(ct->enforcement_literal_size(), 1);
+  const int enforcement_literal = ct->enforcement_literal(0);
+  if (!context_->SetLiteralToFalse(enforcement_literal)) {
+    return false;
   }
+  // Now that we forced the interval to be unperformed we know it will be
+  // ignored no matter what it contains as start/end/size, so we can make it
+  // trivial. But we cannot remove the interval constraint itself though,
+  // because it may be referenced in some no_overlap/no_overlap_2d constraints.
+  ct->mutable_interval()->clear_start();
+  ct->mutable_interval()->clear_end();
+  ct->mutable_interval()->clear_size();
+  return true;
 }
 
 bool CpModelPresolver::PresolveBoolAnd(ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
 
   if (!HasEnforcementLiteral(*ct)) {
-    context_->UpdateRuleStats("bool_and: non-reified.");
+    context_->UpdateRuleStats("bool_and: non-reified");
     for (const int literal : ct->bool_and().literals()) {
       if (!context_->SetLiteralToTrue(literal)) return true;
     }
@@ -346,21 +467,45 @@ bool CpModelPresolver::PresolveBoolAnd(ConstraintProto* ct) {
 
   bool changed = false;
   context_->tmp_literals.clear();
+  context_->tmp_literal_set.clear();
+  const absl::flat_hash_set<int> enforcement_literals_set(
+      ct->enforcement_literal().begin(), ct->enforcement_literal().end());
   for (const int literal : ct->bool_and().literals()) {
     if (context_->LiteralIsFalse(literal)) {
-      context_->UpdateRuleStats("bool_and: always false");
-      return MarkConstraintAsFalse(ct);
+      return MarkConstraintAsFalse(ct, "bool_and: always false");
     }
     if (context_->LiteralIsTrue(literal)) {
       changed = true;
       continue;
     }
-    if (context_->VariableIsUniqueAndRemovable(literal)) {
+    if (enforcement_literals_set.contains(literal)) {
+      context_->UpdateRuleStats("bool_and: x => x");
       changed = true;
+      continue;
+    }
+    if (enforcement_literals_set.contains(NegatedRef(literal))) {
+      return MarkConstraintAsFalse(ct, "bool_and: x => not x");
+    }
+    if (context_->VariableIsUniqueAndRemovable(literal)) {
+      // This is a "dual" reduction.
+      changed = true;
+      context_->UpdateRuleStats(
+          "bool_and: setting unused literal in rhs to true");
       if (!context_->SetLiteralToTrue(literal)) return true;
       continue;
     }
-    context_->tmp_literals.push_back(literal);
+
+    if (context_->tmp_literal_set.contains(NegatedRef(literal))) {
+      return MarkConstraintAsFalse(ct, "bool_and: cannot be enforced");
+    }
+
+    const auto [_, inserted] = context_->tmp_literal_set.insert(literal);
+    if (inserted) {
+      context_->tmp_literals.push_back(literal);
+    } else {
+      changed = true;
+      context_->UpdateRuleStats("bool_and: removed duplicate literal");
+    }
   }
 
   // Note that this is not the same behavior as a bool_or:
@@ -390,9 +535,17 @@ bool CpModelPresolver::PresolveBoolAnd(ConstraintProto* ct) {
 
       // The other case where the constraint is redundant is treated elsewhere.
       if (obj_coeff < 0) {
-        context_->UpdateRuleStats("bool_and: dual equality.");
-        context_->StoreBooleanEqualityRelation(enforcement,
-                                               ct->bool_and().literals(0));
+        context_->UpdateRuleStats("bool_and: dual equality");
+        // Extending `ct` = "enforcement => implied_literal" to an equality can
+        // break the hint only if hint(implied_literal) = 1 and
+        // hint(enforcement) = 0. But in this case the `enforcement` hint can be
+        // increased to 1 to preserve the hint feasibility.
+        const int implied_literal = ct->bool_and().literals(0);
+        solution_crush_.SetLiteralToValueIf(enforcement, true, implied_literal);
+        if (!context_->StoreBooleanEqualityRelation(enforcement,
+                                                    implied_literal)) {
+          return false;
+        }
       }
     }
   }
@@ -407,10 +560,15 @@ bool CpModelPresolver::PresolveAtMostOrExactlyOne(ConstraintProto* ct) {
                        ? ct->mutable_at_most_one()->mutable_literals()
                        : ct->mutable_exactly_one()->mutable_literals();
 
+  // Having a canonical constraint is needed for duplicate detection.
+  // This also change how we regroup bool_and.
+  std::sort(literals->begin(), literals->end());
+
   // Deal with duplicate variable reference.
   context_->tmp_literal_set.clear();
   for (const int literal : *literals) {
-    if (context_->tmp_literal_set.contains(literal)) {
+    const auto [_, inserted] = context_->tmp_literal_set.insert(literal);
+    if (!inserted) {
       if (!context_->SetLiteralToFalse(literal)) return false;
       context_->UpdateRuleStats(absl::StrCat(name, "duplicate literals"));
     }
@@ -440,12 +598,14 @@ bool CpModelPresolver::PresolveAtMostOrExactlyOne(ConstraintProto* ct) {
       }
       return RemoveConstraint(ct);
     }
-    context_->tmp_literal_set.insert(literal);
   }
+
+  // We can always remove all singleton variables (with or without cost) in an
+  // at_most_one or exactly one. We collect them and deal with this at the end.
+  std::vector<std::pair<int, int64_t>> singleton_literal_with_cost;
 
   // Remove fixed variables.
   bool changed = false;
-  bool transform_to_at_most_one = false;
   context_->tmp_literals.clear();
   for (const int literal : *literals) {
     if (context_->LiteralIsTrue(literal)) {
@@ -463,39 +623,81 @@ bool CpModelPresolver::PresolveAtMostOrExactlyOne(ConstraintProto* ct) {
       continue;
     }
 
-    // A singleton variable in an at most one can just be set to zero.
-    //
-    // In an exactly one, it can be left to the postsolve to decide, and the
-    // rest of the constraint can be transformed to an at most one.
-    bool is_removable = context_->VariableIsUniqueAndRemovable(literal);
-    if (is_at_most_one && !is_removable &&
-        context_->VariableWithCostIsUniqueAndRemovable(literal)) {
-      const auto it = context_->ObjectiveMap().find(PositiveRef(literal));
-      CHECK(it != context_->ObjectiveMap().end());
-      const int64_t coeff = it->second;
-
-      // Fixing it to zero need to go in the correct direction.
-      is_removable = (coeff > 0) == RefIsPositive(literal);
+    // A singleton variable with or without cost can be removed. See below.
+    if (context_->VariableIsUniqueAndRemovable(literal)) {
+      // A variable that doesn't appear in the objective can be seen as
+      // appearing with a coefficient of zero.
+      singleton_literal_with_cost.push_back({literal, 0});
+      continue;
     }
-
-    if (is_removable) {
-      if (is_at_most_one) {
-        context_->UpdateRuleStats("at_most_one: singleton");
-        if (!context_->SetLiteralToFalse(literal)) return false;
-        changed = true;
-        continue;
+    if (context_->VariableWithCostIsUniqueAndRemovable(literal)) {
+      const auto it = context_->ObjectiveMap().find(PositiveRef(literal));
+      DCHECK(it != context_->ObjectiveMap().end());
+      if (RefIsPositive(literal)) {
+        singleton_literal_with_cost.push_back({literal, it->second});
       } else {
-        changed = true;
-        is_at_most_one = true;
-        transform_to_at_most_one = true;
-        *(context_->mapping_model->add_constraints()) = *ct;
-        context_->UpdateRuleStats("exactly_one: singleton");
-        context_->MarkVariableAsRemoved(PositiveRef(literal));
-        continue;
+        // Note that we actually just store the objective change if this literal
+        // is true compared to it being false.
+        singleton_literal_with_cost.push_back({literal, -it->second});
       }
+      continue;
     }
 
     context_->tmp_literals.push_back(literal);
+  }
+
+  bool transform_to_at_most_one = false;
+  if (!singleton_literal_with_cost.empty()) {
+    changed = true;
+
+    // By domination argument, we can fix to false everything but the minimum.
+    if (singleton_literal_with_cost.size() > 1) {
+      absl::c_stable_sort(
+          singleton_literal_with_cost,
+          [](const std::pair<int, int64_t>& a,
+             const std::pair<int, int64_t>& b) { return a.second < b.second; });
+      for (int i = 1; i < singleton_literal_with_cost.size(); ++i) {
+        context_->UpdateRuleStats("at_most_one: dominated singleton");
+        if (!context_->SetLiteralToFalse(
+                singleton_literal_with_cost[i].first)) {
+          return false;
+        }
+      }
+      singleton_literal_with_cost.resize(1);
+    }
+
+    const int literal = singleton_literal_with_cost[0].first;
+    const int64_t literal_cost = singleton_literal_with_cost[0].second;
+    if (is_at_most_one && literal_cost >= 0) {
+      // We can just always set it to false in this case.
+      context_->UpdateRuleStats("at_most_one: singleton");
+      if (!context_->SetLiteralToFalse(literal)) return false;
+    } else if (context_->ShiftCostInExactlyOne(*literals, literal_cost)) {
+      // We can make the constraint an exactly one if needed since it is always
+      // beneficial to set this literal to true if everything else is zero. Now
+      // that we have an exactly one, we can transfer the cost to the other
+      // terms. The objective of literal should become zero, and we can then
+      // decide its value at postsolve and just have an at most one on the other
+      // literals.
+      DCHECK(!context_->ObjectiveMap().contains(PositiveRef(literal)));
+
+      if (!is_at_most_one) transform_to_at_most_one = true;
+      is_at_most_one = true;
+
+      context_->UpdateRuleStats("exactly_one: singleton");
+      context_->MarkVariableAsRemoved(PositiveRef(literal));
+
+      // Put a constraint in the mapping proto for postsolve.
+      auto* mapping_exo = context_->NewMappingConstraint(__FILE__, __LINE__)
+                              ->mutable_exactly_one();
+      for (const int lit : context_->tmp_literals) {
+        mapping_exo->add_literals(lit);
+      }
+      mapping_exo->add_literals(literal);
+    } else {
+      // If ShiftCostInExactlyOne() failed, keep the literal in the amo.
+      context_->tmp_literals.push_back(literal);
+    }
   }
 
   if (!is_at_most_one && !transform_to_at_most_one &&
@@ -563,8 +765,10 @@ bool CpModelPresolver::PresolveExactlyOne(ConstraintProto* ct) {
   // Size two: Equivalence.
   if (literals.size() == 2) {
     context_->UpdateRuleStats("exactly_one: size two");
-    context_->StoreBooleanEqualityRelation(literals[0],
-                                           NegatedRef(literals[1]));
+    if (!context_->StoreBooleanEqualityRelation(literals[0],
+                                                NegatedRef(literals[1]))) {
+      return false;
+    }
     return RemoveConstraint(ct);
   }
 
@@ -583,13 +787,214 @@ bool CpModelPresolver::CanonicalizeLinearArgument(const ConstraintProto& ct,
   return changed;
 }
 
-bool CpModelPresolver::PresolveLinMax(ConstraintProto* ct) {
-  if (context_->ModelIsUnsat()) return false;
-  if (HasEnforcementLiteral(*ct)) return false;
+// Deal with X = lin_max(exprs) where all exprs are divisible by gcd.
+// X must be divisible also, and we can divide everything.
+bool CpModelPresolver::DivideLinMaxByGcd(int c, ConstraintProto* ct) {
+  LinearArgumentProto* lin_max = ct->mutable_lin_max();
+
+  // Compute gcd of exprs first.
+  int64_t gcd = 0;
+  for (const LinearExpressionProto& expr : lin_max->exprs()) {
+    gcd = LinearExpressionGcd(expr, gcd);
+    if (gcd == 1) break;
+  }
+  if (gcd <= 1) return true;
+
+  // TODO(user): deal with all UNSAT case.
+  // Also if the target is affine, we can canonicalize it.
+  const LinearExpressionProto& target = lin_max->target();
+  const int64_t old_gcd = gcd;
+  gcd = LinearExpressionGcd(target, gcd);
+  if (gcd != old_gcd) {
+    if (target.vars().empty()) {
+      return context_->NotifyThatModelIsUnsat("infeasible lin_max");
+    }
+
+    // If the target is affine, we can solve the diophantine equation and
+    // express the target in term of a new variable.
+    if (target.vars().size() == 1) {
+      gcd = old_gcd;
+      context_->UpdateRuleStats("lin_max: canonicalize target using gcd");
+      if (!context_->CanonicalizeAffineVariable(
+              target.vars(0), target.coeffs(0), gcd, -target.offset())) {
+        return false;
+      }
+      CanonicalizeLinearExpression(*ct, lin_max->mutable_target());
+      context_->UpdateConstraintVariableUsage(c);
+      CHECK_EQ(LinearExpressionGcd(target, gcd), gcd);
+    } else {
+      context_->UpdateRuleStats(
+          "TODO lin_max: lhs not trivially divisible by rhs gcd");
+    }
+  }
+  if (gcd <= 1) return true;
+
+  context_->UpdateRuleStats("lin_max: divising by gcd");
+  DivideLinearExpression(gcd, lin_max->mutable_target());
+  for (LinearExpressionProto& expr : *lin_max->mutable_exprs()) {
+    DivideLinearExpression(gcd, &expr);
+  }
+  return true;
+}
+
+namespace {
+
+int64_t EvaluateSingleVariableExpression(const LinearExpressionProto& expr,
+                                         int var, int64_t value) {
+  int64_t result = expr.offset();
+  for (int i = 0; i < expr.vars().size(); ++i) {
+    CHECK_EQ(expr.vars(i), var);
+    result += expr.coeffs(i) * value;
+  }
+  return result;
+}
+
+template <class ExpressionList>
+int GetFirstVar(ExpressionList exprs) {
+  for (const LinearExpressionProto& expr : exprs) {
+    for (const int var : expr.vars()) {
+      DCHECK(RefIsPositive(var));
+      return var;
+    }
+  }
+  return -1;
+}
+
+}  // namespace
+
+bool CpModelPresolver::PropagateAndReduceAffineMax(ConstraintProto* ct) {
+  // Get the unique variable appearing in the expressions.
+  const int unique_var = GetFirstVar(ct->lin_max().exprs());
+
+  const auto& lin_max = ct->lin_max();
+  const int num_exprs = lin_max.exprs_size();
+  const auto& target = lin_max.target();
+  std::vector<int> num_wins(num_exprs, 0);
+  std::vector<int64_t> reachable_target_values;
+  std::vector<int64_t> valid_variable_values;
+  std::vector<int64_t> tmp_values(num_exprs);
+
+  const bool target_has_same_unique_var =
+      target.vars_size() == 1 && target.vars(0) == unique_var;
+
+  CHECK_LE(context_->DomainOf(unique_var).Size(), 1000);
+
+  for (const int64_t value : context_->DomainOf(unique_var).Values()) {
+    int64_t current_max = std::numeric_limits<int64_t>::min();
+
+    // Fill tmp_values and compute current_max;
+    for (int i = 0; i < num_exprs; ++i) {
+      const int64_t v =
+          EvaluateSingleVariableExpression(lin_max.exprs(i), unique_var, value);
+      current_max = std::max(current_max, v);
+      tmp_values[i] = v;
+    }
+
+    // Check if any expr produced a value compatible with the target.
+    if (!context_->DomainContains(target, current_max)) continue;
+
+    // Special case: affine(x) == max(exprs(x)). We can check if the affine()
+    // and the max(exprs) are compatible.
+    if (target_has_same_unique_var &&
+        EvaluateSingleVariableExpression(target, unique_var, value) !=
+            current_max) {
+      continue;
+    }
+
+    valid_variable_values.push_back(value);
+    reachable_target_values.push_back(current_max);
+    for (int i = 0; i < num_exprs; ++i) {
+      DCHECK_LE(tmp_values[i], current_max);
+      if (tmp_values[i] == current_max) {
+        num_wins[i]++;
+      }
+    }
+  }
+
+  if (reachable_target_values.empty() || valid_variable_values.empty()) {
+    return MarkConstraintAsFalse(ct,
+                                 "lin_max: infeasible affine_max constraint");
+  }
+
+  {
+    bool reduced = false;
+    if (!context_->IntersectDomainWith(
+            target, Domain::FromValues(reachable_target_values), &reduced)) {
+      return true;
+    }
+    if (reduced) {
+      context_->UpdateRuleStats("lin_max: affine_max target domain reduced");
+    }
+  }
+
+  {
+    bool reduced = false;
+    if (!context_->IntersectDomainWith(
+            unique_var, Domain::FromValues(valid_variable_values), &reduced)) {
+      return true;
+    }
+    if (reduced) {
+      context_->UpdateRuleStats(
+          "lin_max: unique affine_max var domain reduced");
+    }
+  }
+
+  // If one expression always wins, even tied, we can eliminate all the others.
+  for (int i = 0; i < num_exprs; ++i) {
+    if (num_wins[i] == valid_variable_values.size()) {
+      const LinearExpressionProto winner_expr = lin_max.exprs(i);
+      ct->mutable_lin_max()->clear_exprs();
+      *ct->mutable_lin_max()->add_exprs() = winner_expr;
+      break;
+    }
+  }
+
+  bool changed = false;
+  if (ct->lin_max().exprs_size() > 1) {
+    int new_size = 0;
+    for (int i = 0; i < num_exprs; ++i) {
+      if (num_wins[i] == 0) continue;
+      *ct->mutable_lin_max()->mutable_exprs(new_size) = ct->lin_max().exprs(i);
+      new_size++;
+    }
+    if (new_size < ct->lin_max().exprs_size()) {
+      context_->UpdateRuleStats("lin_max: removed affine_max exprs");
+      google::protobuf::util::Truncate(ct->mutable_lin_max()->mutable_exprs(),
+                                       new_size);
+      changed = true;
+    }
+  }
+
+  if (context_->IsFixed(target)) {
+    context_->UpdateRuleStats("lin_max: fixed affine_max target");
+    return RemoveConstraint(ct);
+  }
+
+  if (target_has_same_unique_var) {
+    context_->UpdateRuleStats("lin_max: target_affine(x) = max(affine_i(x))");
+    return RemoveConstraint(ct);
+  }
+
+  // Remove the affine_max constraint if the target is removable and if domains
+  // have been propagated without loss. For now, we known that there is no loss
+  // if the target is a single ref. Since all the expression are affine, in this
+  // case we are fine.
+  if (ExpressionContainsSingleRef(target) &&
+      context_->VariableIsUniqueAndRemovable(target.vars(0))) {
+    context_->MarkVariableAsRemoved(target.vars(0));
+    context_->NewMappingConstraint(*ct, __FILE__, __LINE__);
+    context_->UpdateRuleStats("lin_max: unused affine_max target");
+    return RemoveConstraint(ct);
+  }
+
+  return changed;
+}
+
+bool CpModelPresolver::PropagateAndReduceLinMax(ConstraintProto* ct) {
+  const LinearExpressionProto& target = ct->lin_max().target();
 
   // Compute the infered min/max of the target.
   // Update target domain (if it is not a complex expression).
-  const LinearExpressionProto& target = ct->lin_max().target();
   {
     int64_t infered_min = context_->MinOf(target);
     int64_t infered_max = std::numeric_limits<int64_t>::min();
@@ -600,8 +1005,7 @@ bool CpModelPresolver::PresolveLinMax(ConstraintProto* ct) {
 
     if (target.vars().empty()) {
       if (!Domain(infered_min, infered_max).Contains(target.offset())) {
-        context_->UpdateRuleStats("lin_max: infeasible");
-        return MarkConstraintAsFalse(ct);
+        return MarkConstraintAsFalse(ct, "lin_max: infeasible");
       }
     }
     if (target.vars().size() <= 1) {  // Affine
@@ -623,7 +1027,6 @@ bool CpModelPresolver::PresolveLinMax(ConstraintProto* ct) {
 
   // Filter the expressions which are smaller than target_min.
   const int64_t target_min = context_->MinOf(target);
-  const int64_t target_max = context_->MaxOf(target);
   bool changed = false;
   {
     // If one expression is >= target_min,
@@ -662,15 +1065,114 @@ bool CpModelPresolver::PresolveLinMax(ConstraintProto* ct) {
     }
     if (new_size < ct->lin_max().exprs_size()) {
       context_->UpdateRuleStats("lin_max: removed exprs");
-      ct->mutable_lin_max()->mutable_exprs()->DeleteSubrange(
-          new_size, ct->lin_max().exprs_size() - new_size);
+      google::protobuf::util::Truncate(ct->mutable_lin_max()->mutable_exprs(),
+                                       new_size);
       changed = true;
     }
   }
 
+  return changed;
+}
+
+bool CpModelPresolver::PresolveLinMax(int c, ConstraintProto* ct) {
+  if (context_->ModelIsUnsat()) return false;
+  // TODO(user): add support for this case.
+  if (HasEnforcementLiteral(*ct)) return false;
+  const LinearExpressionProto& target = ct->lin_max().target();
+
+  // x = max(x, xi...) => forall i, x >= xi.
+  for (const LinearExpressionProto& expr : ct->lin_max().exprs()) {
+    if (LinearExpressionProtosAreEqual(expr, target)) {
+      for (const LinearExpressionProto& e : ct->lin_max().exprs()) {
+        if (LinearExpressionProtosAreEqual(e, target)) continue;
+        LinearConstraintProto* prec =
+            context_->working_model->add_constraints()->mutable_linear();
+        prec->add_domain(0);
+        prec->add_domain(std::numeric_limits<int64_t>::max());
+        AddLinearExpressionToLinearConstraint(target, 1, prec);
+        AddLinearExpressionToLinearConstraint(e, -1, prec);
+      }
+      context_->UpdateRuleStats("lin_max: x = max(x, ...)");
+      return RemoveConstraint(ct);
+    }
+  }
+
+  const bool is_one_var_affine_max =
+      ExpressionsContainsOnlyOneVar(ct->lin_max().exprs()) &&
+      ct->lin_max().target().vars_size() <= 1;
+  bool unique_var_is_small_enough = false;
+  const bool is_int_abs = IsAffineIntAbs(*ct);
+
+  if (is_one_var_affine_max) {
+    const int unique_var = GetFirstVar(ct->lin_max().exprs());
+    unique_var_is_small_enough = context_->DomainOf(unique_var).Size() <= 1000;
+  }
+
+  bool changed;
+  if (is_one_var_affine_max && unique_var_is_small_enough) {
+    changed = PropagateAndReduceAffineMax(ct);
+  } else if (is_int_abs) {
+    changed = PropagateAndReduceIntAbs(ct);
+  } else {
+    changed = PropagateAndReduceLinMax(ct);
+  }
+
+  if (context_->ModelIsUnsat()) return false;
+  if (ct->constraint_case() != ConstraintProto::kLinMax) {
+    // The constraint was removed by the propagate helpers.
+    return changed;
+  }
+
   if (ct->lin_max().exprs().empty()) {
-    context_->UpdateRuleStats("lin_max: no exprs");
-    return MarkConstraintAsFalse(ct);
+    return MarkConstraintAsFalse(ct, "lin_max: no exprs");
+  }
+
+  // Try to reduce lin_max using known relation.
+  if (ct->lin_max().exprs().size() < 10) {
+    const int num_exprs = ct->lin_max().exprs().size();
+
+    bool simplified = false;
+    std::vector<bool> can_be_removed(num_exprs, false);
+    for (int i = 0; i < num_exprs; ++i) {
+      if (ct->lin_max().exprs(i).vars().size() != 1) continue;
+      for (int j = 0; j < num_exprs; ++j) {
+        if (i == j) continue;
+        if (can_be_removed[j]) continue;
+
+        // Note that we skip constant expressions as this should already be
+        // handled when we compute the domain of each expression and remove
+        // the ones that are smaller than the target.
+        if (ct->lin_max().exprs(j).vars().size() != 1) continue;
+
+        // Do we know if expr(i) <= expr(j) ?
+        const LinearExpression2 expr2 = GetLinearExpression2FromProto(
+            ct->lin_max().exprs(i).vars(0), ct->lin_max().exprs(i).coeffs(0),
+            ct->lin_max().exprs(j).vars(0), -ct->lin_max().exprs(j).coeffs(0));
+        const IntegerValue lb = kMinIntegerValue;
+        const IntegerValue ub(ct->lin_max().exprs(j).offset() -
+                              ct->lin_max().exprs(i).offset());
+        const RelationStatus status = known_linear2_.GetStatus(expr2, lb, ub);
+        if (status == RelationStatus::IS_TRUE) {
+          simplified = true;
+          can_be_removed[i] = true;
+          break;
+        }
+      }
+    }
+
+    if (simplified) {
+      context_->UpdateRuleStats(
+          "lin_max: removed expression smaller than others");
+      int new_size = 0;
+      for (int i = 0; i < num_exprs; ++i) {
+        if (can_be_removed[i]) continue;
+        *ct->mutable_lin_max()->mutable_exprs(new_size++) =
+            ct->lin_max().exprs(i);
+      }
+      google::protobuf::util::Truncate(ct->mutable_lin_max()->mutable_exprs(),
+                                       new_size);
+      context_->UpdateConstraintVariableUsage(c);
+    }
   }
 
   // If only one is left, we can convert to an equality. Note that we create a
@@ -696,9 +1198,13 @@ bool CpModelPresolver::PresolveLinMax(ConstraintProto* ct) {
     return RemoveConstraint(ct);
   }
 
+  if (!DivideLinMaxByGcd(c, ct)) return false;
+
   // Cut everything above the max if possible.
   // If one of the linear expression has many term and is above the max, we
   // abort early since none of the other rule can be applied.
+  const int64_t target_min = context_->MinOf(target);
+  const int64_t target_max = context_->MaxOf(target);
   {
     bool abort = false;
     for (const LinearExpressionProto& expr : ct->lin_max().exprs()) {
@@ -709,15 +1215,104 @@ bool CpModelPresolver::PresolveLinMax(ConstraintProto* ct) {
         return true;
       }
       if (modified) {
-        context_->UpdateRuleStats("lin_max: reduced expression domain.");
+        context_->UpdateRuleStats("lin_max: reduced expression domain");
       }
       const int64_t value_max = context_->MaxOf(expr);
       if (value_max > target_max) {
-        context_->UpdateRuleStats("TODO lin_max: linear expression above max.");
+        context_->UpdateRuleStats("TODO lin_max: linear expression above max");
         abort = true;
       }
     }
     if (abort) return changed;
+  }
+
+  // Checks if the affine target domain is constraining.
+  bool linear_target_domain_contains_max_domain = false;
+  if (ExpressionContainsSingleRef(target)) {  // target = +/- var.
+    int64_t infered_min = std::numeric_limits<int64_t>::min();
+    int64_t infered_max = std::numeric_limits<int64_t>::min();
+    for (const LinearExpressionProto& expr : ct->lin_max().exprs()) {
+      infered_min = std::max(infered_min, context_->MinOf(expr));
+      infered_max = std::max(infered_max, context_->MaxOf(expr));
+    }
+    Domain rhs_domain;
+    for (const LinearExpressionProto& expr : ct->lin_max().exprs()) {
+      rhs_domain = rhs_domain.UnionWith(
+          context_->DomainSuperSetOf(expr).IntersectionWith(
+              {infered_min, infered_max}));
+    }
+
+    // Checks if all values from the max(exprs) belong in the domain of the
+    // target.
+    // Note that the target is +/-var.
+    DCHECK_EQ(std::abs(target.coeffs(0)), 1);
+    const Domain target_domain =
+        target.coeffs(0) == 1 ? context_->DomainOf(target.vars(0))
+                              : context_->DomainOf(target.vars(0)).Negation();
+    linear_target_domain_contains_max_domain =
+        rhs_domain.IsIncludedIn(target_domain);
+  }
+
+  // Avoid to remove the constraint for special cases:
+  // affine(x) = max(expr(x, ...), ...);
+  //
+  // TODO(user): We could presolve this, but there are a few type of cases.
+  // for example:
+  // - x = max(x + 3, ...) : infeasible.
+  // - x = max(x - 2, ...) : reduce arity: x = max(...)
+  // - x = max(2x, ...) we have x <= 0
+  // - etc...
+  // Actually, I think for the expr=affine' case, it reduces to:
+  // affine(x) >= affine'(x)
+  // affine(x) = max(...);
+  if (linear_target_domain_contains_max_domain) {
+    const int target_var = target.vars(0);
+    bool abort = false;
+    for (const LinearExpressionProto& expr : ct->lin_max().exprs()) {
+      for (const int var : expr.vars()) {
+        if (var == target_var &&
+            !LinearExpressionProtosAreEqual(expr, target)) {
+          abort = true;
+          break;
+        }
+      }
+      if (abort) break;
+    }
+    if (abort) {
+      // Actually the expression can be more than affine.
+      // We only know that the target is affine here.
+      context_->UpdateRuleStats(
+          "TODO lin_max: affine(x) = max(affine'(x), ...) !!");
+      linear_target_domain_contains_max_domain = false;
+    }
+  }
+
+  // If the target is not used, and safe, we can remove the constraint.
+  if (linear_target_domain_contains_max_domain &&
+      context_->VariableIsUniqueAndRemovable(target.vars(0))) {
+    context_->UpdateRuleStats("lin_max: unused affine target");
+    context_->MarkVariableAsRemoved(target.vars(0));
+    context_->NewMappingConstraint(*ct, __FILE__, __LINE__);
+    return RemoveConstraint(ct);
+  }
+
+  // If the target is only used in the objective, and safe, we can simplify the
+  // constraint.
+  if (linear_target_domain_contains_max_domain &&
+      context_->VariableWithCostIsUniqueAndRemovable(target.vars(0)) &&
+      (target.coeffs(0) > 0) ==
+          (context_->ObjectiveCoeff(target.vars(0)) > 0)) {
+    context_->UpdateRuleStats("lin_max: rewrite with precedences");
+    for (const LinearExpressionProto& expr : ct->lin_max().exprs()) {
+      LinearConstraintProto* prec =
+          context_->working_model->add_constraints()->mutable_linear();
+      prec->add_domain(0);
+      prec->add_domain(std::numeric_limits<int64_t>::max());
+      AddLinearExpressionToLinearConstraint(target, 1, prec);
+      AddLinearExpressionToLinearConstraint(expr, -1, prec);
+    }
+    context_->NewMappingConstraint(*ct, __FILE__, __LINE__);
+    return RemoveConstraint(ct);
   }
 
   // Deal with fixed target case.
@@ -744,7 +1339,7 @@ bool CpModelPresolver::PresolveLinMax(ConstraintProto* ct) {
     }
     if (all_booleans) {
       if (literals.empty()) {
-        return MarkConstraintAsFalse(ct);
+        return MarkConstraintAsFalse(ct, "lin_max: all boolean and no support");
       }
 
       // At least one true;
@@ -757,92 +1352,100 @@ bool CpModelPresolver::PresolveLinMax(ConstraintProto* ct) {
     return changed;
   }
 
-  // If everything is Boolean and affine, do not use a lin max!
-  if (context_->ExpressionIsAffineBoolean(target)) {
-    const int target_ref = context_->LiteralForExpressionMax(target);
-
-    bool abort = false;
-
-    bool min_is_reachable = false;
-    std::vector<int> min_literals;
-    std::vector<int> literals_above_min;
-    std::vector<int> max_literals;
-
-    for (const LinearExpressionProto& expr : ct->lin_max().exprs()) {
-      const int64_t value_min = context_->MinOf(expr);
-      const int64_t value_max = context_->MaxOf(expr);
-
-      // This shouldn't happen, but it document the fact.
-      if (value_min > target_min) {
-        context_->UpdateRuleStats("lin_max: fix target");
-        if (!context_->SetLiteralToTrue(target_ref)) return true;
-        abort = true;
-        break;
-      }
-
-      // expr is fixed.
-      if (value_min == value_max) {
-        if (value_min == target_min) min_is_reachable = true;
-        continue;
-      }
-
-      if (!context_->ExpressionIsAffineBoolean(expr)) {
-        abort = true;
-        break;
-      }
-
-      const int ref = context_->LiteralForExpressionMax(expr);
-      CHECK_LE(value_min, target_min);
-      if (value_min == target_min) {
-        min_literals.push_back(NegatedRef(ref));
-      }
-
-      CHECK_LE(value_max, target_max);
-      if (value_max == target_max) {
-        max_literals.push_back(ref);
-        literals_above_min.push_back(ref);
-      } else if (value_max > target_min) {
-        literals_above_min.push_back(ref);
-      } else if (value_max == target_min) {
-        min_literals.push_back(ref);
-      }
-    }
-    if (!abort) {
-      context_->UpdateRuleStats("lin_max: all Booleans.");
-
-      // target_ref => at_least_one(max_literals);
-      ConstraintProto* clause = context_->working_model->add_constraints();
-      clause->add_enforcement_literal(target_ref);
-      clause->mutable_bool_or();
-      for (const int lit : max_literals) {
-        clause->mutable_bool_or()->add_literals(lit);
-      }
-
-      // not(target_ref) => not(lit) for lit in literals_above_min
-      for (const int lit : literals_above_min) {
-        context_->AddImplication(lit, target_ref);
-      }
-
-      if (!min_is_reachable) {
-        // not(target_ref) => at_least_one(min_literals).
-        ConstraintProto* clause = context_->working_model->add_constraints();
-        clause->add_enforcement_literal(NegatedRef(target_ref));
-        clause->mutable_bool_or();
-        for (const int lit : min_literals) {
-          clause->mutable_bool_or()->add_literals(lit);
-        }
-      }
-
-      context_->UpdateNewConstraintsVariableUsage();
-      return RemoveConstraint(ct);
-    }
-  }
-
+  changed |= PresolveLinMaxWhenAllBoolean(ct);
   return changed;
 }
 
-// This presolve expect that the constraint only contains affine expressions.
-bool CpModelPresolver::PresolveIntAbs(ConstraintProto* ct) {
+// If everything is Boolean and affine, do not use a lin max!
+bool CpModelPresolver::PresolveLinMaxWhenAllBoolean(ConstraintProto* ct) {
+  if (context_->ModelIsUnsat()) return false;
+  if (HasEnforcementLiteral(*ct)) return false;
+
+  const LinearExpressionProto& target = ct->lin_max().target();
+  if (!context_->ExpressionIsAffineBoolean(target)) return false;
+
+  const int64_t target_min = context_->MinOf(target);
+  const int64_t target_max = context_->MaxOf(target);
+  const int target_ref = context_->LiteralForExpressionMax(target);
+
+  bool min_is_reachable = false;
+  std::vector<int> min_literals;
+  std::vector<int> literals_above_min;
+  std::vector<int> max_literals;
+
+  for (const LinearExpressionProto& expr : ct->lin_max().exprs()) {
+    if (!context_->ExpressionIsAffineBoolean(expr)) return false;
+    const int64_t value_min = context_->MinOf(expr);
+    const int64_t value_max = context_->MaxOf(expr);
+    const int ref = context_->LiteralForExpressionMax(expr);
+
+    // Get corner case out of the way, and wait for the constraint to be
+    // processed again in these case.
+    if (value_min > target_min) {
+      context_->UpdateRuleStats("lin_max: fix target");
+      (void)context_->SetLiteralToTrue(target_ref);
+      return false;
+    }
+    if (value_max > target_max) {
+      context_->UpdateRuleStats("lin_max: fix bool expr");
+      (void)context_->SetLiteralToFalse(ref);
+      return false;
+    }
+
+    // expr is fixed.
+    if (value_min == value_max) {
+      if (value_min == target_min) min_is_reachable = true;
+      continue;
+    }
+
+    CHECK_LE(value_min, target_min);
+    if (value_min == target_min) {
+      min_literals.push_back(NegatedRef(ref));
+    }
+
+    CHECK_LE(value_max, target_max);
+    if (value_max == target_max) {
+      max_literals.push_back(ref);
+      literals_above_min.push_back(ref);
+    } else if (value_max > target_min) {
+      literals_above_min.push_back(ref);
+    } else if (value_max == target_min) {
+      min_literals.push_back(ref);
+    }
+  }
+
+  context_->UpdateRuleStats("lin_max: all booleans");
+
+  // target_ref => at_least_one(max_literals);
+  ConstraintProto* clause = context_->working_model->add_constraints();
+  clause->add_enforcement_literal(target_ref);
+  clause->mutable_bool_or();
+  for (const int lit : max_literals) {
+    clause->mutable_bool_or()->add_literals(lit);
+  }
+
+  // not(target_ref) => not(lit) for lit in literals_above_min
+  for (const int lit : literals_above_min) {
+    context_->AddImplication(lit, target_ref);
+  }
+
+  if (!min_is_reachable) {
+    // not(target_ref) => at_least_one(min_literals).
+    ConstraintProto* clause = context_->working_model->add_constraints();
+    clause->add_enforcement_literal(NegatedRef(target_ref));
+    clause->mutable_bool_or();
+    for (const int lit : min_literals) {
+      clause->mutable_bool_or()->add_literals(lit);
+    }
+  }
+
+  context_->UpdateNewConstraintsVariableUsage();
+  return RemoveConstraint(ct);
+}
+
+// This presolve expect that the constraint only contains 1-var affine
+// expressions.
+bool CpModelPresolver::PropagateAndReduceIntAbs(ConstraintProto* ct) {
   CHECK_EQ(ct->enforcement_literal_size(), 0);
   if (context_->ModelIsUnsat()) return false;
   const LinearExpressionProto& target_expr = ct->lin_max().target();
@@ -861,11 +1464,11 @@ bool CpModelPresolver::PresolveIntAbs(ConstraintProto* ct) {
       return false;
     }
     if (expr_domain.IsFixed()) {
-      context_->UpdateRuleStats("int_abs: fixed expression");
+      context_->UpdateRuleStats("lin_max: fixed expression in int_abs");
       return RemoveConstraint(ct);
     }
     if (target_domain_modified) {
-      context_->UpdateRuleStats("int_abs: propagate domain from x to abs(x)");
+      context_->UpdateRuleStats("lin_max: propagate domain from x to abs(x)");
     }
   }
 
@@ -884,17 +1487,17 @@ bool CpModelPresolver::PresolveIntAbs(ConstraintProto* ct) {
     // This is the only reason why we don't support fully generic linear
     // expression.
     if (context_->IsFixed(target_expr)) {
-      context_->UpdateRuleStats("int_abs: fixed target");
+      context_->UpdateRuleStats("lin_max: fixed abs target");
       return RemoveConstraint(ct);
     }
     if (expr_domain_modified) {
-      context_->UpdateRuleStats("int_abs: propagate domain from abs(x) to x");
+      context_->UpdateRuleStats("lin_max: propagate domain from abs(x) to x");
     }
   }
 
   // Convert to equality if the sign of expr is fixed.
   if (context_->MinOf(expr) >= 0) {
-    context_->UpdateRuleStats("int_abs: converted to equality");
+    context_->UpdateRuleStats("lin_max: converted abs to equality");
     ConstraintProto* new_ct = context_->working_model->add_constraints();
     new_ct->set_name(ct->name());
     auto* arg = new_ct->mutable_linear();
@@ -902,13 +1505,16 @@ bool CpModelPresolver::PresolveIntAbs(ConstraintProto* ct) {
     arg->add_domain(0);
     AddLinearExpressionToLinearConstraint(target_expr, 1, arg);
     AddLinearExpressionToLinearConstraint(expr, -1, arg);
-    if (!CanonicalizeLinear(new_ct)) return false;
+    bool changed = false;
+    if (!CanonicalizeLinear(new_ct, &changed)) {
+      return true;
+    }
     context_->UpdateNewConstraintsVariableUsage();
     return RemoveConstraint(ct);
   }
 
   if (context_->MaxOf(expr) <= 0) {
-    context_->UpdateRuleStats("int_abs: converted to equality");
+    context_->UpdateRuleStats("lin_max: converted abs to equality");
     ConstraintProto* new_ct = context_->working_model->add_constraints();
     new_ct->set_name(ct->name());
     auto* arg = new_ct->mutable_linear();
@@ -916,7 +1522,10 @@ bool CpModelPresolver::PresolveIntAbs(ConstraintProto* ct) {
     arg->add_domain(0);
     AddLinearExpressionToLinearConstraint(target_expr, 1, arg);
     AddLinearExpressionToLinearConstraint(expr, 1, arg);
-    if (!CanonicalizeLinear(new_ct)) return false;
+    bool changed = false;
+    if (!CanonicalizeLinear(new_ct, &changed)) {
+      return true;
+    }
     context_->UpdateNewConstraintsVariableUsage();
     return RemoveConstraint(ct);
   }
@@ -928,83 +1537,140 @@ bool CpModelPresolver::PresolveIntAbs(ConstraintProto* ct) {
   if (ExpressionContainsSingleRef(target_expr) &&
       context_->VariableIsUniqueAndRemovable(target_expr.vars(0))) {
     context_->MarkVariableAsRemoved(target_expr.vars(0));
-    *context_->mapping_model->add_constraints() = *ct;
-    context_->UpdateRuleStats("int_abs: unused target");
+    context_->NewMappingConstraint(*ct, __FILE__, __LINE__);
+    context_->UpdateRuleStats("lin_max: unused abs target");
     return RemoveConstraint(ct);
-  }
-
-  // Store the x == abs(y) relation if expr and target_expr can be cast into a
-  // ref.
-  // TODO(user): Support general affine expression in for expr in the Store
-  //                method call.
-  {
-    if (ExpressionContainsSingleRef(target_expr) &&
-        ExpressionContainsSingleRef(expr)) {
-      const int target_ref = GetSingleRefFromExpression(target_expr);
-      const int expr_ref = GetSingleRefFromExpression(expr);
-      if (context_->StoreAbsRelation(target_ref, expr_ref)) {
-        context_->UpdateRuleStats("int_abs: store abs(x) == y");
-      }
-    }
   }
 
   return false;
 }
 
+Domain EvaluateImpliedIntProdDomain(const LinearArgumentProto& expr,
+                                    const PresolveContext& context) {
+  if (expr.exprs().size() == 2) {
+    const LinearExpressionProto& expr0 = expr.exprs(0);
+    const LinearExpressionProto& expr1 = expr.exprs(1);
+    if (LinearExpressionProtosAreEqual(expr0, expr1)) {
+      return context.DomainSuperSetOf(expr0).SquareSuperset();
+    }
+    if (expr0.vars().size() == 1 && expr1.vars().size() == 1 &&
+        expr0.vars(0) == expr1.vars(0)) {
+      return context.DomainOf(expr0.vars(0))
+          .QuadraticSuperset(expr0.coeffs(0), expr0.offset(), expr1.coeffs(0),
+                             expr1.offset());
+    }
+  }
+
+  Domain implied(1);
+  for (const LinearExpressionProto& expr : expr.exprs()) {
+    implied =
+        implied.ContinuousMultiplicationBy(context.DomainSuperSetOf(expr));
+  }
+  return implied;
+}
+
 bool CpModelPresolver::PresolveIntProd(ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
-  if (HasEnforcementLiteral(*ct)) return false;
 
-  // Remove constant expressions.
+  // Start by restricting the domain of target. We will be more precise later.
+  bool domain_modified = false;
+  Domain implied_domain =
+      EvaluateImpliedIntProdDomain(ct->int_prod(), *context_);
+  // TODO(user): if implied_domain and target domain are disjoint, mark the
+  // constraint as false.
+  if (!HasEnforcementLiteral(*ct) &&
+      !context_->IntersectDomainWith(ct->int_prod().target(), implied_domain,
+                                     &domain_modified)) {
+    return false;
+  }
+
+  // Remove a constraint if the target only appears in the constraint. For this
+  // to be correct some conditions must be met:
+  // - The target is an affine linear with coefficient -1 or 1.
+  // - The target does not appear in the rhs (no x = (a*x + b) * ...).
+  // - The target domain covers all the possible range of the rhs.
+  // This can be done whether or not there are enforcement literals, even if
+  // they are used in the target or the rhs.
+  if (ExpressionContainsSingleRef(ct->int_prod().target()) &&
+      context_->VariableIsUniqueAndRemovable(ct->int_prod().target().vars(0)) &&
+      std::abs(ct->int_prod().target().coeffs(0)) == 1) {
+    const LinearExpressionProto& target = ct->int_prod().target();
+    if (!absl::c_any_of(ct->int_prod().exprs(),
+                        [&target](const LinearExpressionProto& expr) {
+                          return absl::c_linear_search(expr.vars(),
+                                                       target.vars(0));
+                        })) {
+      const Domain target_domain =
+          Domain(target.offset())
+              .AdditionWith(context_->DomainOf(target.vars(0)));
+      if (implied_domain.IsIncludedIn(target_domain)) {
+        context_->MarkVariableAsRemoved(ct->int_prod().target().vars(0));
+        context_->NewMappingConstraint(*ct, __FILE__, __LINE__);
+        context_->UpdateRuleStats("int_prod: unused affine target");
+        return RemoveConstraint(ct);
+      }
+    }
+  }
+
+  // Remove constant expressions and compute the product of the max positive
+  // divisor of each term.
   int64_t constant_factor = 1;
   int new_size = 0;
   bool changed = false;
+  LinearArgumentProto old_proto = ct->int_prod();
   LinearArgumentProto* proto = ct->mutable_int_prod();
   for (int i = 0; i < ct->int_prod().exprs().size(); ++i) {
     LinearExpressionProto expr = ct->int_prod().exprs(i);
     if (context_->IsFixed(expr)) {
-      context_->UpdateRuleStats("int_prod: removed constant expressions.");
+      const int64_t expr_value = context_->FixedValue(expr);
+      constant_factor = CapProd(constant_factor, expr_value);
+      context_->UpdateRuleStats("int_prod: removed constant expressions");
       changed = true;
-      constant_factor = CapProd(constant_factor, context_->FixedValue(expr));
-      continue;
     } else {
-      const int64_t coeff = expr.coeffs(0);
-      const int64_t offset = expr.offset();
-      const int64_t gcd =
-          MathUtil::GCD64(static_cast<uint64_t>(std::abs(coeff)),
-                          static_cast<uint64_t>(std::abs(offset)));
-      if (gcd != 1) {
-        constant_factor = CapProd(constant_factor, gcd);
-        expr.set_coeffs(0, coeff / gcd);
-        expr.set_offset(offset / gcd);
-      }
+      const int64_t expr_divisor = LinearExpressionGcd(expr);
+      DivideLinearExpression(expr_divisor, &expr);
+      constant_factor = CapProd(constant_factor, expr_divisor);
+      *proto->mutable_exprs(new_size++) = expr;
     }
-    *proto->mutable_exprs(new_size++) = expr;
   }
   proto->mutable_exprs()->erase(proto->mutable_exprs()->begin() + new_size,
                                 proto->mutable_exprs()->end());
 
-  if (ct->int_prod().exprs().empty()) {
-    if (!context_->IntersectDomainWith(ct->int_prod().target(),
-                                       Domain(constant_factor))) {
-      return false;
+  if (ct->int_prod().exprs().empty() || constant_factor == 0) {
+    if (!context_->DomainContains(ct->int_prod().target(), constant_factor)) {
+      return MarkConstraintAsFalse(ct, "int_prod: always false");
     }
-    context_->UpdateRuleStats("int_prod: constant product");
+    if (!HasEnforcementLiteral(*ct)) {
+      if (!context_->IntersectDomainWith(ct->int_prod().target(),
+                                         Domain(constant_factor))) {
+        return false;
+      }
+      context_->UpdateRuleStats("int_prod: constant product");
+    } else {
+      // Replace ct with an enforced linear "target == constant_factor".
+      ConstraintProto* new_ct = context_->working_model->add_constraints();
+      *new_ct->mutable_enforcement_literal() = ct->enforcement_literal();
+      LinearConstraintProto* const lin = new_ct->mutable_linear();
+      lin->add_domain(constant_factor);
+      lin->add_domain(constant_factor);
+      AddLinearExpressionToLinearConstraint(ct->int_prod().target(), 1, lin);
+      context_->UpdateNewConstraintsVariableUsage();
+      context_->UpdateRuleStats("enforced int_prod: constant product");
+    }
     return RemoveConstraint(ct);
   }
 
-  if (constant_factor == 0) {
-    context_->UpdateRuleStats("int_prod: multiplication by zero");
-    if (!context_->IntersectDomainWith(ct->int_prod().target(), Domain(0))) {
-      return false;
-    }
-    return RemoveConstraint(ct);
+  // If target is fixed to zero, we can forget the constant factor.
+  if (context_->IsFixed(ct->int_prod().target()) &&
+      context_->FixedValue(ct->int_prod().target()) == 0 &&
+      constant_factor != 1) {
+    context_->UpdateRuleStats("int_prod: simplify by constant factor");
+    constant_factor = 1;
   }
 
-  // In this case, the only possible value that fit in the domains is zero.
+  // In this case, the only possible value that fits in the domains is zero.
   // We will check for UNSAT if zero is not achievable by the rhs below.
-  if (constant_factor == std::numeric_limits<int64_t>::min() ||
-      constant_factor == std::numeric_limits<int64_t>::max()) {
+  if (!HasEnforcementLiteral(*ct) && AtMinOrMaxInt64(constant_factor)) {
     context_->UpdateRuleStats("int_prod: overflow if non zero");
     if (!context_->IntersectDomainWith(ct->int_prod().target(), Domain(0))) {
       return false;
@@ -1012,18 +1678,61 @@ bool CpModelPresolver::PresolveIntProd(ConstraintProto* ct) {
     constant_factor = 1;
   }
 
-  // Replace by linear!
+  // Replace with linear if it cannot overflow.
   if (ct->int_prod().exprs().size() == 1) {
-    LinearConstraintProto* const lin =
-        context_->working_model->add_constraints()->mutable_linear();
+    LinearExpressionProto* const target =
+        ct->mutable_int_prod()->mutable_target();
+    ConstraintProto* const new_ct = context_->working_model->add_constraints();
+    *new_ct->mutable_enforcement_literal() = ct->enforcement_literal();
+    LinearConstraintProto* const lin = new_ct->mutable_linear();
+
+    if (context_->IsFixed(*target)) {
+      int64_t target_value = context_->FixedValue(*target);
+      if (target_value % constant_factor != 0) {
+        context_->working_model->mutable_constraints()->RemoveLast();
+        return MarkConstraintAsFalse(
+            ct, "int_prod: product incompatible with fixed target");
+      }
+      // expression == target_value / constant_factor.
+      lin->add_domain(target_value / constant_factor);
+      lin->add_domain(target_value / constant_factor);
+      AddLinearExpressionToLinearConstraint(ct->int_prod().exprs(0), 1, lin);
+      context_->UpdateNewConstraintsVariableUsage();
+      context_->UpdateRuleStats("int_prod: expression is constant");
+      return RemoveConstraint(ct);
+    }
+
+    const int64_t target_divisor = LinearExpressionGcd(*target);
+
+    // Reduce coefficients.
+    const int64_t gcd =
+        std::gcd(static_cast<uint64_t>(std::abs(constant_factor)),
+                 static_cast<uint64_t>(std::abs(target_divisor)));
+    if (gcd != 1) {
+      constant_factor /= gcd;
+      DivideLinearExpression(gcd, target);
+    }
+
+    // expression * constant_factor = target.
     lin->add_domain(0);
     lin->add_domain(0);
-    AddLinearExpressionToLinearConstraint(ct->int_prod().target(), 1, lin);
-    AddLinearExpressionToLinearConstraint(ct->int_prod().exprs(0),
-                                          -constant_factor, lin);
-    context_->UpdateNewConstraintsVariableUsage();
-    context_->UpdateRuleStats("int_prod: linearize product by constant.");
-    return RemoveConstraint(ct);
+    const bool overflow = !SafeAddLinearExpressionToLinearConstraint(
+                              ct->int_prod().target(), 1, lin) ||
+                          !SafeAddLinearExpressionToLinearConstraint(
+                              ct->int_prod().exprs(0), -constant_factor, lin);
+
+    // Check for overflow.
+    if (overflow ||
+        PossibleIntegerOverflow(*context_->working_model, lin->vars(),
+                                lin->coeffs(), lin->domain(0))) {
+      context_->working_model->mutable_constraints()->RemoveLast();
+      // The constant factor will be handled by the creation of an affine
+      // relation below.
+    } else {  // Replace with a linear equation.
+      context_->UpdateNewConstraintsVariableUsage();
+      context_->UpdateRuleStats("int_prod: linearize product by constant");
+      return RemoveConstraint(ct);
+    }
   }
 
   if (constant_factor != 1) {
@@ -1031,8 +1740,27 @@ bool CpModelPresolver::PresolveIntProd(ConstraintProto* ct) {
     //
     // coeff * X + offset must be a multiple of constant_factor, so
     // we can rewrite X so that this property is clear.
+    //
+    // Note(user): it is important for this to have a restricted target domain
+    // so we can choose a better representative.
     const LinearExpressionProto old_target = ct->int_prod().target();
     if (!context_->IsFixed(old_target)) {
+      // The call to CanonicalizeAffineVariable() creates an always enforced
+      // affine relation or makes the model UNSAT. Both cases are invalid if
+      // there are enforcement literals.
+      if (HasEnforcementLiteral(*ct) ||
+          CapProd(constant_factor, std::max(context_->MaxOf(old_target),
+                                            -context_->MinOf(old_target))) >=
+              std::numeric_limits<int64_t>::max() / 2) {
+        // Restore the original constraint (we cannot add back a new term for
+        // the constant factor: this may create a constraint with more than 2
+        // terms).
+        *ct->mutable_int_prod() = old_proto;
+        context_->UpdateRuleStats(
+            "int_prod: enforcement or overflow prevented creating a affine "
+            "relation");
+        return true;
+      }
       const int ref = old_target.vars(0);
       const int64_t coeff = old_target.coeffs(0);
       const int64_t offset = old_target.offset();
@@ -1049,9 +1777,10 @@ bool CpModelPresolver::PresolveIntProd(ConstraintProto* ct) {
     if (context_->IsFixed(old_target)) {
       const int64_t target_value = context_->FixedValue(old_target);
       if (target_value % constant_factor != 0) {
-        return context_->NotifyThatModelIsUnsat(
-            "int_prod: constant factor does not divide constant target");
+        return MarkConstraintAsFalse(
+            ct, "int_prod: constant factor does not divide constant target");
       }
+      changed = true;
       proto->clear_target();
       proto->mutable_target()->set_offset(target_value / constant_factor);
       context_->UpdateRuleStats(
@@ -1081,8 +1810,8 @@ bool CpModelPresolver::PresolveIntProd(ConstraintProto* ct) {
           new_coeff < absl::int128(std::numeric_limits<int64_t>::min()) ||
           new_offset > absl::int128(std::numeric_limits<int64_t>::max()) ||
           new_offset < absl::int128(std::numeric_limits<int64_t>::min())) {
-        return context_->NotifyThatModelIsUnsat(
-            "int_prod: overflow during simplification.");
+        return MarkConstraintAsFalse(
+            ct, "int_prod: overflow during simplification");
       }
 
       // Rewrite the target.
@@ -1095,18 +1824,34 @@ bool CpModelPresolver::PresolveIntProd(ConstraintProto* ct) {
   }
 
   // Restrict the target domain if possible.
-  Domain implied(1);
-  for (const LinearExpressionProto& expr : ct->int_prod().exprs()) {
-    implied =
-        implied.ContinuousMultiplicationBy(context_->DomainSuperSetOf(expr));
-  }
-  bool domain_modified = false;
-  if (!context_->IntersectDomainWith(ct->int_prod().target(), implied,
+  implied_domain = EvaluateImpliedIntProdDomain(ct->int_prod(), *context_);
+  const bool is_square = ct->int_prod().exprs_size() == 2 &&
+                         LinearExpressionProtosAreEqual(
+                             ct->int_prod().exprs(0), ct->int_prod().exprs(1));
+  if (!HasEnforcementLiteral(*ct) &&
+      !context_->IntersectDomainWith(ct->int_prod().target(), implied_domain,
                                      &domain_modified)) {
     return false;
   }
   if (domain_modified) {
-    context_->UpdateRuleStats("int_prod: reduced target domain.");
+    context_->UpdateRuleStats(absl::StrCat(
+        is_square ? "int_square" : "int_prod", ": reduced target domain"));
+  }
+
+  // y = x * x, we can reduce the domain of x from the domain of y.
+  if (is_square) {
+    const int64_t target_max = context_->MaxOf(ct->int_prod().target());
+    DCHECK_GE(target_max, 0);
+    const int64_t sqrt_max = FloorSquareRoot(target_max);
+    bool expr_reduced = false;
+    if (!HasEnforcementLiteral(*ct) &&
+        !context_->IntersectDomainWith(ct->int_prod().exprs(0),
+                                       {-sqrt_max, sqrt_max}, &expr_reduced)) {
+      return false;
+    }
+    if (expr_reduced) {
+      context_->UpdateRuleStats("int_square: reduced expr domain");
+    }
   }
 
   if (ct->int_prod().exprs_size() == 2) {
@@ -1116,11 +1861,87 @@ bool CpModelPresolver::PresolveIntProd(ConstraintProto* ct) {
     if (LinearExpressionProtosAreEqual(a, b) &&
         LinearExpressionProtosAreEqual(
             a, product)) {  // x = x * x, only true for {0, 1}.
-      if (!context_->IntersectDomainWith(product, Domain(0, 1))) {
-        return false;
+      if (!HasEnforcementLiteral(*ct)) {
+        if (!context_->IntersectDomainWith(product, Domain(0, 1))) {
+          return false;
+        }
+        context_->UpdateRuleStats("int_square: fix variable to zero or one");
+        return RemoveConstraint(ct);
+      } else {
+        context_->UpdateRuleStats(
+            "TODO enforced int_square: fix variable to zero or one");
+        // Replace ct with an enforced linear "product in [0, 1]".
       }
-      context_->UpdateRuleStats("int_prod: fix variable to zero or one.");
-      return RemoveConstraint(ct);
+    }
+  }
+
+  if (ct->int_prod().exprs().size() == 2) {
+    const auto is_boolean_affine =
+        [context = context_](const LinearExpressionProto& expr) {
+          return expr.vars().size() == 1 && context->MinOf(expr.vars(0)) == 0 &&
+                 context->MaxOf(expr.vars(0)) == 1;
+        };
+    const LinearExpressionProto* boolean_linear = nullptr;
+    const LinearExpressionProto* other_linear = nullptr;
+    if (is_boolean_affine(ct->int_prod().exprs(0))) {
+      boolean_linear = &ct->int_prod().exprs(0);
+      other_linear = &ct->int_prod().exprs(1);
+    } else if (is_boolean_affine(ct->int_prod().exprs(1))) {
+      boolean_linear = &ct->int_prod().exprs(1);
+      other_linear = &ct->int_prod().exprs(0);
+    }
+    if (boolean_linear) {
+      // We have:
+      // (u + b * v) * other_expr = B, where `b` is a boolean variable.
+      //
+      // We can rewrite this as:
+      //   u * other_expr = B, if b = false;
+      //   (u + v) * other_expr = B, if b = true
+      ConstraintProto* constraint_for_false =
+          context_->working_model->add_constraints();
+      ConstraintProto* constraint_for_true =
+          context_->working_model->add_constraints();
+      *constraint_for_true->mutable_enforcement_literal() =
+          ct->enforcement_literal();
+      *constraint_for_false->mutable_enforcement_literal() =
+          ct->enforcement_literal();
+      constraint_for_true->add_enforcement_literal(boolean_linear->vars(0));
+      constraint_for_false->add_enforcement_literal(
+          NegatedRef(boolean_linear->vars(0)));
+      LinearConstraintProto* linear_for_false =
+          constraint_for_false->mutable_linear();
+      LinearConstraintProto* linear_for_true =
+          constraint_for_true->mutable_linear();
+
+      linear_for_false->add_domain(0);
+      linear_for_false->add_domain(0);
+      AddLinearExpressionToLinearConstraint(
+          *other_linear, boolean_linear->offset(), linear_for_false);
+      AddLinearExpressionToLinearConstraint(ct->int_prod().target(), -1,
+                                            linear_for_false);
+
+      linear_for_true->add_domain(0);
+      linear_for_true->add_domain(0);
+      AddLinearExpressionToLinearConstraint(
+          *other_linear, boolean_linear->offset() + boolean_linear->coeffs(0),
+          linear_for_true);
+      AddLinearExpressionToLinearConstraint(ct->int_prod().target(), -1,
+                                            linear_for_true);
+      context_->CanonicalizeLinearConstraint(constraint_for_false);
+      context_->CanonicalizeLinearConstraint(constraint_for_true);
+      if (PossibleIntegerOverflow(*context_->working_model,
+                                  linear_for_false->vars(),
+                                  linear_for_false->coeffs()) ||
+          PossibleIntegerOverflow(*context_->working_model,
+                                  linear_for_true->vars(),
+                                  linear_for_true->coeffs())) {
+        context_->working_model->mutable_constraints()->RemoveLast();
+        context_->working_model->mutable_constraints()->RemoveLast();
+      } else {
+        context_->UpdateRuleStats("int_prod: boolean affine term");
+        context_->UpdateNewConstraintsVariableUsage();
+        return RemoveConstraint(ct);
+      }
     }
   }
 
@@ -1139,10 +1960,11 @@ bool CpModelPresolver::PresolveIntProd(ConstraintProto* ct) {
     literals.push_back(lit);
   }
 
-  // This is a bool constraint!
-  context_->UpdateRuleStats("int_prod: all Boolean.");
+  // This is a Boolean constraint!
+  context_->UpdateRuleStats("int_prod: all boolean");
   {
     ConstraintProto* new_ct = context_->working_model->add_constraints();
+    *new_ct->mutable_enforcement_literal() = ct->enforcement_literal();
     new_ct->add_enforcement_literal(target);
     auto* arg = new_ct->mutable_bool_and();
     for (const int lit : literals) {
@@ -1151,6 +1973,7 @@ bool CpModelPresolver::PresolveIntProd(ConstraintProto* ct) {
   }
   {
     ConstraintProto* new_ct = context_->working_model->add_constraints();
+    *new_ct->mutable_enforcement_literal() = ct->enforcement_literal();
     auto* arg = new_ct->mutable_bool_or();
     arg->add_literals(target);
     for (const int lit : literals) {
@@ -1161,8 +1984,10 @@ bool CpModelPresolver::PresolveIntProd(ConstraintProto* ct) {
   return RemoveConstraint(ct);
 }
 
-bool CpModelPresolver::PresolveIntDiv(ConstraintProto* ct) {
+bool CpModelPresolver::PresolveIntDiv(int c, ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
+  // TODO(user): add support for this case.
+  if (HasEnforcementLiteral(*ct)) return false;
 
   const LinearExpressionProto target = ct->int_div().target();
   const LinearExpressionProto expr = ct->int_div().exprs(0);
@@ -1182,37 +2007,110 @@ bool CpModelPresolver::PresolveIntDiv(ConstraintProto* ct) {
     return RemoveConstraint(ct);
   }
 
+  // Sometimes we have only a single variable appearing in the whole constraint.
+  // If the domain is small enough, we can just restrict the domain and remove
+  // the constraint.
+  if (ct->enforcement_literal().empty() &&
+      context_->ConstraintToVars(c).size() == 1) {
+    const int var = context_->ConstraintToVars(c)[0];
+    if (context_->DomainOf(var).Size() >= 100) {
+      context_->UpdateRuleStats(
+          "TODO int_div: single variable with large domain");
+    } else {
+      std::vector<int64_t> possible_values;
+      for (const int64_t v : context_->DomainOf(var).Values()) {
+        const int64_t target_v =
+            EvaluateSingleVariableExpression(target, var, v);
+        const int64_t expr_v = EvaluateSingleVariableExpression(expr, var, v);
+        const int64_t div_v = EvaluateSingleVariableExpression(div, var, v);
+        if (div_v == 0) continue;
+        if (target_v == expr_v / div_v) {
+          possible_values.push_back(v);
+        }
+      }
+      (void)context_->IntersectDomainWith(var,
+                                          Domain::FromValues(possible_values));
+      context_->UpdateRuleStats("int_div: single variable");
+      return RemoveConstraint(ct);
+    }
+  }
+
   // For now, we only presolve the case where the divisor is constant.
   if (!context_->IsFixed(div)) return false;
 
   const int64_t divisor = context_->FixedValue(div);
-  if (divisor == 1) {
+
+  // Trivial case one: target = expr / +/-1.
+  if (divisor == 1 || divisor == -1) {
     LinearConstraintProto* const lin =
         context_->working_model->add_constraints()->mutable_linear();
     lin->add_domain(0);
     lin->add_domain(0);
     AddLinearExpressionToLinearConstraint(expr, 1, lin);
-    AddLinearExpressionToLinearConstraint(target, -1, lin);
+    AddLinearExpressionToLinearConstraint(target, -divisor, lin);
     context_->UpdateNewConstraintsVariableUsage();
     context_->UpdateRuleStats("int_div: rewrite to equality");
     return RemoveConstraint(ct);
   }
-  bool domain_modified = false;
-  if (!context_->IntersectDomainWith(
-          target, context_->DomainSuperSetOf(expr).DivisionBy(divisor),
-          &domain_modified)) {
-    return false;
-  }
-  if (domain_modified) {
-    context_->UpdateRuleStats(
-        "int_div: updated domain of target in target = X / cte");
+
+  // Reduce the domain of target.
+  {
+    bool domain_modified = false;
+    const Domain target_implied_domain =
+        context_->DomainSuperSetOf(expr).DivisionBy(divisor);
+
+    if (!context_->IntersectDomainWith(target, target_implied_domain,
+                                       &domain_modified)) {
+      return false;
+    }
+    if (domain_modified) {
+      // Note: the case target is fixed has been processed before.
+      if (target_implied_domain.IsFixed()) {
+        context_->UpdateRuleStats(
+            "int_div: target has been fixed by propagating X / cte");
+      } else {
+        context_->UpdateRuleStats(
+            "int_div: updated domain of target in target = X / cte");
+      }
+    }
   }
 
-  // Linearize if everything is positive.
+  // Trivial case three: fixed_target = expr / fixed_divisor.
+  if (context_->IsFixed(target) &&
+      CapAdd(1, CapProd(std::abs(divisor),
+                        1 + std::abs(context_->FixedValue(target)))) !=
+          std::numeric_limits<int64_t>::max()) {
+    int64_t t = context_->FixedValue(target);
+    int64_t d = divisor;
+    if (d < 0) {
+      t = -t;
+      d = -d;
+    }
+
+    const Domain expr_implied_domain =
+        t > 0
+            ? Domain(t * d, (t + 1) * d - 1)
+            : (t == 0 ? Domain(1 - d, d - 1) : Domain((t - 1) * d + 1, t * d));
+    bool domain_modified = false;
+    if (!context_->IntersectDomainWith(expr, expr_implied_domain,
+                                       &domain_modified)) {
+      return false;
+    }
+    if (domain_modified) {
+      context_->UpdateRuleStats("int_div: target and divisor are fixed");
+    } else {
+      context_->UpdateRuleStats("int_div: always true");
+    }
+    return RemoveConstraint(ct);
+  }
+
+  // Linearize if everything is positive, and we have no overflow.
   // TODO(user): Deal with other cases where there is no change of
   // sign. We can also deal with target = cte, div variable.
   if (context_->MinOf(target) >= 0 && context_->MinOf(expr) >= 0 &&
-      divisor > 1) {
+      divisor > 1 &&
+      CapProd(divisor, context_->MaxOf(target)) !=
+          std::numeric_limits<int64_t>::max()) {
     LinearConstraintProto* const lin =
         context_->working_model->add_constraints()->mutable_linear();
     lin->add_domain(0);
@@ -1222,6 +2120,7 @@ bool CpModelPresolver::PresolveIntDiv(ConstraintProto* ct) {
     context_->UpdateNewConstraintsVariableUsage();
     context_->UpdateRuleStats(
         "int_div: linearize positive division with a constant divisor");
+
     return RemoveConstraint(ct);
   }
 
@@ -1230,12 +2129,64 @@ bool CpModelPresolver::PresolveIntDiv(ConstraintProto* ct) {
   return false;
 }
 
-bool CpModelPresolver::PresolveIntMod(ConstraintProto* ct) {
+bool CpModelPresolver::PresolveIntMod(int c, ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
+  // TODO(user): add support for this case.
+  if (HasEnforcementLiteral(*ct)) return false;
 
+  // TODO(user): Presolve f(X) = g(X) % fixed_mod.
   const LinearExpressionProto target = ct->int_mod().target();
   const LinearExpressionProto expr = ct->int_mod().exprs(0);
   const LinearExpressionProto mod = ct->int_mod().exprs(1);
+
+  if (context_->MinOf(target) > 0) {
+    bool domain_changed = false;
+    if (!context_->IntersectDomainWith(
+            expr, Domain(0, std::numeric_limits<int64_t>::max()),
+            &domain_changed)) {
+      return false;
+    }
+    if (domain_changed) {
+      context_->UpdateRuleStats(
+          "int_mod: non negative target implies positive expression");
+    }
+  }
+
+  if (context_->MinOf(target) >= context_->MaxOf(mod) ||
+      context_->MaxOf(target) <= -context_->MaxOf(mod)) {
+    return context_->NotifyThatModelIsUnsat(
+        "int_mod: incompatible target and mod");
+  }
+
+  if (context_->MaxOf(target) < 0) {
+    bool domain_changed = false;
+    if (!context_->IntersectDomainWith(
+            expr, Domain(std::numeric_limits<int64_t>::min(), 0),
+            &domain_changed)) {
+      return false;
+    }
+    if (domain_changed) {
+      context_->UpdateRuleStats(
+          "int_mod: non positive target implies negative expression");
+    }
+  }
+
+  if (context_->IsFixed(target) && context_->IsFixed(mod) &&
+      context_->FixedValue(mod) > 1 && ct->enforcement_literal().empty() &&
+      expr.vars().size() == 1) {
+    // We can intersect the domain of expr with {k * mod + target}.
+    const int64_t fixed_mod = context_->FixedValue(mod);
+    const int64_t fixed_target = context_->FixedValue(target);
+
+    if (!context_->CanonicalizeAffineVariable(expr.vars(0), expr.coeffs(0),
+                                              fixed_mod,
+                                              fixed_target - expr.offset())) {
+      return false;
+    }
+
+    context_->UpdateRuleStats("int_mod: fixed mod and target");
+    return RemoveConstraint(ct);
+  }
 
   bool domain_changed = false;
   if (!context_->IntersectDomainWith(
@@ -1250,16 +2201,51 @@ bool CpModelPresolver::PresolveIntMod(ConstraintProto* ct) {
     context_->UpdateRuleStats("int_mod: reduce target domain");
   }
 
+  // Remove the constraint if the target is removable.
+  // This is triggered on the flatzinc rotating-workforce problems.
+  //
+  // TODO(user): We can deal with more cases, sometime even if the domain of
+  // expr.vars(0) is large, the implied domain is not too complex.
+  if (target.vars().size() == 1 && expr.vars().size() == 1 &&
+      context_->DomainOf(expr.vars(0)).Size() < 100 && context_->IsFixed(mod) &&
+      context_->VariableIsUniqueAndRemovable(target.vars(0)) &&
+      target.vars(0) != expr.vars(0)) {
+    const int64_t fixed_mod = context_->FixedValue(mod);
+    std::vector<int64_t> values;
+    const Domain dom = context_->DomainOf(target.vars(0));
+    for (const int64_t v : context_->DomainOf(expr.vars(0)).Values()) {
+      const int64_t rhs = (v * expr.coeffs(0) + expr.offset()) % fixed_mod;
+      const int64_t target_term = rhs - target.offset();
+      if (target_term % target.coeffs(0) != 0) continue;
+      if (dom.Contains(target_term / target.coeffs(0))) {
+        values.push_back(v);
+      }
+    }
+
+    context_->UpdateRuleStats("int_mod: remove singleton target");
+    if (!context_->IntersectDomainWith(expr.vars(0),
+                                       Domain::FromValues(values))) {
+      return false;
+    }
+    context_->NewMappingConstraint(*ct, __FILE__, __LINE__);
+    ct->Clear();
+    context_->UpdateConstraintVariableUsage(c);
+    context_->MarkVariableAsRemoved(target.vars(0));
+    return true;
+  }
+
   return false;
 }
 
+// TODO(user): Now that everything has affine relations, we should maybe
+// canonicalize all linear subexpression in a generic way.
 bool CpModelPresolver::ExploitEquivalenceRelations(int c, ConstraintProto* ct) {
   bool changed = false;
 
   // Optim: Special case for the linear constraint. We just remap the
   // enforcement literals, the normal variables will be replaced by their
   // representative in CanonicalizeLinear().
-  if (ct->constraint_case() == ConstraintProto::ConstraintCase::kLinear) {
+  if (ct->constraint_case() == ConstraintProto::kLinear) {
     for (int& ref : *ct->mutable_enforcement_literal()) {
       const int rep = this->context_->GetLiteralRepresentative(ref);
       if (rep != ref) {
@@ -1282,17 +2268,6 @@ bool CpModelPresolver::ExploitEquivalenceRelations(int c, ConstraintProto* ct) {
   }
   if (!work_to_do) return false;
 
-  // Remap equal and negated variables to their representative.
-  ApplyToAllVariableIndices(
-      [&changed, this](int* ref) {
-        const int rep = context_->GetVariableRepresentative(*ref);
-        if (rep != *ref) {
-          changed = true;
-          *ref = rep;
-        }
-      },
-      ct);
-
   // Remap literal and negated literal to their representative.
   ApplyToAllLiteralIndices(
       [&changed, this](int* ref) {
@@ -1314,7 +2289,7 @@ bool CpModelPresolver::DivideLinearByGcd(ConstraintProto* ct) {
   const int num_vars = ct->linear().vars().size();
   for (int i = 0; i < num_vars; ++i) {
     const int64_t magnitude = std::abs(ct->linear().coeffs(i));
-    gcd = MathUtil::GCD64(gcd, magnitude);
+    gcd = std::gcd(gcd, magnitude);
     if (gcd == 1) break;
   }
   if (gcd > 1) {
@@ -1325,133 +2300,61 @@ bool CpModelPresolver::DivideLinearByGcd(ConstraintProto* ct) {
     const Domain rhs = ReadDomainFromProto(ct->linear());
     FillDomainInProto(rhs.InverseMultiplicationBy(gcd), ct->mutable_linear());
     if (ct->linear().domain_size() == 0) {
-      return MarkConstraintAsFalse(ct);
+      return MarkConstraintAsFalse(ct, "linear: not satisfied after GCD");
     }
   }
   return false;
 }
 
-template <typename ProtoWithVarsAndCoeffs>
-bool CpModelPresolver::CanonicalizeLinearExpressionInternal(
-    const ConstraintProto& ct, ProtoWithVarsAndCoeffs* proto, int64_t* offset) {
-  // First regroup the terms on the same variables and sum the fixed ones.
-  //
-  // TODO(user): Add a quick pass to skip most of the work below if the
-  // constraint is already in canonical form?
-  tmp_terms_.clear();
-  int64_t sum_of_fixed_terms = 0;
-  bool remapped = false;
-  const int old_size = proto->vars().size();
-  DCHECK_EQ(old_size, proto->coeffs().size());
-  for (int i = 0; i < old_size; ++i) {
-    const int ref = proto->vars(i);
-    const int var = PositiveRef(ref);
-    const int64_t coeff =
-        RefIsPositive(ref) ? proto->coeffs(i) : -proto->coeffs(i);
-    if (coeff == 0) continue;
-
-    if (context_->IsFixed(var)) {
-      sum_of_fixed_terms += coeff * context_->MinOf(var);
-      continue;
-    }
-
-    // TODO(user): Avoid the quadratic loop for the corner case of many
-    // enforcement literal (this should be pretty rare though).
-    bool removed = false;
-    for (const int enf : ct.enforcement_literal()) {
-      if (var == PositiveRef(enf)) {
-        if (RefIsPositive(enf)) {
-          // If the constraint is enforced, we can assume the variable is at 1.
-          sum_of_fixed_terms += coeff;
-        } else {
-          // We can assume the variable is at zero.
-        }
-        removed = true;
-        break;
-      }
-    }
-    if (removed) {
-      context_->UpdateRuleStats("linear: enforcement literal in expression");
-      continue;
-    }
-
-    const AffineRelation::Relation r = context_->GetAffineRelation(var);
-    if (r.representative != var) {
-      remapped = true;
-      sum_of_fixed_terms += coeff * r.offset;
-    }
-    tmp_terms_.push_back({r.representative, coeff * r.coeff});
-  }
-  proto->clear_vars();
-  proto->clear_coeffs();
-  std::sort(tmp_terms_.begin(), tmp_terms_.end());
-  int current_var = 0;
-  int64_t current_coeff = 0;
-  for (const auto entry : tmp_terms_) {
-    CHECK(RefIsPositive(entry.first));
-    if (entry.first == current_var) {
-      current_coeff += entry.second;
-    } else {
-      if (current_coeff != 0) {
-        proto->add_vars(current_var);
-        proto->add_coeffs(current_coeff);
-      }
-      current_var = entry.first;
-      current_coeff = entry.second;
-    }
-  }
-  if (current_coeff != 0) {
-    proto->add_vars(current_var);
-    proto->add_coeffs(current_coeff);
-  }
-  if (remapped) {
-    context_->UpdateRuleStats("linear: remapped using affine relations");
-  }
-  if (proto->vars().size() < old_size) {
-    context_->UpdateRuleStats("linear: fixed or dup variables");
-  }
-  *offset = sum_of_fixed_terms;
-  return remapped || proto->vars().size() < old_size;
-}
-
 bool CpModelPresolver::CanonicalizeLinearExpression(
     const ConstraintProto& ct, LinearExpressionProto* exp) {
-  int64_t offset = 0;
-  const bool result = CanonicalizeLinearExpressionInternal(ct, exp, &offset);
-  exp->set_offset(exp->offset() + offset);
-  return result;
+  return context_->CanonicalizeLinearExpression(ct.enforcement_literal(), exp);
 }
 
-bool CpModelPresolver::CanonicalizeLinear(ConstraintProto* ct) {
-  if (ct->constraint_case() != ConstraintProto::ConstraintCase::kLinear ||
-      context_->ModelIsUnsat()) {
-    return false;
-  }
+bool CpModelPresolver::CanonicalizeLinear(ConstraintProto* ct, bool* changed) {
+  if (ct->constraint_case() != ConstraintProto::kLinear) return true;
+  if (context_->ModelIsUnsat()) return false;
 
   if (ct->linear().domain().empty()) {
-    context_->UpdateRuleStats("linear: no domain");
-    return MarkConstraintAsFalse(ct);
+    *changed = true;
+    return MarkConstraintAsFalse(ct, "linear: no domain");
   }
 
-  int64_t offset = 0;
-  bool changed =
-      CanonicalizeLinearExpressionInternal(*ct, ct->mutable_linear(), &offset);
-  if (offset != 0) {
-    FillDomainInProto(
-        ReadDomainFromProto(ct->linear()).AdditionWith(Domain(-offset)),
-        ct->mutable_linear());
+  bool is_impossible = false;
+  *changed = context_->CanonicalizeLinearConstraint(ct, &is_impossible);
+  if (is_impossible) {
+    *changed = true;
+    return MarkConstraintAsFalse(ct, "linear: never in domain");
   }
-  changed |= DivideLinearByGcd(ct);
-  return changed;
+  *changed |= DivideLinearByGcd(ct);
+
+  // For duplicate detection, we always make the first coeff positive.
+  //
+  // TODO(user): Move that to context_->CanonicalizeLinearConstraint(), and do
+  // the same for LinearExpressionProto.
+  if (!ct->linear().coeffs().empty() && ct->linear().coeffs(0) < 0) {
+    for (int64_t& ref_coeff : *ct->mutable_linear()->mutable_coeffs()) {
+      ref_coeff = -ref_coeff;
+    }
+    FillDomainInProto(ReadDomainFromProto(ct->linear()).Negation(),
+                      ct->mutable_linear());
+  }
+  if (ct->constraint_case() != ConstraintProto::kLinear) return true;
+  if (ct->linear().vars().empty()) {
+    *changed = true;
+    return PresolveEmptyLinearConstraint(ct);
+  }
+
+  return true;
 }
 
 bool CpModelPresolver::RemoveSingletonInLinear(ConstraintProto* ct) {
-  if (ct->constraint_case() != ConstraintProto::ConstraintCase::kLinear ||
+  if (ct->constraint_case() != ConstraintProto::kLinear ||
       context_->ModelIsUnsat()) {
     return false;
   }
 
-  std::set<int> index_to_erase;
+  absl::btree_set<int> index_to_erase;
   const int num_vars = ct->linear().vars().size();
   Domain rhs = ReadDomainFromProto(ct->linear());
 
@@ -1463,6 +2366,12 @@ bool CpModelPresolver::RemoveSingletonInLinear(ConstraintProto* ct) {
     const int64_t coeff = ct->linear().coeffs(i);
     CHECK(RefIsPositive(var));
     if (context_->VariableIsUniqueAndRemovable(var)) {
+      // This is not needed for the code below, but in practice, removing
+      // singleton with a large coefficient create holes in the constraint rhs
+      // and we will need to add more variable to deal with that.
+      // This works way better on timtab1CUTS.pb.gz for instance.
+      if (std::abs(coeff) != 1) continue;
+
       bool exact;
       const auto term_domain =
           context_->DomainOf(var).MultiplicationBy(-coeff, &exact);
@@ -1480,6 +2389,103 @@ bool CpModelPresolver::RemoveSingletonInLinear(ConstraintProto* ct) {
       index_to_erase.insert(i);
       rhs = new_rhs;
       continue;
+    }
+  }
+
+  // If the whole linear is independent from the rest of the problem, we
+  // can solve it now. If it is enforced, then each variable will have two
+  // values: Its minimum one and one minimizing the objective under the
+  // constraint. The switch can be controlled by a single Boolean.
+  //
+  // TODO(user): Cover more case like dedicated algorithm to solve for a small
+  // number of variable that are faster than the DP we use here.
+  if (index_to_erase.empty()) {
+    int num_singletons = 0;
+    for (const int var : ct->linear().vars()) {
+      if (!RefIsPositive(var)) break;
+      if (!context_->VariableWithCostIsUniqueAndRemovable(var) &&
+          !context_->VariableIsUniqueAndRemovable(var)) {
+        break;
+      }
+      ++num_singletons;
+    }
+    if (num_singletons == num_vars) {
+      // Try to solve the equation.
+      std::vector<Domain> domains;
+      std::vector<int64_t> coeffs;
+      std::vector<int64_t> costs;
+      for (int i = 0; i < num_vars; ++i) {
+        const int var = ct->linear().vars(i);
+        CHECK(RefIsPositive(var));
+        domains.push_back(context_->DomainOf(var));
+        coeffs.push_back(ct->linear().coeffs(i));
+        costs.push_back(context_->ObjectiveCoeff(var));
+      }
+      BasicKnapsackSolver solver;
+      const auto& result = solver.Solve(domains, coeffs, costs,
+                                        ReadDomainFromProto(ct->linear()));
+      if (!result.solved) {
+        context_->UpdateRuleStats(
+            "TODO independent linear: minimize single linear constraint");
+      } else if (result.infeasible) {
+        return MarkConstraintAsFalse(
+            ct, "independent linear: no DP solution to simple constraint");
+      } else {
+        if (ct->enforcement_literal().empty()) {
+          // Just fix everything.
+          context_->UpdateRuleStats("independent linear: solved by DP");
+          for (int i = 0; i < num_vars; ++i) {
+            if (!context_->IntersectDomainWith(ct->linear().vars(i),
+                                               Domain(result.solution[i]))) {
+              return false;
+            }
+          }
+          return RemoveConstraint(ct);
+        }
+
+        // Each variable will take two values according to a single Boolean.
+        int indicator;
+        if (ct->enforcement_literal().size() == 1) {
+          indicator = ct->enforcement_literal(0);
+        } else {
+          indicator =
+              context_->NewBoolVarWithConjunction(ct->enforcement_literal());
+          auto* new_ct = context_->working_model->add_constraints();
+          *new_ct->mutable_enforcement_literal() = ct->enforcement_literal();
+          new_ct->mutable_bool_or()->add_literals(indicator);
+          context_->UpdateNewConstraintsVariableUsage();
+        }
+        for (int i = 0; i < num_vars; ++i) {
+          const int64_t best_value =
+              costs[i] > 0 ? domains[i].Min() : domains[i].Max();
+          const int64_t other_value = result.solution[i];
+          if (best_value == other_value) {
+            if (!context_->IntersectDomainWith(ct->linear().vars(i),
+                                               Domain(best_value))) {
+              return false;
+            }
+            continue;
+          }
+          solution_crush_.SetVarToConditionalValue(
+              ct->linear().vars(i), {indicator}, other_value, best_value);
+          if (RefIsPositive(indicator)) {
+            if (!context_->StoreAffineRelation(ct->linear().vars(i), indicator,
+                                               other_value - best_value,
+                                               best_value)) {
+              return false;
+            }
+          } else {
+            if (!context_->StoreAffineRelation(
+                    ct->linear().vars(i), PositiveRef(indicator),
+                    best_value - other_value, other_value)) {
+              return false;
+            }
+          }
+        }
+        context_->UpdateRuleStats(
+            "independent linear: with enforcement, but solved by DP");
+        return RemoveConstraint(ct);
+      }
     }
   }
 
@@ -1518,6 +2524,12 @@ bool CpModelPresolver::RemoveSingletonInLinear(ConstraintProto* ct) {
       CHECK_NE(coeff, 0);
       if (objective_coeff % coeff != 0) continue;
 
+      // TODO(user): We have an issue if objective coeff is not one, because
+      // the RecomputeSingletonObjectiveDomain() do not properly put holes
+      // in the objective domain, which might cause an issue. Note that this
+      // presolve rule is actually almost never applied on the miplib.
+      if (std::abs(objective_coeff) != 1) continue;
+
       // We do not do that if the domain of rhs becomes too complex.
       bool exact;
       const auto term_domain =
@@ -1528,48 +2540,34 @@ bool CpModelPresolver::RemoveSingletonInLinear(ConstraintProto* ct) {
 
       // Special case: If the objective was a single variable, we can transfer
       // the domain of var to the objective, and just completely remove this
-      // equality constraint like it is done in ExpandObjective().
+      // equality constraint.
+      //
+      // TODO(user): Maybe if var has a complex domain, we might not want to
+      // substitute it?
       if (context_->ObjectiveMap().size() == 1) {
-        if (!context_->IntersectDomainWith(
-                var, context_->ObjectiveDomain().InverseMultiplicationBy(
-                         objective_coeff))) {
+        // This make sure the domain of var is restricted and the objective
+        // domain updated.
+        if (!context_->RecomputeSingletonObjectiveDomain()) {
           return true;
         }
 
-        // The intersection above might fix var, in which case, we just abort.
+        // The function above might fix var, in which case, we just abort.
         if (context_->IsFixed(var)) continue;
 
-        // This makes sure the domain of var is propagated back to the
-        // objective.
-        //
-        // Tricky: We cannot "simplify" the domain of the objective using the
-        // implied domain from the linear expression since we will substitute
-        // the variable.
-        //
-        // TODO(user): Maybe if var has a complex domain, we might not want to
-        // substitute it?
-        if (!context_->CanonicalizeObjective(/*simplify_domain=*/false)) {
-          return context_->NotifyThatModelIsUnsat();
-        }
-
-        // Normally, CanonicalizeObjective() shouldn't remove var because
-        // we work on a linear constraint that has been canonicalized. We keep
-        // the test here in case this ever happen so we are notified.
-        if (!context_->ObjectiveMap().contains(var)) {
-          LOG(WARNING) << "This was not supposed to happen and the presolve "
-                          "could be improved.";
-          continue;
-        }
         if (!context_->SubstituteVariableInObjective(var, coeff, *ct)) {
           if (context_->ModelIsUnsat()) return true;
           continue;
         }
 
-        context_->UpdateRuleStats("linear: singleton column define objective.");
+        context_->UpdateRuleStats("linear: singleton column define objective");
         context_->MarkVariableAsRemoved(var);
-        *(context_->mapping_model->add_constraints()) = *ct;
+        context_->NewMappingConstraint(*ct, __FILE__, __LINE__);
         return RemoveConstraint(ct);
       }
+
+      // On supportcase20, this transformation make the LP relaxation way worse.
+      // TODO(user): understand why.
+      if (true) continue;
 
       // Update the objective and remove the variable from its equality
       // constraint by expanding its rhs. This might fail if the new linear
@@ -1580,7 +2578,7 @@ bool CpModelPresolver::RemoveSingletonInLinear(ConstraintProto* ct) {
       }
 
       context_->UpdateRuleStats(
-          "linear: singleton column in equality and in objective.");
+          "linear: singleton column in equality and in objective");
       rhs = new_rhs;
       index_to_erase.insert(i);
       break;
@@ -1600,10 +2598,11 @@ bool CpModelPresolver::RemoveSingletonInLinear(ConstraintProto* ct) {
   if (!ct->enforcement_literal().empty()) {
     for (const int i : index_to_erase) {
       const int var = ct->linear().vars(i);
-      auto* l = context_->mapping_model->add_constraints()->mutable_linear();
-      l->add_vars(var);
-      l->add_coeffs(1);
-      FillDomainInProto(context_->DomainOf(var), l);
+      auto* new_lin =
+          context_->NewMappingConstraint(__FILE__, __LINE__)->mutable_linear();
+      new_lin->add_vars(var);
+      new_lin->add_coeffs(1);
+      FillDomainInProto(context_->DomainOf(var), new_lin);
     }
   }
 
@@ -1611,7 +2610,14 @@ bool CpModelPresolver::RemoveSingletonInLinear(ConstraintProto* ct) {
   // instead of adding a reduced version of it each time a new singleton
   // variable appear in the same constraint later. That would work but would
   // also force the postsolve to take search decisions...
-  *context_->mapping_model->add_constraints() = *ct;
+  if (absl::GetFlag(FLAGS_cp_model_debug_postsolve)) {
+    auto* new_ct = context_->NewMappingConstraint(*ct, __FILE__, __LINE__);
+    const std::string name(new_ct->name());
+    *new_ct = *ct;
+    new_ct->set_name(absl::StrCat(ct->name(), " copy ", name));
+  } else {
+    *context_->NewMappingConstraint(*ct, __FILE__, __LINE__) = *ct;
+  }
 
   int new_size = 0;
   for (int i = 0; i < num_vars; ++i) {
@@ -1639,7 +2645,7 @@ bool CpModelPresolver::AddVarAffineRepresentativeFromLinearEquality(
   for (int i = 0; i < num_variables; ++i) {
     if (i == target_index) continue;
     const int64_t magnitude = std::abs(ct->linear().coeffs(i));
-    gcd = MathUtil::GCD64(gcd, magnitude);
+    gcd = std::gcd(gcd, magnitude);
     if (gcd == 1) return false;
   }
 
@@ -1660,8 +2666,21 @@ bool CpModelPresolver::AddVarAffineRepresentativeFromLinearEquality(
 
   // We use the new variable in the constraint.
   // Note that we will divide everything by the gcd too.
-  return CanonicalizeLinear(ct);
+  bool changed = false;
+  (void)CanonicalizeLinear(ct, &changed);
+  return changed;
 }
+
+namespace {
+
+bool IsLinearEqualityConstraint(const ConstraintProto& ct) {
+  return ct.constraint_case() == ConstraintProto::kLinear &&
+         ct.linear().domain().size() == 2 &&
+         ct.linear().domain(0) == ct.linear().domain(1) &&
+         ct.enforcement_literal().empty();
+}
+
+}  // namespace
 
 // Any equality must be true modulo n.
 //
@@ -1670,12 +2689,13 @@ bool CpModelPresolver::AddVarAffineRepresentativeFromLinearEquality(
 // As an heuristic, we only test the smallest term or small primes 2, 3, and 5.
 //
 // We also handle the special case of having two non-zero literals modulo 2.
+//
+// TODO(user): Use more complex algo to detect all the cases? By splitting the
+// constraint in two, and computing the gcd of each halves, we can reduce the
+// problem to two problem of half size. So at least we can do it in O(n log n).
 bool CpModelPresolver::PresolveLinearEqualityWithModulo(ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
-  if (ct->constraint_case() != ConstraintProto::kLinear) return false;
-  if (ct->linear().domain().size() != 2) return false;
-  if (ct->linear().domain(0) != ct->linear().domain(1)) return false;
-  if (!ct->enforcement_literal().empty()) return false;
+  if (!IsLinearEqualityConstraint(*ct)) return false;
 
   const int num_variables = ct->linear().vars().size();
   if (num_variables < 2) return false;
@@ -1717,10 +2737,14 @@ bool CpModelPresolver::PresolveLinearEqualityWithModulo(ConstraintProto* ct) {
       const int64_t rhs = std::abs(ct->linear().domain(0));
       context_->UpdateRuleStats("linear: only two odd Booleans in equality");
       if (rhs % 2) {
-        context_->StoreBooleanEqualityRelation(literals[0],
-                                               NegatedRef(literals[1]));
+        if (!context_->StoreBooleanEqualityRelation(literals[0],
+                                                    NegatedRef(literals[1]))) {
+          return false;
+        }
       } else {
-        context_->StoreBooleanEqualityRelation(literals[0], literals[1]);
+        if (!context_->StoreBooleanEqualityRelation(literals[0], literals[1])) {
+          return false;
+        }
       }
     }
   }
@@ -1744,40 +2768,46 @@ bool CpModelPresolver::PresolveLinearEqualityWithModulo(ConstraintProto* ct) {
 }
 
 bool CpModelPresolver::PresolveLinearOfSizeOne(ConstraintProto* ct) {
-  DCHECK_EQ(ct->linear().vars().size(), 1);
+  CHECK_EQ(ct->linear().vars().size(), 1);
+  CHECK(RefIsPositive(ct->linear().vars(0)));
+  DCHECK(context_->VariableIsAffineRepresentative(ct->linear().vars(0)));
+
+  const int var = ct->linear().vars(0);
+  const Domain var_domain = context_->DomainOf(var);
+  const Domain rhs = ReadDomainFromProto(ct->linear())
+                         .InverseMultiplicationBy(ct->linear().coeffs(0))
+                         .IntersectionWith(var_domain);
+  if (rhs.IsEmpty()) {
+    return MarkConstraintAsFalse(ct, "linear1: infeasible");
+  }
+  if (rhs == var_domain) {
+    context_->UpdateRuleStats("linear1: always true");
+    return RemoveConstraint(ct);
+  }
+
+  // We can always canonicalize the constraint to a coefficient of 1.
+  // Note that this should never trigger as we usually divide by gcd already.
+  if (ct->linear().coeffs(0) != 1) {
+    context_->UpdateRuleStats("linear1: canonicalized");
+    ct->mutable_linear()->set_coeffs(0, 1);
+    FillDomainInProto(rhs, ct->mutable_linear());
+  }
 
   // Size one constraint with no enforcement?
   if (!HasEnforcementLiteral(*ct)) {
-    const int64_t coeff = RefIsPositive(ct->linear().vars(0))
-                              ? ct->linear().coeffs(0)
-                              : -ct->linear().coeffs(0);
     context_->UpdateRuleStats("linear1: without enforcement");
-    const int var = PositiveRef(ct->linear().vars(0));
-    const Domain rhs = ReadDomainFromProto(ct->linear());
-    if (!context_->IntersectDomainWith(var,
-                                       rhs.InverseMultiplicationBy(coeff))) {
-      return false;
-    }
+    if (!context_->IntersectDomainWith(var, rhs)) return false;
     return RemoveConstraint(ct);
   }
 
   // This is just an implication, lets convert it right away.
-  if (context_->CanBeUsedAsLiteral(ct->linear().vars(0))) {
-    const Domain rhs = ReadDomainFromProto(ct->linear());
-    const bool zero_ok = rhs.Contains(0);
-    const bool one_ok = rhs.Contains(ct->linear().coeffs(0));
-    context_->UpdateRuleStats("linear1: is boolean implication");
-    if (!zero_ok && !one_ok) {
-      return MarkConstraintAsFalse(ct);
-    }
-    if (zero_ok && one_ok) {
-      return RemoveConstraint(ct);
-    }
-    const int ref = ct->linear().vars(0);
-    if (zero_ok) {
-      ct->mutable_bool_and()->add_literals(NegatedRef(ref));
+  if (context_->CanBeUsedAsLiteral(var)) {
+    DCHECK(rhs.IsFixed());
+    if (rhs.FixedValue() == 1) {
+      ct->mutable_bool_and()->add_literals(var);
     } else {
-      ct->mutable_bool_and()->add_literals(ref);
+      CHECK_EQ(rhs.FixedValue(), 0);
+      ct->mutable_bool_and()->add_literals(NegatedRef(var));
     }
 
     // No var <-> constraint graph changes.
@@ -1785,86 +2815,69 @@ bool CpModelPresolver::PresolveLinearOfSizeOne(ConstraintProto* ct) {
     return true;
   }
 
-  // If the constraint is literal => x in domain and x = abs(abs_arg), we can
-  // replace x by abs_arg and hopefully remove the variable x later.
-  int abs_arg;
-  if (ct->linear().coeffs(0) == 1 &&
-      context_->GetAbsRelation(ct->linear().vars(0), &abs_arg)) {
-    // TODO(user): Deal with coeff = -1, here or during canonicalization.
-    context_->UpdateRuleStats("linear1: remove abs from abs(x) in domain");
-    const Domain implied_abs_target_domain =
-        ReadDomainFromProto(ct->linear())
-            .IntersectionWith({0, std::numeric_limits<int64_t>::max()})
-            .IntersectionWith(context_->DomainOf(ct->linear().vars(0)));
-
-    if (implied_abs_target_domain.IsEmpty()) {
-      return MarkConstraintAsFalse(ct);
-    }
-
-    const Domain new_abs_var_domain =
-        implied_abs_target_domain
-            .UnionWith(implied_abs_target_domain.Negation())
-            .IntersectionWith(context_->DomainOf(abs_arg));
-
-    if (new_abs_var_domain.IsEmpty()) {
-      return MarkConstraintAsFalse(ct);
-    }
-
-    ConstraintProto* new_ct = context_->working_model->add_constraints();
-    new_ct->set_name(ct->name());
-    *new_ct->mutable_enforcement_literal() = ct->enforcement_literal();
-    auto* arg = new_ct->mutable_linear();
-    arg->add_vars(abs_arg);
-    arg->add_coeffs(1);
-    FillDomainInProto(new_abs_var_domain, new_ct->mutable_linear());
-    context_->UpdateNewConstraintsVariableUsage();
-    return RemoveConstraint(ct);
-  }
-
   // Detect encoding.
-  if (ct->enforcement_literal_size() != 1 ||
-      (ct->linear().coeffs(0) != 1 && ct->linear().coeffs(0) == -1)) {
-    return false;
+  bool changed = false;
+  if (ct->enforcement_literal().size() == 1) {
+    // If we already have an encoding literal, this constraint is really
+    // an implication.
+    int lit = ct->enforcement_literal(0);
+
+    // For correctness below, it is important lit is the canonical literal,
+    // otherwise we might remove the constraint even though it is the one
+    // defining an encoding literal.
+    const int representative = context_->GetLiteralRepresentative(lit);
+    if (lit != representative) {
+      lit = representative;
+      ct->set_enforcement_literal(0, lit);
+      context_->UpdateRuleStats("linear1: remapped enforcement literal");
+      changed = true;
+    }
+
+    if (rhs.IsFixed()) {
+      const int64_t value = rhs.FixedValue();
+      int encoding_lit;
+      if (context_->HasVarValueEncoding(var, value, &encoding_lit)) {
+        if (lit == encoding_lit) return changed;
+        context_->AddImplication(lit, encoding_lit);
+        context_->UpdateNewConstraintsVariableUsage();
+        ct->Clear();
+        context_->UpdateRuleStats("linear1: transformed to implication");
+        return true;
+      } else {
+        if (context_->StoreLiteralImpliesVarEqValue(lit, var, value)) {
+          // The domain is not actually modified, but we want to rescan the
+          // constraints linked to this variable.
+          context_->modified_domains.Set(var);
+        }
+        context_->UpdateNewConstraintsVariableUsage();
+      }
+      return changed;
+    }
+
+    const Domain complement = rhs.Complement().IntersectionWith(var_domain);
+    if (complement.IsFixed()) {
+      const int64_t value = complement.FixedValue();
+      int encoding_lit;
+      if (context_->HasVarValueEncoding(var, value, &encoding_lit)) {
+        if (NegatedRef(lit) == encoding_lit) return changed;
+        context_->AddImplication(lit, NegatedRef(encoding_lit));
+        context_->UpdateNewConstraintsVariableUsage();
+        ct->Clear();
+        context_->UpdateRuleStats("linear1: transformed to implication");
+        return true;
+      } else {
+        if (context_->StoreLiteralImpliesVarNeValue(lit, var, value)) {
+          // The domain is not actually modified, but we want to rescan the
+          // constraints linked to this variable.
+          context_->modified_domains.Set(var);
+        }
+        context_->UpdateNewConstraintsVariableUsage();
+      }
+      return changed;
+    }
   }
 
-  // Currently, we only use encoding during expansion, so when it is done,
-  // there is no need to updates the maps.
-  if (context_->ModelIsExpanded()) return false;
-
-  const int literal = ct->enforcement_literal(0);
-  const LinearConstraintProto& linear = ct->linear();
-  const int ref = linear.vars(0);
-  const int var = PositiveRef(ref);
-  const int64_t coeff =
-      RefIsPositive(ref) ? ct->linear().coeffs(0) : -ct->linear().coeffs(0);
-
-  if (linear.domain_size() == 2 && linear.domain(0) == linear.domain(1)) {
-    const int64_t value = RefIsPositive(ref) ? linear.domain(0) * coeff
-                                             : -linear.domain(0) * coeff;
-    if (!context_->DomainOf(var).Contains(value)) {
-      if (!context_->SetLiteralToFalse(literal)) return false;
-    } else if (context_->StoreLiteralImpliesVarEqValue(literal, var, value)) {
-      // The domain is not actually modified, but we want to rescan the
-      // constraints linked to this variable. See TODO below.
-      context_->modified_domains.Set(var);
-    }
-  } else {
-    const Domain complement = context_->DomainOf(ref).IntersectionWith(
-        ReadDomainFromProto(linear).Complement());
-    if (complement.Size() != 1) return false;
-    const int64_t value = RefIsPositive(ref) ? complement.Min() * coeff
-                                             : -complement.Min() * coeff;
-    if (context_->StoreLiteralImpliesVarNEqValue(literal, var, value)) {
-      // The domain is not actually modified, but we want to rescan the
-      // constraints linked to this variable. See TODO below.
-      context_->modified_domains.Set(var);
-    }
-  }
-
-  // TODO(user): if we have l1 <=> x == value && l2 => x == value, we
-  //     could rewrite the second constraint into l2 => l1.
-  context_->UpdateNewConstraintsVariableUsage();
-  return false;
+  return changed;
 }
 
 bool CpModelPresolver::PresolveLinearOfSizeTwo(ConstraintProto* ct) {
@@ -1876,209 +2889,924 @@ bool CpModelPresolver::PresolveLinearOfSizeTwo(ConstraintProto* ct) {
   const int64_t coeff1 = arg.coeffs(0);
   const int64_t coeff2 = arg.coeffs(1);
 
-  // If it is not an equality, we only presolve the constraint if one of
-  // the variable is Boolean. Note that if both are Boolean, then a similar
-  // reduction is done by PresolveLinearOnBooleans(). If we have an equality,
-  // then the code below will do something stronger than this.
-  //
-  // TODO(user): We should probably instead generalize the code of
-  // ExtractEnforcementLiteralFromLinearConstraint(), or just temporary
-  // propagate domain of enforced linear constraints, to detect Boolean that
-  // must be true or false. This way we can do the same for longer constraints.
-  const bool is_equality =
-      arg.domain_size() == 2 && arg.domain(0) == arg.domain(1);
-  if (!is_equality) {
-    int lit, var;
-    int64_t value_on_true, coeff;
-    if (context_->CanBeUsedAsLiteral(var1)) {
-      lit = var1;
-      value_on_true = coeff1;
-      var = var2;
-      coeff = coeff2;
-    } else if (context_->CanBeUsedAsLiteral(var2)) {
-      lit = var2;
-      value_on_true = coeff2;
-      var = var1;
-      coeff = coeff1;
-    } else {
-      return false;
-    }
+  // Starts by updating our hash map of known relation.
+  {
+    const LinearExpression2 expr2 =
+        GetLinearExpression2FromProto(var1, coeff1, var2, coeff2);
+    const IntegerValue lb(arg.domain(0));
+    const IntegerValue ub(arg.domain(arg.domain().size() - 1));
 
-    const Domain rhs = ReadDomainFromProto(ct->linear());
-    const Domain rhs_if_true =
-        rhs.AdditionWith(Domain(-value_on_true)).InverseMultiplicationBy(coeff);
-    const Domain rhs_if_false = rhs.InverseMultiplicationBy(coeff);
-    const bool implied_false =
-        context_->DomainOf(var).IntersectionWith(rhs_if_true).IsEmpty();
-    const bool implied_true =
-        context_->DomainOf(var).IntersectionWith(rhs_if_false).IsEmpty();
-    if (implied_true && implied_false) {
-      context_->UpdateRuleStats("linear2: infeasible.");
-      return MarkConstraintAsFalse(ct);
-    } else if (implied_true) {
-      context_->UpdateRuleStats("linear2: Boolean with one feasible value.");
-
-      // => true.
-      ConstraintProto* new_ct = context_->working_model->add_constraints();
-      *new_ct->mutable_enforcement_literal() = ct->enforcement_literal();
-      new_ct->mutable_bool_and()->add_literals(lit);
-      context_->UpdateNewConstraintsVariableUsage();
-
-      // Rewrite to => var in rhs_if_true.
-      ct->mutable_linear()->Clear();
-      ct->mutable_linear()->add_vars(var);
-      ct->mutable_linear()->add_coeffs(1);
-      FillDomainInProto(rhs_if_true, ct->mutable_linear());
-      return PresolveLinearOfSizeOne(ct) || true;
-    } else if (implied_false) {
-      context_->UpdateRuleStats("linear2: Boolean with one feasible value.");
-
-      // => false.
-      ConstraintProto* new_ct = context_->working_model->add_constraints();
-      *new_ct->mutable_enforcement_literal() = ct->enforcement_literal();
-      new_ct->mutable_bool_and()->add_literals(NegatedRef(lit));
-      context_->UpdateNewConstraintsVariableUsage();
-
-      // Rewrite to => var in rhs_if_false.
-      ct->mutable_linear()->Clear();
-      ct->mutable_linear()->add_vars(var);
-      ct->mutable_linear()->add_coeffs(1);
-      FillDomainInProto(rhs_if_false, ct->mutable_linear());
-      return PresolveLinearOfSizeOne(ct) || true;
-    } else {
-      // TODO(user): We can expand this into two linear1 constraints, I am not
-      // 100% sure it is always good, so for now we don't do it. Note that the
-      // effect of doing it or not is not really visible on the bench. Some
-      // problem are better with it some better without.
-      context_->UpdateRuleStats("TODO linear2: contains a Boolean.");
-      return false;
+    const RelationStatus status = known_linear2_.GetStatus(expr2, lb, ub);
+    if (status == RelationStatus::IS_TRUE) {
+      // Note that we don't track what constraint implied the relation, so we
+      // cannot remove this constraint even if the relation is already known.
+      //
+      // However since we only add it if the relation is not
+      // enforced, this should be correct.
+      //
+      // Tricky: If the constraint domain is not simple, we cannot really deduce
+      // anything.
+      if (!ct->enforcement_literal().empty() &&
+          ct->linear().domain().size() == 2) {
+        context_->UpdateRuleStats("linear2: already known enforced relation");
+        return RemoveConstraint(ct);
+      }
+    } else if (status == RelationStatus::IS_FALSE) {
+      return MarkConstraintAsFalse(ct, "linear2: infeasible relation");
+    } else if (ct->enforcement_literal().empty()) {
+      known_linear2_.Add(expr2, lb, ub);
+      if (context_->ModelIsUnsat()) return false;
     }
   }
 
-  // We have: enforcement => (coeff1 * v1 + coeff2 * v2 == rhs).
-  const int64_t rhs = arg.domain(0);
-  if (ct->enforcement_literal().empty()) {
-    // Detect affine relation.
-    //
-    // TODO(user): it might be better to first add only the affine relation with
-    // a coefficient of magnitude 1, and later the one with larger coeffs.
-    bool added = false;
-    if (coeff1 == 1) {
-      added = context_->StoreAffineRelation(var1, var2, -coeff2, rhs);
-    } else if (coeff2 == 1) {
-      added = context_->StoreAffineRelation(var2, var1, -coeff1, rhs);
-    } else if (coeff1 == -1) {
-      added = context_->StoreAffineRelation(var1, var2, coeff2, -rhs);
-    } else if (coeff2 == -1) {
-      added = context_->StoreAffineRelation(var2, var1, coeff1, -rhs);
+  const Domain rhs = ReadDomainFromProto(arg);
+  bool mult1_is_exact = true;
+  bool mult2_is_exact = true;
+  const Domain scaled_domain1 =
+      context_->DomainOf(var1).MultiplicationBy(coeff1, &mult1_is_exact);
+  const Domain scaled_domain2 =
+      context_->DomainOf(var2).MultiplicationBy(coeff2, &mult2_is_exact);
+  if (mult1_is_exact && mult2_is_exact) {
+    const Domain infeasible_reachable_values =
+        scaled_domain1.AdditionWith(scaled_domain2)
+            .IntersectionWith(rhs.Complement());
+
+    if (!infeasible_reachable_values.IsEmpty() &&
+        infeasible_reachable_values.IsFixed()) {
+      return PresolveLinear2NeCst(ct, infeasible_reachable_values.FixedValue());
+    }
+  }
+
+  if (rhs.IsFixed()) {
+    if (ct->enforcement_literal().empty()) {
+      return PresolveUnenforcedLinear2EqCst(ct, rhs.FixedValue());
     } else {
-      // In this case, we can solve the diophantine equation, and write
-      // both x and y in term of a new affine representative z.
-      //
-      // Note that PresolveLinearEqualityWithModularInverse() will have the
-      // same effect.
-      //
-      // We can also decide to fully expand the equality if the variables
-      // are fully encoded.
-      context_->UpdateRuleStats("TODO linear2: ax + by = cte");
+      return PresolveEnforcedLinear2EqCst(ct, rhs.FixedValue());
     }
-    if (added) return RemoveConstraint(ct);
+  }
+
+  return PresolveLinear2WithBooleans(ct);
+}
+
+// If it is not an equality, we only presolve the constraint if one of
+// the variable is Boolean. Note that if both are Boolean, then a similar
+// reduction is done by PresolveLinearOnBooleans(). If we have an equality,
+// then the code below will do something stronger than this.
+//
+// TODO(user): We should probably instead generalize the code of
+// ExtractEnforcementLiteralFromLinearConstraint(), or just temporary
+// propagate domain of enforced linear constraints, to detect Boolean that
+// must be true or false. This way we can do the same for longer constraints.
+bool CpModelPresolver::PresolveLinear2WithBooleans(ConstraintProto* ct) {
+  DCHECK_EQ(ct->linear().vars().size(), 2);
+
+  const LinearConstraintProto& arg = ct->linear();
+  const int var1 = arg.vars(0);
+  const int var2 = arg.vars(1);
+  const int64_t coeff1 = arg.coeffs(0);
+  const int64_t coeff2 = arg.coeffs(1);
+
+  int lit, var;
+  int64_t value_on_true, coeff;
+  if (context_->CanBeUsedAsLiteral(var1)) {
+    lit = var1;
+    value_on_true = coeff1;
+    var = var2;
+    coeff = coeff2;
+  } else if (context_->CanBeUsedAsLiteral(var2)) {
+    lit = var2;
+    value_on_true = coeff2;
+    var = var1;
+    coeff = coeff1;
   } else {
-    // We look ahead to detect solutions to ax + by == cte.
-    int64_t a = coeff1;
-    int64_t b = coeff2;
-    int64_t cte = rhs;
-    int64_t x0 = 0;
-    int64_t y0 = 0;
-    if (!SolveDiophantineEquationOfSizeTwo(a, b, cte, x0, y0)) {
-      context_->UpdateRuleStats(
-          "linear2: implied ax + by = cte has no solutions");
-      return MarkConstraintAsFalse(ct);
-    }
-    const Domain reduced_domain =
-        context_->DomainOf(var1)
-            .AdditionWith(Domain(-x0))
-            .InverseMultiplicationBy(b)
-            .IntersectionWith(context_->DomainOf(var2)
-                                  .AdditionWith(Domain(-y0))
-                                  .InverseMultiplicationBy(-a));
+    return false;
+  }
+  if (!RefIsPositive(lit)) return false;
 
-    if (reduced_domain.IsEmpty()) {  // no solution
-      context_->UpdateRuleStats(
-          "linear2: implied ax + by = cte has no solutions");
-      return MarkConstraintAsFalse(ct);
+  const Domain rhs = ReadDomainFromProto(ct->linear());
+  const Domain rhs_if_true =
+      rhs.AdditionWith(Domain(-value_on_true)).InverseMultiplicationBy(coeff);
+  const Domain rhs_if_false = rhs.InverseMultiplicationBy(coeff);
+  const bool implied_false =
+      context_->DomainOf(var).IntersectionWith(rhs_if_true).IsEmpty();
+  const bool implied_true =
+      context_->DomainOf(var).IntersectionWith(rhs_if_false).IsEmpty();
+  if (implied_true && implied_false) {
+    return MarkConstraintAsFalse(ct, "linear2: infeasible");
+  } else if (implied_true) {
+    context_->UpdateRuleStats("linear2: boolean with one feasible value");
+
+    // => true.
+    ConstraintProto* new_ct = context_->working_model->add_constraints();
+    *new_ct->mutable_enforcement_literal() = ct->enforcement_literal();
+    new_ct->mutable_bool_and()->add_literals(lit);
+    context_->UpdateNewConstraintsVariableUsage();
+
+    // Rewrite to => var in rhs_if_true.
+    ct->mutable_linear()->Clear();
+    ct->mutable_linear()->add_vars(var);
+    ct->mutable_linear()->add_coeffs(1);
+    FillDomainInProto(rhs_if_true, ct->mutable_linear());
+    return PresolveSmallLinear(ct) || true;
+  } else if (implied_false) {
+    context_->UpdateRuleStats("linear2: boolean with one feasible value");
+
+    // => false.
+    ConstraintProto* new_ct = context_->working_model->add_constraints();
+    *new_ct->mutable_enforcement_literal() = ct->enforcement_literal();
+    new_ct->mutable_bool_and()->add_literals(NegatedRef(lit));
+    context_->UpdateNewConstraintsVariableUsage();
+
+    // Rewrite to => var in rhs_if_false.
+    ct->mutable_linear()->Clear();
+    ct->mutable_linear()->add_vars(var);
+    ct->mutable_linear()->add_coeffs(1);
+    FillDomainInProto(rhs_if_false, ct->mutable_linear());
+    return PresolveSmallLinear(ct) || true;
+  } else if (ct->enforcement_literal().empty() &&
+             !context_->CanBeUsedAsLiteral(var)) {
+    // We currently only do that if there are no enforcement and we don't have
+    // two Booleans as this can be presolved differently. We expand it into
+    // two linear1 constraint that have a chance to be merged with other
+    // "encoding" constraints.
+    context_->UpdateRuleStats("linear2: contains a boolean");
+
+    // lit => var \in rhs_if_true
+    const Domain var_domain = context_->DomainOf(var);
+    if (!var_domain.IsIncludedIn(rhs_if_true)) {
+      ConstraintProto* new_ct = context_->working_model->add_constraints();
+      new_ct->add_enforcement_literal(lit);
+      new_ct->mutable_linear()->add_vars(var);
+      new_ct->mutable_linear()->add_coeffs(1);
+      FillDomainInProto(rhs_if_true.IntersectionWith(var_domain),
+                        new_ct->mutable_linear());
     }
 
-    if (reduced_domain.Size() == 1) {
-      const int64_t z = reduced_domain.FixedValue();
+    // NegatedRef(lit) => var \in rhs_if_false
+    if (!var_domain.IsIncludedIn(rhs_if_false)) {
+      ConstraintProto* new_ct = context_->working_model->add_constraints();
+      new_ct->add_enforcement_literal(NegatedRef(lit));
+      new_ct->mutable_linear()->add_vars(var);
+      new_ct->mutable_linear()->add_coeffs(1);
+      FillDomainInProto(rhs_if_false.IntersectionWith(var_domain),
+                        new_ct->mutable_linear());
+    }
+
+    context_->UpdateNewConstraintsVariableUsage();
+    return RemoveConstraint(ct);
+  }
+
+  // Code below require equality.
+  context_->UpdateRuleStats("TODO linear2: contains a boolean");
+  return false;
+}
+
+bool CpModelPresolver::PresolveLinear2NeCst(ConstraintProto* ct, int64_t rhs) {
+  const LinearConstraintProto& arg = ct->linear();
+  const int var1 = arg.vars(0);
+  const int var2 = arg.vars(1);
+
+  const int64_t coeff1 = arg.coeffs(0);
+  const int64_t coeff2 = arg.coeffs(1);
+
+  // coeff1 * v1 + coeff2 * v2 != cte.
+  int64_t a = coeff1;
+  int64_t b = coeff2;
+  int64_t cte = rhs;
+  int64_t x0 = 0;
+  int64_t y0 = 0;
+  if (!SolveDiophantineEquationOfSizeTwo(a, b, cte, x0, y0)) {
+    // no solution.
+    context_->UpdateRuleStats("linear2: remove always feasible ax + by != cte");
+    return RemoveConstraint(ct);
+  }
+
+  const Domain domain_of_z =
+      context_->DomainOf(var1)
+          .AdditionWith(Domain(-x0))
+          .InverseMultiplicationBy(b)
+          .IntersectionWith(context_->DomainOf(var2)
+                                .AdditionWith(Domain(-y0))
+                                .InverseMultiplicationBy(-a));
+  const int64_t max_domain_size =
+      context_->params().max_domain_size_for_linear2_expansion();
+  const int64_t small_domain_size = max_domain_size / 2;
+  if (domain_of_z.Size() <= max_domain_size &&
+      (context_->IsMostlyFullyEncoded(var1) ||
+       context_->DomainSize(var1) <= small_domain_size) &&
+      (context_->IsMostlyFullyEncoded(var2) ||
+       context_->DomainSize(var2) <= small_domain_size)) {
+    // The number of clauses to create is small enough. We can encode the
+    // constraint using just clauses.
+    int num_clauses = 0;
+    for (const int64_t z : domain_of_z.Values()) {
       const int64_t value1 = x0 + b * z;
       const int64_t value2 = y0 - a * z;
-
-      DCHECK(context_->DomainContains(var1, value1));
-      DCHECK(context_->DomainContains(var2, value2));
       DCHECK_EQ(coeff1 * value1 + coeff2 * value2, rhs);
+      if (!context_->VarCanTakeValue(var1, value1) ||
+          !context_->VarCanTakeValue(var2, value2)) {
+        continue;
+      }
 
-      ConstraintProto* imply1 = context_->working_model->add_constraints();
-      *imply1->mutable_enforcement_literal() = ct->enforcement_literal();
-      imply1->mutable_linear()->add_vars(var1);
-      imply1->mutable_linear()->add_coeffs(1);
-      imply1->mutable_linear()->add_domain(value1);
-      imply1->mutable_linear()->add_domain(value1);
-
-      ConstraintProto* imply2 = context_->working_model->add_constraints();
-      *imply2->mutable_enforcement_literal() = ct->enforcement_literal();
-      imply2->mutable_linear()->add_vars(var2);
-      imply2->mutable_linear()->add_coeffs(1);
-      imply2->mutable_linear()->add_domain(value2);
-      imply2->mutable_linear()->add_domain(value2);
-      context_->UpdateRuleStats(
-          "linear2: implied ax + by = cte has only one solution");
-      context_->UpdateNewConstraintsVariableUsage();
-      return RemoveConstraint(ct);
+      // We cannot have both lit1 and lit2 true.
+      const int lit1 = context_->GetOrCreateVarValueEncoding(var1, value1);
+      const int lit2 = context_->GetOrCreateVarValueEncoding(var2, value2);
+      auto* bool_or = context_->AddEnforcedConstraint(ct)->mutable_bool_or();
+      bool_or->add_literals(NegatedRef(lit1));
+      bool_or->add_literals(NegatedRef(lit2));
+      ++num_clauses;
     }
+
+    VLOG(3) << "ConvertLinear2NeCst: |enforcements| = "
+            << ct->enforcement_literal_size()
+            << ", domain1 = " << context_->DomainOf(var1)
+            << ", domain2 = " << context_->DomainOf(var2)
+            << ", coeff1 = " << coeff1 << ", coeff2 = " << coeff2
+            << ", domain_of_z = " << domain_of_z
+            << ", num_clauses = " << num_clauses;
+
+    context_->UpdateNewConstraintsVariableUsage();
+    context_->UpdateRuleStats("linear2: convert ax + by != cte to clauses");
+    return RemoveConstraint(ct);
+  } else {
+    VLOG(3) << "TODO ConvertLinear2NeCst: |enforcements| = "
+            << ct->enforcement_literal_size()
+            << ", domain1 = " << context_->DomainOf(var1)
+            << ", domain2 = " << context_->DomainOf(var2)
+            << ", coeff1 = " << coeff1 << ", coeff2 = " << coeff2
+            << ", rhs = " << rhs << ", domain_of_z = " << domain_of_z
+            << ", |encoding1| = " << context_->GetValueEncodingSize(var1)
+            << ", |encoding2| = " << context_->GetValueEncodingSize(var2);
+    context_->UpdateRuleStats(
+        "TODO linear2: convert ax + by != cte to clauses for large domains");
+    return false;
+  }
+}
+
+bool CpModelPresolver::PresolveUnenforcedLinear2EqCst(ConstraintProto* ct,
+                                                      int64_t rhs) {
+  DCHECK_EQ(ct->linear().vars().size(), 2);
+
+  const LinearConstraintProto& arg = ct->linear();
+  const int var1 = arg.vars(0);
+  const int var2 = arg.vars(1);
+  const int64_t coeff1 = arg.coeffs(0);
+  const int64_t coeff2 = arg.coeffs(1);
+
+  // We have: enforcement => (coeff1 * v1 + coeff2 * v2 == rhs).
+  CHECK(ct->enforcement_literal().empty());
+  // Detect affine relation.
+  //
+  // TODO(user): it might be better to first add only the affine relation with
+  // a coefficient of magnitude 1, and later the one with larger coeffs.
+  bool added = false;
+  if (coeff1 == 1) {
+    added = context_->StoreAffineRelation(var1, var2, -coeff2, rhs);
+  } else if (coeff2 == 1) {
+    added = context_->StoreAffineRelation(var2, var1, -coeff1, rhs);
+  } else if (coeff1 == -1) {
+    added = context_->StoreAffineRelation(var1, var2, coeff2, -rhs);
+  } else if (coeff2 == -1) {
+    added = context_->StoreAffineRelation(var2, var1, coeff1, -rhs);
+  } else {
+    // In this case, we can solve the diophantine equation, and write
+    // both x and y in term of a new affine representative z.
+    //
+    // Note that PresolveLinearEqualityWithModulo() will have the same effect.
+    //
+    // We can also decide to fully expand the equality if the variables
+    // are fully encoded.
+    context_->UpdateRuleStats("TODO linear2: ax + by = cte");
+  }
+  if (added) return RemoveConstraint(ct);
+  return false;
+}
+
+bool CpModelPresolver::PresolveEnforcedLinear2EqCst(ConstraintProto* ct,
+                                                    int64_t rhs) {
+  CHECK(!ct->enforcement_literal().empty());
+  DCHECK(context_->VariableIsAffineRepresentative(ct->linear().vars(0)));
+  DCHECK(context_->VariableIsAffineRepresentative(ct->linear().vars(1)));
+  const LinearConstraintProto& arg = ct->linear();
+
+  const int var1 = arg.vars(0);
+  const int64_t coeff1 = arg.coeffs(0);
+  const Domain d1 = context_->DomainOf(var1);
+
+  const int var2 = arg.vars(1);
+  const int64_t coeff2 = arg.coeffs(1);
+  const Domain d2 = context_->DomainOf(var2);
+
+  // We look ahead to detect solutions to ax + by == cte.
+  int64_t a = coeff1;
+  int64_t b = coeff2;
+  int64_t cte = rhs;
+  int64_t x0 = 0;
+  int64_t y0 = 0;
+  if (!SolveDiophantineEquationOfSizeTwo(a, b, cte, x0, y0)) {
+    return MarkConstraintAsFalse(
+        ct, "linear2: implied ax + by = cte has no solutions");
+  }
+  const Domain reduced_domain =
+      context_->DomainOf(var1)
+          .AdditionWith(Domain(-x0))
+          .InverseMultiplicationBy(b)
+          .IntersectionWith(context_->DomainOf(var2)
+                                .AdditionWith(Domain(-y0))
+                                .InverseMultiplicationBy(-a));
+
+  if (reduced_domain.IsEmpty()) {  // no solution
+    return MarkConstraintAsFalse(
+        ct, "linear2: implied ax + by = cte has no solutions");
   }
 
+  if (reduced_domain.Size() == 1) {
+    const int64_t z = reduced_domain.FixedValue();
+    const int64_t value1 = x0 + b * z;
+    const int64_t value2 = y0 - a * z;
+
+    DCHECK(context_->DomainOf(var1).Contains(value1));
+    DCHECK(context_->DomainOf(var2).Contains(value2));
+    DCHECK_EQ(coeff1 * value1 + coeff2 * value2, rhs);
+
+    LinearConstraintProto* linear1 =
+        context_->AddEnforcedConstraint(ct)->mutable_linear();
+    linear1->add_vars(var1);
+    linear1->add_coeffs(1);
+    linear1->add_domain(value1);
+    linear1->add_domain(value1);
+
+    LinearConstraintProto* linear2 =
+        context_->AddEnforcedConstraint(ct)->mutable_linear();
+    linear2->add_vars(var2);
+    linear2->add_coeffs(1);
+    linear2->add_domain(value2);
+    linear2->add_domain(value2);
+
+    context_->UpdateRuleStats(
+        "linear2: implied ax + by = cte has only one solution");
+    context_->UpdateNewConstraintsVariableUsage();
+    return RemoveConstraint(ct);
+  }
+
+  const int64_t max_domain_size =
+      context_->params().max_domain_size_for_linear2_expansion();
+  const int64_t small_domain_size = max_domain_size / 2;
+
+  if (reduced_domain.Size() <= max_domain_size &&
+      (context_->IsMostlyFullyEncoded(var1) ||
+       context_->DomainSize(var1) <= small_domain_size) &&
+      (context_->IsMostlyFullyEncoded(var2) ||
+       context_->DomainSize(var2) <= small_domain_size)) {
+    int num_imply1 = 0;
+    int num_imply2 = 0;
+    const auto imply_one_direction = [ct, this, &num_imply1, &num_imply2](
+                                         const Domain& domain1,
+                                         const Domain& domain2, int var1,
+                                         int var2, int64_t coeff1,
+                                         int64_t coeff2, int64_t cte) {
+      if (context_->ModelIsUnsat()) return false;
+
+      for (const int64_t value : domain1.Values()) {
+        const int64_t residual = cte - coeff1 * value;
+        const int64_t implied_value = residual / coeff2;
+        if (residual % coeff2 != 0 || !domain2.Contains(implied_value)) {
+          const int lit1 = context_->GetOrCreateVarValueEncoding(var1, value);
+          context_->AddEnforcedConstraint(ct)->mutable_bool_and()->add_literals(
+              NegatedRef(lit1));
+          ++num_imply1;
+        } else {
+          const int lit1 = context_->GetOrCreateVarValueEncoding(var1, value);
+          const int lit2 =
+              context_->GetOrCreateVarValueEncoding(var2, implied_value);
+          ConstraintProto* imply_value = context_->AddEnforcedConstraint(ct);
+          imply_value->mutable_bool_or()->add_literals(NegatedRef(lit1));
+          imply_value->mutable_bool_or()->add_literals(lit2);
+          ++num_imply2;
+        }
+      }
+
+      return true;
+    };
+
+    if (!imply_one_direction(d1, d2, var1, var2, coeff1, coeff2, rhs)) {
+      return false;
+    }
+    if (d1.Size() > 2 || d2.Size() > 2 || num_imply1 > 0) {
+      if (!imply_one_direction(d2, d1, var2, var1, coeff2, coeff1, rhs)) {
+        return false;
+      }
+    }
+
+    VLOG(3) << "ConvertLinear2EqCst: |enforcements| = "
+            << ct->enforcement_literal_size() << ", domain1 = " << d1
+            << ", domain2 = " << d2 << ", coeff1 = " << coeff1
+            << ", coeff2 = " << coeff2 << ", num_imply1 = " << num_imply1
+            << ", num_imply2 = " << num_imply2;
+
+    context_->UpdateNewConstraintsVariableUsage();
+    context_->UpdateRuleStats(
+        "linear2: convert implied ax + by == cte to clauses");
+    return RemoveConstraint(ct);
+  } else if (std::abs(coeff1) != 1 || std::abs(coeff2) != 1 ||
+             coeff1 + coeff2 != 0) {
+    VLOG(3) << "TODO ConvertLinear2EqCst: |enforcements| = "
+            << ct->enforcement_literal_size()
+            << ", domain1 = " << context_->DomainOf(var1)
+            << ", domain2 = " << context_->DomainOf(var2)
+            << ", coeff1 = " << coeff1 << ", coeff2 = " << coeff2
+            << ", rhs = " << rhs
+            << ", |encoding1| = " << context_->GetValueEncodingSize(var1)
+            << ", |encoding2| = " << context_->GetValueEncodingSize(var2);
+    context_->UpdateRuleStats(
+        "TODO linear2: convert implied ax + by == cte to clauses for large "
+        "domains");
+  }
   return false;
+}
+
+bool CpModelPresolver::PresolveEmptyLinearConstraint(ConstraintProto* ct) {
+  const Domain rhs = ReadDomainFromProto(ct->linear());
+  if (rhs.Contains(0)) {
+    context_->UpdateRuleStats("linear: empty");
+    return RemoveConstraint(ct);
+  } else {
+    return MarkConstraintAsFalse(ct, "linear: empty");
+  }
 }
 
 bool CpModelPresolver::PresolveSmallLinear(ConstraintProto* ct) {
   if (ct->constraint_case() != ConstraintProto::kLinear) return false;
   if (context_->ModelIsUnsat()) return false;
 
-  if (ct->linear().vars().empty()) {
-    context_->UpdateRuleStats("linear: empty");
-    const Domain rhs = ReadDomainFromProto(ct->linear());
-    if (rhs.Contains(0)) {
-      return RemoveConstraint(ct);
-    } else {
-      return MarkConstraintAsFalse(ct);
-    }
-  } else if (ct->linear().vars().size() == 1) {
-    return PresolveLinearOfSizeOne(ct);
-  } else if (ct->linear().vars().size() == 2) {
-    return PresolveLinearOfSizeTwo(ct);
+  bool changed = false;
+  if (ct->linear().vars().size() <= 2) {
+    if (!CanonicalizeLinear(ct, &changed)) return true;
+    if (ct->constraint_case() != ConstraintProto::kLinear) return true;
   }
 
-  return false;
+  if (ct->linear().vars().empty()) {
+    return PresolveEmptyLinearConstraint(ct);
+  } else if (ct->linear().vars().size() == 1) {
+    return PresolveLinearOfSizeOne(ct) || changed;
+  } else if (ct->linear().vars().size() == 2) {
+    return PresolveLinearOfSizeTwo(ct) || changed;
+  }
+
+  return changed;
+}
+
+bool CpModelPresolver::PresolveDiophantine(ConstraintProto* ct) {
+  if (ct->constraint_case() != ConstraintProto::kLinear) return false;
+  if (ct->linear().vars().size() <= 1) return false;
+  if (context_->ModelIsUnsat()) return false;
+  // The transformation can add extra variables, and creates duplicate solutions
+  // when enumerate_all_solutions is true.
+  if (context_->params().enumerate_all_solutions()) return false;
+
+  const LinearConstraintProto& linear_constraint = ct->linear();
+  if (linear_constraint.domain_size() != 2) return false;
+  if (linear_constraint.domain(0) != linear_constraint.domain(1)) return false;
+
+  std::vector<int64_t> lbs(linear_constraint.vars_size());
+  std::vector<int64_t> ubs(linear_constraint.vars_size());
+  for (int i = 0; i < linear_constraint.vars_size(); ++i) {
+    lbs[i] = context_->MinOf(linear_constraint.vars(i));
+    ubs[i] = context_->MaxOf(linear_constraint.vars(i));
+  }
+  DiophantineSolution diophantine_solution = SolveDiophantine(
+      linear_constraint.coeffs(), linear_constraint.domain(0), lbs, ubs);
+
+  if (!diophantine_solution.has_solutions) {
+    return MarkConstraintAsFalse(ct, "diophantine: equality has no solutions");
+  }
+  if (diophantine_solution.no_reformulation_needed) return false;
+  // Only first coefficients of kernel_basis elements and special_solution could
+  // overflow int64_t due to the reduction applied in SolveDiophantineEquation,
+  for (const std::vector<absl::int128>& b : diophantine_solution.kernel_basis) {
+    if (!IsNegatableInt64(b[0])) {
+      context_->UpdateRuleStats(
+          "diophantine: couldn't apply due to int64_t overflow");
+      return false;
+    }
+  }
+  if (!IsNegatableInt64(diophantine_solution.special_solution[0])) {
+    context_->UpdateRuleStats(
+        "diophantine: couldn't apply due to int64_t overflow");
+    return false;
+  }
+
+  const int num_replaced_variables =
+      static_cast<int>(diophantine_solution.special_solution.size());
+  const int num_new_variables =
+      static_cast<int>(diophantine_solution.kernel_vars_lbs.size());
+  DCHECK_EQ(num_new_variables + 1, num_replaced_variables);
+  for (int i = 0; i < num_new_variables; ++i) {
+    if (!IsNegatableInt64(diophantine_solution.kernel_vars_lbs[i]) ||
+        !IsNegatableInt64(diophantine_solution.kernel_vars_ubs[i])) {
+      context_->UpdateRuleStats(
+          "diophantine: couldn't apply due to int64_t overflow");
+      return false;
+    }
+  }
+  // TODO(user): Make sure the newly generated linear constraint
+  // satisfy our no-overflow precondition on the min/max activity.
+  // We should check that the model still satisfy conditions in
+  // `PossibleIntegerOverflow` (sat/cp_model_checker.cc)
+
+  // Create new variables.
+  std::vector<int> new_variables(num_new_variables);
+  for (int i = 0; i < num_new_variables; ++i) {
+    new_variables[i] = context_->working_model->variables_size();
+    IntegerVariableProto* var = context_->working_model->add_variables();
+    var->add_domain(
+        static_cast<int64_t>(diophantine_solution.kernel_vars_lbs[i]));
+    var->add_domain(
+        static_cast<int64_t>(diophantine_solution.kernel_vars_ubs[i]));
+    if (!ct->name().empty()) {
+      var->set_name(absl::StrCat("u_diophantine_", ct->name(), "_", i));
+    }
+  }
+
+  // For i = 0, ..., num_replaced_variables - 1, creates
+  //  x[i] = special_solution[i]
+  //        + sum(kernel_basis[k][i]*y[k], max(1, i) <= k < vars.size - 1)
+  // where:
+  //  y[k] is the newly created variable if 0 <= k < num_new_variables
+  //  y[k] = x[index_permutation[k + 1]] otherwise.
+  std::vector<std::vector<int64_t>> lin_vars_lbs(num_replaced_variables);
+  for (int i = 0; i < num_replaced_variables; ++i) {
+    ConstraintProto* identity = context_->working_model->add_constraints();
+    LinearConstraintProto* lin = identity->mutable_linear();
+    if (!ct->name().empty()) {
+      identity->set_name(absl::StrCat("c_diophantine_", ct->name(), "_", i));
+    }
+    *identity->mutable_enforcement_literal() = ct->enforcement_literal();
+    const int var =
+        linear_constraint.vars(diophantine_solution.index_permutation[i]);
+    lin->add_vars(var);
+    lin_vars_lbs[i].push_back(context_->MinOf(var));
+    lin->add_coeffs(1);
+    lin->add_domain(
+        static_cast<int64_t>(diophantine_solution.special_solution[i]));
+    lin->add_domain(
+        static_cast<int64_t>(diophantine_solution.special_solution[i]));
+    for (int j = std::max(1, i); j < num_replaced_variables; ++j) {
+      lin->add_vars(new_variables[j - 1]);
+      lin_vars_lbs[i].push_back(
+          static_cast<int64_t>(diophantine_solution.kernel_vars_lbs[j - 1]));
+      lin->add_coeffs(
+          -static_cast<int64_t>(diophantine_solution.kernel_basis[j - 1][i]));
+    }
+    for (int j = num_replaced_variables; j < linear_constraint.vars_size();
+         ++j) {
+      const int var =
+          linear_constraint.vars(diophantine_solution.index_permutation[j]);
+      lin->add_vars(var);
+      lin_vars_lbs[i].push_back(context_->MinOf(var));
+      lin->add_coeffs(
+          -static_cast<int64_t>(diophantine_solution.kernel_basis[j - 1][i]));
+    }
+
+    // TODO(user): The domain in the proto are not necessarily up to date so
+    // this might be stricter than necessary. Fix? It shouldn't matter too much
+    // though.
+    if (PossibleIntegerOverflow(*(context_->working_model), lin->vars(),
+                                lin->coeffs())) {
+      context_->UpdateRuleStats(
+          "diophantine: couldn't apply due to overflowing activity of new "
+          "constraints");
+      // Cancel working_model changes.
+      context_->working_model->mutable_constraints()->DeleteSubrange(
+          context_->working_model->constraints_size() - i - 1, i + 1);
+      context_->working_model->mutable_variables()->DeleteSubrange(
+          context_->working_model->variables_size() - num_new_variables,
+          num_new_variables);
+      return false;
+    }
+  }
+  context_->InitializeNewDomains();
+  // Scan the new constraints added above in reverse order so that the hint of
+  // `new_variables[k]` can be computed from the hint of the existing variables
+  // and from the hints of `new_variables[k']`, with k' > k.
+  const int num_constraints = context_->working_model->constraints_size();
+  for (int i = 0; i < num_replaced_variables; ++i) {
+    const LinearConstraintProto& linear =
+        context_->working_model->constraints(num_constraints - 1 - i).linear();
+    DCHECK(linear.domain_size() == 2 && linear.domain(0) == linear.domain(1));
+    solution_crush_.SetVarToLinearConstraintSolution(
+        ct->enforcement_literal(), std::nullopt, linear.vars(), lin_vars_lbs[i],
+        linear.coeffs(), linear.domain(0));
+  }
+
+  if (VLOG_IS_ON(2)) {
+    std::string log_eq = absl::StrCat(linear_constraint.domain(0), " = ");
+    const int terms_to_show = std::min<int>(15, linear_constraint.vars_size());
+    for (int i = 0; i < terms_to_show; ++i) {
+      if (i > 0) absl::StrAppend(&log_eq, " + ");
+      absl::StrAppend(
+          &log_eq,
+          linear_constraint.coeffs(diophantine_solution.index_permutation[i]),
+          " x",
+          linear_constraint.vars(diophantine_solution.index_permutation[i]));
+    }
+    if (terms_to_show < linear_constraint.vars_size()) {
+      absl::StrAppend(&log_eq, "+ ... (", linear_constraint.vars_size(),
+                      " terms)");
+    }
+    VLOG(2) << "[Diophantine] " << log_eq;
+  }
+
+  context_->UpdateRuleStats("diophantine: reformulated equality");
+  context_->UpdateNewConstraintsVariableUsage();
+  return RemoveConstraint(ct);
+}
+
+// This tries to decompose the constraint into coeff * part1 + part2 and show
+// that the value that part2 take is not important, thus the constraint can
+// only be transformed on a constraint on the first part.
+//
+// TODO(user): Improve !! we miss simple case like x + 47 y + 50 z >= 50
+// for positive variables. We should remove x, and ideally we should rewrite
+// this as y + 2z >= 2 if we can show that its relaxation is just better?
+// We should at least see that it is the same as 47y + 50 z >= 48.
+//
+// TODO(user): One easy algo is to first remove all enforcement term (even
+// non-Boolean one) before applying the algo here and then re-linearize the
+// non-Boolean terms.
+void CpModelPresolver::TryToReduceCoefficientsOfLinearConstraint(
+    int c, ConstraintProto* ct) {
+  if (ct->constraint_case() != ConstraintProto::kLinear) return;
+  if (context_->ModelIsUnsat()) return;
+
+  // Only consider "simple" constraints.
+  const LinearConstraintProto& lin = ct->linear();
+  if (lin.domain().size() != 2) return;
+  const Domain rhs = ReadDomainFromProto(lin);
+
+  // Precompute a bunch of quantities and "canonicalize" the constraint.
+  int64_t lb_sum = 0;
+  int64_t ub_sum = 0;
+  int64_t max_variation = 0;
+
+  rd_entries_.clear();
+  rd_magnitudes_.clear();
+  rd_lbs_.clear();
+  rd_ubs_.clear();
+
+  int64_t max_magnitude = 0;
+  const int num_terms = lin.vars().size();
+  for (int i = 0; i < num_terms; ++i) {
+    const int64_t coeff = lin.coeffs(i);
+    const int64_t magnitude = std::abs(lin.coeffs(i));
+    if (magnitude == 0) continue;
+    max_magnitude = std::max(max_magnitude, magnitude);
+
+    int64_t lb;
+    int64_t ub;
+    if (coeff > 0) {
+      lb = context_->MinOf(lin.vars(i));
+      ub = context_->MaxOf(lin.vars(i));
+    } else {
+      lb = -context_->MaxOf(lin.vars(i));
+      ub = -context_->MinOf(lin.vars(i));
+    }
+    lb_sum += lb * magnitude;
+    ub_sum += ub * magnitude;
+
+    // Abort if fixed term, that might mess up code below.
+    if (lb == ub) return;
+
+    rd_lbs_.push_back(lb);
+    rd_ubs_.push_back(ub);
+    rd_magnitudes_.push_back(magnitude);
+    rd_entries_.push_back({magnitude, magnitude * (ub - lb), i});
+    max_variation += rd_entries_.back().max_variation;
+  }
+
+  // Mark trivially false constraint as such. This should have been already
+  // done, but we require non-negative quantity below.
+  if (lb_sum > rhs.Max() || rhs.Min() > ub_sum) {
+    (void)MarkConstraintAsFalse(ct, "linear: trivially false");
+    context_->UpdateConstraintVariableUsage(c);
+    return;
+  }
+  const IntegerValue rhs_ub(CapSub(rhs.Max(), lb_sum));
+  const IntegerValue rhs_lb(CapSub(ub_sum, rhs.Min()));
+  const bool use_ub = max_variation > rhs_ub;
+  const bool use_lb = max_variation > rhs_lb;
+  if (!use_ub && !use_lb) {
+    context_->UpdateRuleStats("linear: trivially true");
+    (void)RemoveConstraint(ct);
+    context_->UpdateConstraintVariableUsage(c);
+    return;
+  }
+
+  // No point doing more work for constraint with all coeff at +/-1.
+  if (max_magnitude <= 1) return;
+
+  // TODO(user): All the lb/ub_feasible/infeasible class are updated in
+  // exactly the same way. Find a more efficient algo?
+  if (use_lb) {
+    lb_feasible_.Reset(rhs_lb.value());
+    lb_infeasible_.Reset(rhs.Min() - lb_sum - 1);
+  }
+  if (use_ub) {
+    ub_feasible_.Reset(rhs_ub.value());
+    ub_infeasible_.Reset(ub_sum - rhs.Max() - 1);
+  }
+
+  // Process entries by decreasing magnitude. Update max_error to correspond
+  // only to the sum of the not yet processed terms.
+  uint64_t gcd = 0;
+  int64_t max_error = max_variation;
+  std::stable_sort(rd_entries_.begin(), rd_entries_.end(),
+                   [](const RdEntry& a, const RdEntry& b) {
+                     return a.magnitude > b.magnitude;
+                   });
+  int64_t range = 0;
+  rd_divisors_.clear();
+  for (int i = 0; i < rd_entries_.size(); ++i) {
+    const RdEntry& e = rd_entries_[i];
+    gcd = std::gcd(gcd, e.magnitude);
+    max_error -= e.max_variation;
+
+    // We regroup all term with the same coefficient into one.
+    //
+    // TODO(user): I am not sure there is no possible simplification across two
+    // term with the same coeff, but it should be rare if it ever happens.
+    range += e.max_variation / e.magnitude;
+    if (i + 1 < rd_entries_.size() &&
+        e.magnitude == rd_entries_[i + 1].magnitude) {
+      continue;
+    }
+    const int64_t saved_range = range;
+    range = 0;
+
+    if (e.magnitude > 1) {
+      if ((!use_ub ||
+           max_error <= PositiveRemainder(rhs_ub, IntegerValue(e.magnitude))) &&
+          (!use_lb ||
+           max_error <= PositiveRemainder(rhs_lb, IntegerValue(e.magnitude)))) {
+        rd_divisors_.push_back(e.magnitude);
+      }
+    }
+
+    bool simplify_lb = false;
+    if (use_lb) {
+      lb_feasible_.AddMultiples(e.magnitude, saved_range);
+      lb_infeasible_.AddMultiples(e.magnitude, saved_range);
+
+      // For a <= constraint, the max_feasible + error is still feasible.
+      if (CapAdd(lb_feasible_.CurrentMax(), max_error) <=
+          lb_feasible_.Bound()) {
+        simplify_lb = true;
+      }
+      // For a <= constraint describing the infeasible set, the max_infeasible +
+      // error is still infeasible.
+      if (CapAdd(lb_infeasible_.CurrentMax(), max_error) <=
+          lb_infeasible_.Bound()) {
+        simplify_lb = true;
+      }
+    } else {
+      simplify_lb = true;
+    }
+    bool simplify_ub = false;
+    if (use_ub) {
+      ub_feasible_.AddMultiples(e.magnitude, saved_range);
+      ub_infeasible_.AddMultiples(e.magnitude, saved_range);
+      if (CapAdd(ub_feasible_.CurrentMax(), max_error) <=
+          ub_feasible_.Bound()) {
+        simplify_ub = true;
+      }
+      if (CapAdd(ub_infeasible_.CurrentMax(), max_error) <=
+          ub_infeasible_.Bound()) {
+        simplify_ub = true;
+      }
+    } else {
+      simplify_ub = true;
+    }
+
+    if (max_error == 0) break;  // Last term.
+    if (simplify_lb && simplify_ub) {
+      // We have a simplification since the second part can be ignored.
+      context_->UpdateRuleStats("linear: remove irrelevant part");
+      int64_t shift_lb = 0;
+      int64_t shift_ub = 0;
+      rd_vars_.clear();
+      rd_coeffs_.clear();
+      for (int j = 0; j <= i; ++j) {
+        const int index = rd_entries_[j].index;
+        const int64_t m = rd_magnitudes_[index];
+        shift_lb += rd_lbs_[index] * m;
+        shift_ub += rd_ubs_[index] * m;
+        rd_vars_.push_back(lin.vars(index));
+        rd_coeffs_.push_back(lin.coeffs(index));
+      }
+      LinearConstraintProto* mut_lin = ct->mutable_linear();
+      mut_lin->mutable_vars()->Assign(rd_vars_.begin(), rd_vars_.end());
+      mut_lin->mutable_coeffs()->Assign(rd_coeffs_.begin(), rd_coeffs_.end());
+
+      // The constraint become:
+      //   sum ci (X - lb) <= rhs_ub
+      //   sum ci (ub - X) <= rhs_lb
+      //   sum ci ub - rhs_lb <= sum ci X <= rhs_ub + sum ci lb.
+      const int64_t new_rhs_lb =
+          use_lb ? shift_ub - lb_feasible_.CurrentMax() : shift_lb;
+      const int64_t new_rhs_ub =
+          use_ub ? shift_lb + ub_feasible_.CurrentMax() : shift_ub;
+      if (new_rhs_lb > new_rhs_ub) {
+        (void)MarkConstraintAsFalse(ct, "linear: false after simplification");
+        context_->UpdateConstraintVariableUsage(c);
+        return;
+      }
+      FillDomainInProto(Domain(new_rhs_lb, new_rhs_ub), mut_lin);
+      DivideLinearByGcd(ct);
+      context_->UpdateConstraintVariableUsage(c);
+      return;
+    }
+  }
+
+  if (gcd > 1) {
+    // This might happen as a result of extra reduction after we already tried
+    // this reduction.
+    if (DivideLinearByGcd(ct)) {
+      context_->UpdateConstraintVariableUsage(c);
+    }
+    return;
+  }
+
+  // We didn't remove any irrelevant part, but we might be able to tighten
+  // the constraint bound.
+  if ((use_lb && lb_feasible_.CurrentMax() < lb_feasible_.Bound()) ||
+      (use_ub && ub_feasible_.CurrentMax() < ub_feasible_.Bound())) {
+    context_->UpdateRuleStats("linear: reduce rhs with DP");
+    const int64_t new_rhs_lb =
+        use_lb ? ub_sum - lb_feasible_.CurrentMax() : lb_sum;
+    const int64_t new_rhs_ub =
+        use_ub ? lb_sum + ub_feasible_.CurrentMax() : ub_sum;
+    if (new_rhs_lb > new_rhs_ub) {
+      (void)MarkConstraintAsFalse(ct, "linear: reduce rhs with DP");
+      context_->UpdateConstraintVariableUsage(c);
+      return;
+    }
+    FillDomainInProto(Domain(new_rhs_lb, new_rhs_ub), ct->mutable_linear());
+  }
+
+  // Limit the number of "divisor" we try for approximate gcd.
+  if (rd_divisors_.size() > 3) rd_divisors_.resize(3);
+  for (const int64_t divisor : rd_divisors_) {
+    // Try the <= side first.
+    int64_t new_ub;
+    if (!LinearInequalityCanBeReducedWithClosestMultiple(
+            divisor, rd_magnitudes_, rd_lbs_, rd_ubs_, rhs.Max(), &new_ub)) {
+      continue;
+    }
+
+    // The other side.
+    int64_t minus_new_lb;
+    for (int i = 0; i < rd_lbs_.size(); ++i) {
+      std::swap(rd_lbs_[i], rd_ubs_[i]);
+      rd_lbs_[i] = -rd_lbs_[i];
+      rd_ubs_[i] = -rd_ubs_[i];
+    }
+    if (!LinearInequalityCanBeReducedWithClosestMultiple(
+            divisor, rd_magnitudes_, rd_lbs_, rd_ubs_, -rhs.Min(),
+            &minus_new_lb)) {
+      for (int i = 0; i < rd_lbs_.size(); ++i) {
+        std::swap(rd_lbs_[i], rd_ubs_[i]);
+        rd_lbs_[i] = -rd_lbs_[i];
+        rd_ubs_[i] = -rd_ubs_[i];
+      }
+      continue;
+    }
+
+    // Rewrite the constraint !
+    context_->UpdateRuleStats("linear: simplify using approximate gcd");
+    int new_size = 0;
+    LinearConstraintProto* mutable_linear = ct->mutable_linear();
+    for (int i = 0; i < lin.coeffs().size(); ++i) {
+      const int64_t new_coeff =
+          ClosestMultiple(lin.coeffs(i), divisor) / divisor;
+      if (new_coeff == 0) continue;
+      mutable_linear->set_vars(new_size, lin.vars(i));
+      mutable_linear->set_coeffs(new_size, new_coeff);
+      ++new_size;
+    }
+    mutable_linear->mutable_vars()->Truncate(new_size);
+    mutable_linear->mutable_coeffs()->Truncate(new_size);
+    const Domain new_rhs = Domain(-minus_new_lb, new_ub);
+    if (new_rhs.IsEmpty()) {
+      (void)MarkConstraintAsFalse(ct, "linear: false after approximate gcd");
+    } else {
+      FillDomainInProto(new_rhs, mutable_linear);
+    }
+    context_->UpdateConstraintVariableUsage(c);
+    return;
+  }
 }
 
 namespace {
-
-// Return true if the given domain only restrict the values with an upper bound.
-bool IsLeConstraint(const Domain& domain, const Domain& all_values) {
-  return all_values
-      .IntersectionWith(
-          Domain(std::numeric_limits<int64_t>::min(), domain.Max()))
-      .IsIncludedIn(domain);
-}
-
-// Same as IsLeConstraint() but in the other direction.
-bool IsGeConstraint(const Domain& domain, const Domain& all_values) {
-  return all_values
-      .IntersectionWith(
-          Domain(domain.Min(), std::numeric_limits<int64_t>::max()))
-      .IsIncludedIn(domain);
-}
 
 // In the equation terms + coeff * var_domain \included rhs, returns true if can
 // we always fix rhs to its min value for any value in terms. It is okay to
@@ -2117,165 +3845,407 @@ bool RhsCanBeFixedToMax(int64_t coeff, const Domain& var_domain,
   return false;
 }
 
-// Remove from to_clear any entry not in current.
-void TakeIntersectionWith(const absl::flat_hash_set<int>& current,
-                          absl::flat_hash_set<int>* to_clear) {
-  std::vector<int> new_set;
-  for (const int c : *to_clear) {
-    if (current.contains(c)) new_set.push_back(c);
+int FixLiteralFromSet(const absl::flat_hash_set<int>& literals_at_true,
+                      LinearConstraintProto* linear) {
+  int new_size = 0;
+  int num_fixed = 0;
+  const int num_terms = linear->vars().size();
+  int64_t shift = 0;
+  for (int i = 0; i < num_terms; ++i) {
+    const int var = linear->vars(i);
+    const int64_t coeff = linear->coeffs(i);
+    if (literals_at_true.contains(var)) {
+      // Var is at one.
+      shift += coeff;
+      ++num_fixed;
+    } else if (!literals_at_true.contains(NegatedRef(var))) {
+      linear->set_vars(new_size, var);
+      linear->set_coeffs(new_size, coeff);
+      ++new_size;
+    } else {
+      ++num_fixed;
+      // Else the variable is at zero.
+    }
   }
-  to_clear->clear();
-  for (const int c : new_set) to_clear->insert(c);
+  linear->mutable_vars()->Truncate(new_size);
+  linear->mutable_coeffs()->Truncate(new_size);
+  if (shift != 0) {
+    FillDomainInProto(ReadDomainFromProto(*linear).AdditionWith(Domain(-shift)),
+                      linear);
+  }
+  return num_fixed;
 }
 
 }  // namespace
 
-bool CpModelPresolver::DetectAndProcessOneSidedLinearConstraint(
-    int c, ConstraintProto* ct) {
-  if (ct->constraint_case() != ConstraintProto::ConstraintCase::kLinear) {
-    return false;
+void CpModelPresolver::ProcessAtMostOneAndLinear() {
+  if (time_limit_->LimitReached()) return;
+  if (context_->ModelIsUnsat()) return;
+  if (context_->params().presolve_inclusion_work_limit() == 0) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
+
+  ActivityBoundHelper amo_in_linear;
+  amo_in_linear.AddAllAtMostOnes(*context_->working_model);
+
+  int num_changes = 0;
+  const int num_constraints = context_->working_model->constraints_size();
+  for (int c = 0; c < num_constraints; ++c) {
+    ConstraintProto* ct = context_->working_model->mutable_constraints(c);
+    if (ct->constraint_case() != ConstraintProto::kLinear) continue;
+
+    // We loop if the constraint changed.
+    for (int i = 0; i < 5; ++i) {
+      const int old_size = ct->linear().vars().size();
+      const int old_enf_size = ct->enforcement_literal().size();
+      ProcessOneLinearWithAmo(c, ct, &amo_in_linear);
+      if (context_->ModelIsUnsat()) return;
+      if (ct->constraint_case() != ConstraintProto::kLinear) break;
+      if (ct->linear().vars().size() == old_size &&
+          ct->enforcement_literal().size() == old_enf_size) {
+        break;
+      }
+      ++num_changes;
+    }
   }
-  if (context_->ModelIsUnsat()) return false;
-  if (context_->keep_all_feasible_solutions) return false;
 
-  // TODO(user): There is a bit of code and effort duplication with
-  // PropagateDomainsInLinear(). Try to remove that.
-  Domain implied_rhs(0);
-  const int num_vars = ct->linear().vars().size();
-  for (int i = 0; i < num_vars; ++i) {
-    const int ref = ct->linear().vars(i);
-    const int64_t coeff = ct->linear().coeffs(i);
-    implied_rhs =
-        implied_rhs
-            .AdditionWith(context_->DomainOf(ref).MultiplicationBy(coeff))
-            .RelaxIfTooComplex();
-  }
+  timer.AddCounter("num_changes", num_changes);
+}
 
-  // Abort if trivial.
-  const Domain old_rhs = ReadDomainFromProto(ct->linear());
-  if (implied_rhs.IsIncludedIn(old_rhs)) {
-    context_->UpdateRuleStats("linear: always true");
-    return RemoveConstraint(ct);
-  }
+// TODO(user): Similarly amo and bool_or intersection or amo and enforcement
+// literals list can be presolved.
+//
+// TODO(user): This is stronger than the fully included case. Avoid having
+// the second code?
+void CpModelPresolver::ProcessOneLinearWithAmo(int ct_index,
+                                               ConstraintProto* ct,
+                                               ActivityBoundHelper* helper) {
+  if (ct->constraint_case() != ConstraintProto::kLinear) return;
+  if (ct->linear().vars().size() <= 1) return;
 
-  // Incorporate the implied rhs information.
-  const Domain rhs = old_rhs.SimplifyUsingImpliedDomain(implied_rhs);
-  if (rhs.IsEmpty()) {
-    context_->UpdateRuleStats("linear: infeasible");
-    return MarkConstraintAsFalse(ct);
-  }
-  if (rhs != old_rhs) {
-    context_->UpdateRuleStats("linear: simplified rhs");
-  }
-  FillDomainInProto(rhs, ct->mutable_linear());
-
-  // Detect if it is always good for a term of this constraint to move towards
-  // its lower (resp. upper) bound. This is the same as saying that this
-  // constraint only bound in one direction.
-  const bool is_le_constraint = IsLeConstraint(rhs, implied_rhs);
-  const bool is_ge_constraint = IsGeConstraint(rhs, implied_rhs);
-  if (!is_le_constraint && !is_ge_constraint) return false;
-  CHECK_NE(is_le_constraint, is_ge_constraint);
-
-  bool recanonicalize = false;
-  for (int i = 0; i < num_vars; ++i) {
-    const int var = ct->linear().vars(i);
-    const int64_t var_coeff = ct->linear().coeffs(i);
-    CHECK(RefIsPositive(var));
-
-    if ((var_coeff > 0) == is_ge_constraint) {
-      context_->var_to_lb_only_constraints[var].insert(c);
+  // TODO(user): It is possible in some corner-case that the linear constraint
+  // is NOT canonicalized. This is because we might detect equivalence here and
+  // we will continue with ProcessOneLinearWithAmo() in the parent loop.
+  tmp_terms_.clear();
+  temp_ct_.Clear();
+  Domain non_boolean_domain(0);
+  const int initial_size = ct->linear().vars().size();
+  int64_t min_magnitude = std::numeric_limits<int64_t>::max();
+  int64_t max_magnitude = 0;
+  for (int i = 0; i < initial_size; ++i) {
+    // TODO(user): Just do not use negative reference in linear!
+    int ref = ct->linear().vars(i);
+    int64_t coeff = ct->linear().coeffs(i);
+    if (!RefIsPositive(ref)) {
+      ref = NegatedRef(ref);
+      coeff = -coeff;
+    }
+    if (context_->CanBeUsedAsLiteral(ref)) {
+      tmp_terms_.push_back({ref, coeff});
+      min_magnitude = std::min(min_magnitude, std::abs(coeff));
+      max_magnitude = std::max(max_magnitude, std::abs(coeff));
     } else {
-      context_->var_to_ub_only_constraints[var].insert(c);
+      non_boolean_domain =
+          non_boolean_domain
+              .AdditionWith(
+                  context_->DomainOf(ref).ContinuousMultiplicationBy(coeff))
+              .RelaxIfTooComplex();
+      temp_ct_.mutable_linear()->add_vars(ref);
+      temp_ct_.mutable_linear()->add_coeffs(coeff);
     }
+  }
 
-    // Simple dual fixing: If for any feasible solution, any solution with var
-    // higher (resp. lower) is also valid, then we can fix that variable to
-    // its bound if it also moves the objective in the good direction.
-    const bool is_in_objective = context_->VarToConstraints(var).contains(-1);
-    const int size =
-        context_->VarToConstraints(var).size() - (is_in_objective ? 1 : 0);
-    const int64_t obj_coeff =
-        is_in_objective ? context_->ObjectiveMap().at(var) : 0;
+  // Skip if there are no Booleans.
+  if (tmp_terms_.empty()) return;
 
-    // We cannot fix anything if the domain of the objective is excluding
-    // some objective values.
-    if (obj_coeff != 0 && context_->ObjectiveDomainIsConstraining()) {
-      continue;
-    }
-
-    if (obj_coeff <= 0 &&
-        context_->var_to_lb_only_constraints[var].size() >= size) {
-      TakeIntersectionWith(context_->VarToConstraints(var),
-                           &(context_->var_to_lb_only_constraints[var]));
-      if (context_->var_to_lb_only_constraints[var].size() >= size) {
-        if (!context_->IntersectDomainWith(var, Domain(context_->MaxOf(var)))) {
-          return false;
-        }
-        context_->UpdateRuleStats("linear: dual fixing");
-        recanonicalize = true;
-        continue;
+  // Detect encoded AMO.
+  //
+  // TODO(user): Support more coefficient strengthening cases.
+  // For instance on neos-954925.pb.gz we have stuff like:
+  //    20 * (AMO1 + AMO2) - [coeff in 48 to 53] >= -15
+  // this is really AMO1 + AMO2 - 2 * AMO3 >= 0.
+  // Maybe if we reify the AMO to exactly one, this is visible since large
+  // AMO can be rewriten with single variable (1 - extra var in exactly one).
+  const Domain rhs = ReadDomainFromProto(ct->linear());
+  if (non_boolean_domain == Domain(0) && rhs.NumIntervals() == 1 &&
+      min_magnitude < max_magnitude) {
+    int64_t min_activity = 0;
+    for (const auto [ref, coeff] : tmp_terms_) {
+      if (coeff <= 0) {
+        min_activity += coeff;
       }
     }
-
-    if (obj_coeff >= 0 &&
-        context_->var_to_ub_only_constraints[var].size() >= size) {
-      TakeIntersectionWith(context_->VarToConstraints(var),
-                           &(context_->var_to_ub_only_constraints[var]));
-      if (context_->var_to_ub_only_constraints[var].size() >= size) {
-        if (!context_->IntersectDomainWith(var, Domain(context_->MinOf(var)))) {
-          return false;
+    const int64_t transformed_rhs = rhs.Max() - min_activity;
+    if (min_activity >= rhs.Min() && max_magnitude <= transformed_rhs) {
+      std::vector<int> literals;
+      for (const auto [ref, coeff] : tmp_terms_) {
+        if (coeff + min_magnitude > transformed_rhs) continue;
+        literals.push_back(coeff > 0 ? ref : NegatedRef(ref));
+      }
+      if (helper->IsAmo(literals)) {
+        // We actually have an at-most-one in disguise.
+        context_->UpdateRuleStats("linear + amo: detect hidden AMO");
+        int64_t shift = 0;
+        for (int i = 0; i < initial_size; ++i) {
+          CHECK(RefIsPositive(ct->linear().vars(i)));
+          if (ct->linear().coeffs(i) > 0) {
+            ct->mutable_linear()->set_coeffs(i, 1);
+          } else {
+            ct->mutable_linear()->set_coeffs(i, -1);
+            shift -= 1;
+          }
         }
-        context_->UpdateRuleStats("linear: dual fixing");
-        recanonicalize = true;
-        continue;
+        FillDomainInProto(Domain(shift, shift + 1), ct->mutable_linear());
+        return;
       }
     }
   }
 
-  if (recanonicalize) return CanonicalizeLinear(ct);
-  return false;
+  // Get more precise activity estimate based on at most one and heuristics.
+  const int64_t min_bool_activity =
+      helper->ComputeMinActivity(tmp_terms_, &conditional_mins_);
+  const int64_t max_bool_activity =
+      helper->ComputeMaxActivity(tmp_terms_, &conditional_maxs_);
+
+  // Detect trivially true/false constraint under these new bounds.
+  // TODO(user): relax rhs if only one side is trivial.
+  const Domain activity = non_boolean_domain.AdditionWith(
+      Domain(min_bool_activity, max_bool_activity));
+  if (activity.IntersectionWith(rhs).IsEmpty()) {
+    // Note that this covers min_bool_activity > max_bool_activity.
+    (void)MarkConstraintAsFalse(ct,
+                                "linear + amo: infeasible linear constraint");
+    context_->UpdateConstraintVariableUsage(ct_index);
+    return;
+  } else if (activity.IsIncludedIn(rhs)) {
+    context_->UpdateRuleStats("linear + amo: trivial linear constraint");
+    ct->Clear();
+    context_->UpdateConstraintVariableUsage(ct_index);
+    return;
+  }
+
+  // We can use the new bound to propagate other terms.
+  if (ct->enforcement_literal().empty() && !temp_ct_.linear().vars().empty()) {
+    FillDomainInProto(
+        rhs.AdditionWith(
+            Domain(min_bool_activity, max_bool_activity).Negation()),
+        temp_ct_.mutable_linear());
+    if (!PropagateDomainsInLinear(/*ct_index=*/-1, &temp_ct_)) {
+      return;
+    }
+    if (context_->ModelIsUnsat()) return;
+  }
+
+  // Extract enforcement or fix literal.
+  //
+  // TODO(user): Do not use domain fonction, can be slow.
+  //
+  // TODO(user): Actually we might make the linear relaxation worse by
+  // extracting some of these enforcement, as those can be "lifted" booleans. We
+  // currently deal with that in RemoveEnforcementThatMakesConstraintTrivial(),
+  // but that might not be the most efficient.
+  //
+  // TODO(user): Another reason for making the LP worse is that if we replace
+  // part of the constraint via FindBig*LinearOverlap() then our activity bounds
+  // might not be as precise when we will linearize this constraint again.
+  std::vector<int> new_enforcement;
+  std::vector<int> must_be_true;
+  for (int i = 0; i < tmp_terms_.size(); ++i) {
+    const int ref = tmp_terms_[i].first;
+
+    const Domain bool0(conditional_mins_[i][0], conditional_maxs_[i][0]);
+    const Domain activity0 = bool0.AdditionWith(non_boolean_domain);
+    if (activity0.IntersectionWith(rhs).IsEmpty()) {
+      // Must be 1.
+      must_be_true.push_back(ref);
+    } else if (activity0.IsIncludedIn(rhs)) {
+      // Trivial constraint on 0.
+      new_enforcement.push_back(ref);
+    }
+
+    const Domain bool1(conditional_mins_[i][1], conditional_maxs_[i][1]);
+    const Domain activity1 = bool1.AdditionWith(non_boolean_domain);
+    if (activity1.IntersectionWith(rhs).IsEmpty()) {
+      // Must be 0.
+      must_be_true.push_back(NegatedRef(ref));
+    } else if (activity1.IsIncludedIn(rhs)) {
+      // Trivial constraint on 1.
+      new_enforcement.push_back(NegatedRef(ref));
+    }
+  }
+
+  // Note that both list can be non empty, if for instance we have small * X +
+  // big * Y + ... <= rhs and amo(X, Y). We could see that Y can never be true
+  // and if X is true, then the constraint could be trivial.
+  //
+  // So we fix things first if we can.
+  if (ct->enforcement_literal().empty() && !must_be_true.empty()) {
+    // Note that our logic to do more presolve iteration depends on the
+    // number of rule applied, so it is important to count this correctly.
+    context_->UpdateRuleStats("linear + amo: fixed literal",
+                              must_be_true.size());
+    for (const int lit : must_be_true) {
+      if (!context_->SetLiteralToTrue(lit)) return;
+    }
+    bool changed = false;
+    if (!CanonicalizeLinear(ct, &changed)) return;
+    context_->UpdateConstraintVariableUsage(ct_index);
+    return;
+  }
+
+  if (!new_enforcement.empty()) {
+    context_->UpdateRuleStats("linear + amo: extracted enforcement literal",
+                              new_enforcement.size());
+    for (const int ref : new_enforcement) {
+      ct->add_enforcement_literal(ref);
+    }
+  }
+
+  if (!ct->enforcement_literal().empty()) {
+    const int old_enf_size = ct->enforcement_literal().size();
+    if (!helper->PresolveEnforcement(ct->linear().vars(), ct, &temp_set_)) {
+      context_->UpdateRuleStats("linear + amo: infeasible enforcement");
+      ct->Clear();
+      context_->UpdateConstraintVariableUsage(ct_index);
+      return;
+    }
+    if (ct->enforcement_literal().size() < old_enf_size) {
+      context_->UpdateRuleStats("linear + amo: simplified enforcement list");
+      context_->UpdateConstraintVariableUsage(ct_index);
+    }
+
+    for (const int lit : must_be_true) {
+      if (temp_set_.contains(NegatedRef(lit))) {
+        // A literal must be true but is incompatible with what the enforcement
+        // implies. The constraint must be false!
+        (void)MarkConstraintAsFalse(
+            ct, "linear + amo: advanced infeasible linear constraint");
+        context_->UpdateConstraintVariableUsage(ct_index);
+        return;
+      }
+    }
+
+    // TODO(user): do that in more cases?
+    if (ct->enforcement_literal().size() == 1 && !must_be_true.empty()) {
+      // Add implication, and remove literal from the constraint in this case.
+      // To remove them, we just add them to temp_set_ and FixLiteralFromSet()
+      // will take care of it.
+      context_->UpdateRuleStats("linear + amo: added implications");
+      ConstraintProto* new_ct = context_->working_model->add_constraints();
+      *new_ct->mutable_enforcement_literal() = ct->enforcement_literal();
+      for (const int lit : must_be_true) {
+        new_ct->mutable_bool_and()->add_literals(lit);
+        temp_set_.insert(lit);
+      }
+      context_->UpdateNewConstraintsVariableUsage();
+    }
+
+    const int num_fixed = FixLiteralFromSet(temp_set_, ct->mutable_linear());
+    if (num_fixed > new_enforcement.size()) {
+      context_->UpdateRuleStats(
+          "linear + amo: fixed literal implied by enforcement");
+    }
+    if (num_fixed > 0) {
+      context_->UpdateConstraintVariableUsage(ct_index);
+    }
+  }
+
+  if (ct->linear().vars().empty()) {
+    context_->UpdateRuleStats("linear + amo: empty after processing");
+    PresolveSmallLinear(ct);
+    context_->UpdateConstraintVariableUsage(ct_index);
+    return;
+  }
+
+  // If the constraint is of size 1 or 2, we re-presolve it right away.
+  if (initial_size != ct->linear().vars().size() && PresolveSmallLinear(ct)) {
+    context_->UpdateConstraintVariableUsage(ct_index);
+    if (ct->constraint_case() != ConstraintProto::kLinear) return;
+  }
+
+  // Detect enforcement literal that could actually be lifted, and as such can
+  // just be removed from the enforcement list. Ideally, during relaxation we
+  // would lift such Boolean again.
+  //
+  // Note that this code is independent from anything above.
+  if (!ct->enforcement_literal().empty()) {
+    // TODO(user): remove duplication with code above?
+    tmp_terms_.clear();
+    Domain non_boolean_domain(0);
+    const int num_ct_terms = ct->linear().vars().size();
+    for (int i = 0; i < num_ct_terms; ++i) {
+      const int ref = ct->linear().vars(i);
+      const int64_t coeff = ct->linear().coeffs(i);
+      CHECK(RefIsPositive(ref));
+      if (context_->CanBeUsedAsLiteral(ref)) {
+        tmp_terms_.push_back({ref, coeff});
+      } else {
+        non_boolean_domain =
+            non_boolean_domain
+                .AdditionWith(
+                    context_->DomainOf(ref).ContinuousMultiplicationBy(coeff))
+                .RelaxIfTooComplex();
+      }
+    }
+    const int num_removed = helper->RemoveEnforcementThatMakesConstraintTrivial(
+        tmp_terms_, non_boolean_domain, ReadDomainFromProto(ct->linear()), ct);
+    if (num_removed > 0) {
+      context_->UpdateRuleStats("linear + amo: removed enforcement literal",
+                                num_removed);
+      context_->UpdateConstraintVariableUsage(ct_index);
+    }
+  }
 }
 
 bool CpModelPresolver::PropagateDomainsInLinear(int ct_index,
                                                 ConstraintProto* ct) {
-  if (ct->constraint_case() != ConstraintProto::ConstraintCase::kLinear ||
-      context_->ModelIsUnsat()) {
-    return false;
-  }
+  if (ct->constraint_case() != ConstraintProto::kLinear) return false;
+  if (context_->ModelIsUnsat()) return false;
 
-  // Compute the implied rhs bounds from the variable ones.
+  // For fast mode.
+  int64_t min_activity;
+  int64_t max_activity;
+
+  // For slow mode.
+  const int num_vars = ct->linear().vars_size();
   auto& term_domains = context_->tmp_term_domains;
   auto& left_domains = context_->tmp_left_domains;
-  const int num_vars = ct->linear().vars_size();
-  term_domains.resize(num_vars + 1);
-  left_domains.resize(num_vars + 1);
-  left_domains[0] = Domain(0);
-  for (int i = 0; i < num_vars; ++i) {
-    const int var = ct->linear().vars(i);
-    const int64_t coeff = ct->linear().coeffs(i);
-    CHECK(RefIsPositive(var));
-    term_domains[i] = context_->DomainOf(var).MultiplicationBy(coeff);
-    left_domains[i + 1] =
-        left_domains[i].AdditionWith(term_domains[i]).RelaxIfTooComplex();
+  const bool slow_mode = num_vars < 10;
+
+  // Compute the implied rhs bounds from the variable ones.
+  if (slow_mode) {
+    term_domains.resize(num_vars + 1);
+    left_domains.resize(num_vars + 1);
+    left_domains[0] = Domain(0);
+    term_domains[num_vars] = Domain(0);
+    for (int i = 0; i < num_vars; ++i) {
+      const int var = ct->linear().vars(i);
+      const int64_t coeff = ct->linear().coeffs(i);
+      DCHECK(RefIsPositive(var));
+      term_domains[i] = context_->DomainOf(var).MultiplicationBy(coeff);
+      left_domains[i + 1] =
+          left_domains[i].AdditionWith(term_domains[i]).RelaxIfTooComplex();
+    }
+  } else {
+    std::tie(min_activity, max_activity) =
+        context_->ComputeMinMaxActivity(ct->linear());
   }
-  const Domain& implied_rhs = left_domains[num_vars];
+  const Domain& implied_rhs =
+      slow_mode ? left_domains[num_vars] : Domain(min_activity, max_activity);
 
   // Abort if trivial.
   const Domain old_rhs = ReadDomainFromProto(ct->linear());
   if (implied_rhs.IsIncludedIn(old_rhs)) {
-    context_->UpdateRuleStats("linear: always true");
+    if (ct_index != -1) context_->UpdateRuleStats("linear: always true");
     return RemoveConstraint(ct);
   }
 
   // Incorporate the implied rhs information.
   Domain rhs = old_rhs.SimplifyUsingImpliedDomain(implied_rhs);
   if (rhs.IsEmpty()) {
-    context_->UpdateRuleStats("linear: infeasible");
-    return MarkConstraintAsFalse(ct);
+    return MarkConstraintAsFalse(ct, "linear: infeasible");
   }
   if (rhs != old_rhs) {
-    context_->UpdateRuleStats("linear: simplified rhs");
+    if (ct_index != -1) context_->UpdateRuleStats("linear: simplified rhs");
   }
   FillDomainInProto(rhs, ct->mutable_linear());
 
@@ -2287,15 +4257,23 @@ bool CpModelPresolver::PropagateDomainsInLinear(int ct_index,
   Domain negated_rhs = rhs.Negation();
   Domain right_domain(0);
   Domain new_domain;
-  Domain implied_term_domain;
-  term_domains[num_vars] = Domain(0);
+  Domain activity_minus_term;
   for (int i = num_vars - 1; i >= 0; --i) {
     const int var = ct->linear().vars(i);
     const int64_t var_coeff = ct->linear().coeffs(i);
-    right_domain =
-        right_domain.AdditionWith(term_domains[i + 1]).RelaxIfTooComplex();
-    implied_term_domain = left_domains[i].AdditionWith(right_domain);
-    new_domain = implied_term_domain.AdditionWith(negated_rhs)
+
+    if (slow_mode) {
+      right_domain =
+          right_domain.AdditionWith(term_domains[i + 1]).RelaxIfTooComplex();
+      activity_minus_term = left_domains[i].AdditionWith(right_domain);
+    } else {
+      int64_t min_term = var_coeff * context_->MinOf(var);
+      int64_t max_term = var_coeff * context_->MaxOf(var);
+      if (var_coeff < 0) std::swap(min_term, max_term);
+      activity_minus_term =
+          Domain(min_activity - min_term, max_activity - max_term);
+    }
+    new_domain = activity_minus_term.AdditionWith(negated_rhs)
                      .InverseMultiplicationBy(-var_coeff);
 
     if (ct->enforcement_literal().empty()) {
@@ -2319,12 +4297,13 @@ bool CpModelPresolver::PropagateDomainsInLinear(int ct_index,
     }
 
     // The other transformations below require a non-reified constraint.
+    if (ct_index == -1) continue;
     if (!ct->enforcement_literal().empty()) continue;
 
     // Given a variable that only appear in one constraint and in the
     // objective, for any feasible solution, it will be always better to move
     // this singleton variable as much as possible towards its good objective
-    // direction. Sometime_exprs, we can detect that we will always be able to
+    // direction. Sometime, we can detect that we will always be able to
     // do this until the only constraint of this singleton variable is tight.
     //
     // When this happens, we can make the constraint an equality. Note that it
@@ -2337,17 +4316,21 @@ bool CpModelPresolver::PropagateDomainsInLinear(int ct_index,
       const bool same_sign = (var_coeff > 0) == (obj_coeff > 0);
       bool fixed = false;
       if (same_sign && RhsCanBeFixedToMin(var_coeff, context_->DomainOf(var),
-                                          implied_term_domain, rhs)) {
+                                          activity_minus_term, rhs)) {
         rhs = Domain(rhs.Min());
         fixed = true;
       }
       if (!same_sign && RhsCanBeFixedToMax(var_coeff, context_->DomainOf(var),
-                                           implied_term_domain, rhs)) {
+                                           activity_minus_term, rhs)) {
         rhs = Domain(rhs.Max());
         fixed = true;
       }
       if (fixed) {
         context_->UpdateRuleStats("linear: tightened into equality");
+        // Compute a new `var` hint so that the lhs of `ct` is equal to `rhs`.
+        solution_crush_.SetVarToLinearConstraintSolution(
+            /*enforcement_lits=*/{}, i, ct->linear().vars(),
+            /*default_values=*/{}, ct->linear().coeffs(), rhs.FixedValue());
         FillDomainInProto(rhs, ct->mutable_linear());
         negated_rhs = rhs.Negation();
 
@@ -2374,36 +4357,32 @@ bool CpModelPresolver::PropagateDomainsInLinear(int ct_index,
     // SubstituteVariable() function cannot fail this way.
     if (rhs.Min() != rhs.Max()) continue;
 
+    // NOTE: The mapping doesn't allow us to remove a variable if
+    // keep_all_feasible_solutions is true.
+    //
+    // TODO(user): This shouldn't be necessary, but caused some failure on
+    // IntModExpandTest.FzTest. Fix.
+    if (context_->params().keep_all_feasible_solutions_in_presolve()) continue;
+
     // Only consider "implied free" variables. Note that the coefficient of
     // magnitude 1 is important otherwise we can't easily remove the
     // constraint since the fact that the sum of the other terms must be a
     // multiple of coeff will not be enforced anymore.
-    if (context_->DomainOf(var) != new_domain) continue;
     if (std::abs(var_coeff) != 1) continue;
     if (context_->params().presolve_substitution_level() <= 0) continue;
 
-    // NOTE: The mapping doesn't allow us to remove a variable if
-    // 'keep_all_feasible_solutions' is true.
-    if (context_->keep_all_feasible_solutions) continue;
+    // Only consider substitution that reduce the number of entries.
+    const bool is_in_objective = context_->VarToConstraints(var).contains(-1);
+    {
+      int col_size = context_->VarToConstraints(var).size();
+      if (is_in_objective) col_size--;
+      const int row_size = ct->linear().vars_size();
 
-    bool is_in_objective = false;
-    if (context_->VarToConstraints(var).contains(-1)) {
-      is_in_objective = true;
-      DCHECK(context_->ObjectiveMap().contains(var));
-    }
-
-    // Only consider low degree columns.
-    int col_size = context_->VarToConstraints(var).size();
-    if (is_in_objective) col_size--;
-    const int row_size = ct->linear().vars_size();
-
-    // This is actually an upper bound on the number of entries added since
-    // some of them might already be present.
-    const int num_entries_added = (row_size - 1) * (col_size - 1);
-    const int num_entries_removed = col_size + row_size - 1;
-
-    if (num_entries_added > num_entries_removed) {
-      continue;
+      // This is actually an upper bound on the number of entries added since
+      // some of them might already be present.
+      const int num_entries_added = (row_size - 1) * (col_size - 1);
+      const int num_entries_removed = col_size + row_size - 1;
+      if (num_entries_added > num_entries_removed) continue;
     }
 
     // Check pre-conditions on all the constraints in which this variable
@@ -2418,7 +4397,7 @@ bool CpModelPresolver::PropagateDomainsInLinear(int ct_index,
       }
       if (c == ct_index) continue;
       if (context_->working_model->constraints(c).constraint_case() !=
-          ConstraintProto::ConstraintCase::kLinear) {
+          ConstraintProto::kLinear) {
         abort = true;
         break;
       }
@@ -2429,34 +4408,119 @@ bool CpModelPresolver::PropagateDomainsInLinear(int ct_index,
           break;
         }
       }
+      if (abort) break;
       others.push_back(c);
     }
     if (abort) continue;
 
+    // If the domain implied by this constraint is the same as the current
+    // domain of the variable, this variable is implied free. Otherwise, we
+    // check if the intersection with the domain implied by another constraint
+    // make it implied free.
+    if (context_->DomainOf(var) != new_domain) {
+      // We only do that for doubleton because we don't want the propagation to
+      // be less strong. If we were to replace this variable in other constraint
+      // the implied bound from the linear expression might not be as good.
+      //
+      // TODO(user): We still substitute even if this happens in the objective
+      // though. Is that good?
+      if (others.size() != 1) continue;
+      const ConstraintProto& other_ct =
+          context_->working_model->constraints(others.front());
+      if (!other_ct.enforcement_literal().empty()) continue;
+
+      // Compute the implied domain using the other constraint.
+      // We only do that if it is not too long to avoid quadratic worst case.
+      const LinearConstraintProto& other_lin = other_ct.linear();
+      if (other_lin.vars().size() > 100) continue;
+      Domain implied = ReadDomainFromProto(other_lin);
+      int64_t other_coeff = 0;
+      for (int i = 0; i < other_lin.vars().size(); ++i) {
+        const int v = other_lin.vars(i);
+        const int64_t coeff = other_lin.coeffs(i);
+        if (v == var) {
+          // It is possible the constraint is not canonical if it wasn't
+          // processed yet !
+          other_coeff += coeff;
+        } else {
+          implied =
+              implied
+                  .AdditionWith(context_->DomainOf(v).MultiplicationBy(-coeff))
+                  .RelaxIfTooComplex();
+        }
+      }
+      if (other_coeff == 0) continue;
+      implied = implied.InverseMultiplicationBy(other_coeff);
+
+      // Since we compute it, we can as well update the domain right now.
+      // This is also needed for postsolve to have a tight domain.
+      if (!context_->IntersectDomainWith(var, implied)) return false;
+      if (context_->IsFixed(var)) continue;
+      if (new_domain.IntersectionWith(implied) != context_->DomainOf(var)) {
+        continue;
+      }
+
+      context_->UpdateRuleStats("linear: doubleton free");
+    }
+
+    // Substitute in objective.
+    // This can fail in overflow corner cases, so we abort before doing any
+    // actual changes.
+    if (is_in_objective &&
+        !context_->SubstituteVariableInObjective(var, var_coeff, *ct)) {
+      if (context_->ModelIsUnsat()) return false;
+      continue;
+    }
+
     // Do the actual substitution.
+    ConstraintProto copy_if_we_abort;
+    absl::c_sort(others);
     for (const int c : others) {
-      // TODO(user): In some corner cases, this might create integer overflow
-      // issues. The danger is limited since the range of the linear
-      // expression used in the definition do not exceed the domain of the
-      // variable we substitute.
-      const bool ok = SubstituteVariable(
-          var, var_coeff, *ct, context_->working_model->mutable_constraints(c));
-      if (!ok) {
-        // This can happen if the constraint was not canonicalized and the
-        // variable is actually not there (we have var - var for instance).
-        CanonicalizeLinear(context_->working_model->mutable_constraints(c));
+      // TODO(user): The copy is needed to have a simpler overflow-checking
+      // code were we check once the substitution is done. If needed we could
+      // optimize that, but with more code.
+      copy_if_we_abort = context_->working_model->constraints(c);
+
+      // In some corner cases, this might violate our overflow precondition or
+      // even create an overflow. The danger is limited since the range of the
+      // linear expression used in the definition do not exceed the domain of
+      // the variable we substitute. But this is not the case for the doubleton
+      // case above.
+      if (!SubstituteVariable(
+              var, var_coeff, *ct,
+              context_->working_model->mutable_constraints(c))) {
+        // The function above can fail because of overflow, but also if the
+        // constraint was not canonicalized yet and the variable is actually not
+        // there (we have var - var for instance).
+        //
+        // TODO(user): we canonicalize it right away, but I am not sure it is
+        // really needed.
+        bool changed = false;
+        if (!CanonicalizeLinear(context_->working_model->mutable_constraints(c),
+                                &changed)) {
+          return true;
+        }
+        if (changed) {
+          context_->UpdateConstraintVariableUsage(c);
+        }
+        abort = true;
+        break;
+      }
+
+      if (PossibleIntegerOverflow(
+              *context_->working_model,
+              context_->working_model->constraints(c).linear().vars(),
+              context_->working_model->constraints(c).linear().coeffs())) {
+        // Revert the change in this case.
+        *context_->working_model->mutable_constraints(c) = copy_if_we_abort;
+        abort = true;
+        break;
       }
 
       // TODO(user): We should re-enqueue these constraints for presolve.
       context_->UpdateConstraintVariableUsage(c);
     }
-
-    // Substitute in objective.
-    // This can only fail in corner cases.
-    if (is_in_objective &&
-        !context_->SubstituteVariableInObjective(var, var_coeff, *ct)) {
-      continue;
-    }
+    if (abort) continue;
 
     context_->UpdateRuleStats(
         absl::StrCat("linear: variable substitution ", others.size()));
@@ -2470,22 +4534,175 @@ bool CpModelPresolver::PropagateDomainsInLinear(int ct_index,
     // assign var. We do that by putting it fist.
     CHECK_EQ(context_->VarToConstraints(var).size(), 1);
     context_->MarkVariableAsRemoved(var);
-    const int ct_index = context_->mapping_model->constraints().size();
-    *context_->mapping_model->add_constraints() = *ct;
-    LinearConstraintProto* mapping_linear_ct =
-        context_->mapping_model->mutable_constraints(ct_index)
-            ->mutable_linear();
+    ConstraintProto* mapping_ct =
+        context_->NewMappingConstraint(__FILE__, __LINE__);
+    *mapping_ct = *ct;
+    LinearConstraintProto* mapping_linear_ct = mapping_ct->mutable_linear();
     std::swap(mapping_linear_ct->mutable_vars()->at(0),
               mapping_linear_ct->mutable_vars()->at(i));
     std::swap(mapping_linear_ct->mutable_coeffs()->at(0),
               mapping_linear_ct->mutable_coeffs()->at(i));
     return RemoveConstraint(ct);
   }
+
+  // special case.
+  if (ct_index == -1) {
+    if (new_bounds) {
+      context_->UpdateRuleStats(
+          "linear: reduced variable domains in derived constraint");
+    }
+    return false;
+  }
+
   if (new_bounds) {
     context_->UpdateRuleStats("linear: reduced variable domains");
   }
-  if (recanonicalize) return CanonicalizeLinear(ct);
+  if (recanonicalize) {
+    bool changed = false;
+    (void)CanonicalizeLinear(ct, &changed);
+    return changed;
+  }
   return false;
+}
+
+// The constraint from its lower value is sum positive_coeff * X <= rhs.
+// If from_lower_bound is false, then it is the constraint from its upper value.
+void CpModelPresolver::LowerThanCoeffStrengthening(bool from_lower_bound,
+                                                   int64_t min_magnitude,
+                                                   int64_t rhs,
+                                                   ConstraintProto* ct) {
+  const LinearConstraintProto& arg = ct->linear();
+  const int64_t second_threshold = rhs - min_magnitude;
+  const int num_vars = arg.vars_size();
+
+  // Special case:
+  // - The terms above rhs must be fixed to zero.
+  // - The terms in (second_threshold, rhs] can be fixed to rhs as
+  //   they will force all other terms to zero if not at zero themselves.
+  // - If what is left can be simplified to a single coefficient, we can
+  //   put the constraint into a special form.
+  //
+  // TODO(user): More generally, if we ignore term that set everything else to
+  // zero, we can preprocess the constraint left and then add them back. So we
+  // can do all our other reduction like normal GCD or more advanced ones like
+  // DP based or approximate GCD.
+  if (min_magnitude <= second_threshold) {
+    // Compute max_magnitude for the term <= second_threshold.
+    int64_t max_magnitude_left = 0;
+    int64_t max_activity_left = 0;
+    int64_t activity_when_coeff_are_one = 0;
+    int64_t gcd = 0;
+    for (int i = 0; i < num_vars; ++i) {
+      const int64_t magnitude = std::abs(arg.coeffs(i));
+      if (magnitude <= second_threshold) {
+        gcd = std::gcd(gcd, magnitude);
+        max_magnitude_left = std::max(max_magnitude_left, magnitude);
+        const int64_t bound_diff =
+            context_->MaxOf(arg.vars(i)) - context_->MinOf(arg.vars(i));
+        activity_when_coeff_are_one += bound_diff;
+        max_activity_left += magnitude * bound_diff;
+      }
+    }
+    CHECK_GT(min_magnitude, 0);
+    CHECK_LE(min_magnitude, max_magnitude_left);
+
+    // Not considering the variable that set everyone at zero when true:
+    int64_t new_rhs = 0;
+    bool set_all_to_one = false;
+    if (max_activity_left <= rhs) {
+      // We are left with a trivial constraint.
+      context_->UpdateRuleStats("linear with partial amo: trivial");
+      new_rhs = activity_when_coeff_are_one;
+      set_all_to_one = true;
+    } else if (rhs / min_magnitude == rhs / max_magnitude_left) {
+      // We are left with a sum <= new_rhs constraint.
+      context_->UpdateRuleStats("linear with partial amo: constant coeff");
+      new_rhs = rhs / min_magnitude;
+      set_all_to_one = true;
+    } else if (gcd > 1) {
+      // We are left with a constraint that can be simplified by gcd.
+      context_->UpdateRuleStats("linear with partial amo: gcd");
+      new_rhs = rhs / gcd;
+    }
+
+    if (new_rhs > 0) {
+      int64_t rhs_offset = 0;
+      for (int i = 0; i < num_vars; ++i) {
+        const int ref = arg.vars(i);
+        const int64_t coeff = from_lower_bound ? arg.coeffs(i) : -arg.coeffs(i);
+
+        int64_t new_coeff;
+        const int64_t magnitude = std::abs(coeff);
+        if (magnitude > rhs) {
+          new_coeff = new_rhs + 1;
+        } else if (magnitude > second_threshold) {
+          new_coeff = new_rhs;
+        } else {
+          new_coeff = set_all_to_one ? 1 : magnitude / gcd;
+        }
+
+        // In the transformed domain we will always have
+        // magnitude * (var - lb) or magnitude * (ub - var)
+        if (coeff > 0) {
+          ct->mutable_linear()->set_coeffs(i, new_coeff);
+          rhs_offset += new_coeff * context_->MinOf(ref);
+        } else {
+          ct->mutable_linear()->set_coeffs(i, -new_coeff);
+          rhs_offset -= new_coeff * context_->MaxOf(ref);
+        }
+      }
+      FillDomainInProto(Domain(rhs_offset, new_rhs + rhs_offset),
+                        ct->mutable_linear());
+      return;
+    }
+  }
+
+  int64_t rhs_offset = 0;
+  for (int i = 0; i < num_vars; ++i) {
+    int ref = arg.vars(i);
+    int64_t coeff = arg.coeffs(i);
+    if (coeff < 0) {
+      ref = NegatedRef(ref);
+      coeff = -coeff;
+    }
+
+    if (coeff > rhs) {
+      if (ct->enforcement_literal().empty()) {
+        // Shifted variable must be zero.
+        //
+        // TODO(user): Note that here IntersectDomainWith() can only return
+        // false if for some reason this variable has an affine representative
+        // for which this fail. Ideally we should always replace/merge
+        // representative right away, but this is a bit difficult to enforce
+        // currently.
+        context_->UpdateRuleStats("linear: fix variable to its bound");
+        if (!context_->IntersectDomainWith(
+                ref, Domain(from_lower_bound ? context_->MinOf(ref)
+                                             : context_->MaxOf(ref)))) {
+          return;
+        }
+      }
+
+      // TODO(user): What to do with the coeff if there is enforcement?
+      continue;
+    }
+    if (coeff > second_threshold && coeff < rhs) {
+      context_->UpdateRuleStats(
+          "linear: coefficient strengthening by increasing it");
+      if (from_lower_bound) {
+        // coeff * (X - LB + LB) -> rhs * (X - LB) + coeff * LB
+        rhs_offset -= (coeff - rhs) * context_->MinOf(ref);
+      } else {
+        // coeff * (X - UB + UB) -> rhs * (X - UB) + coeff * UB
+        rhs_offset -= (coeff - rhs) * context_->MaxOf(ref);
+      }
+      ct->mutable_linear()->set_coeffs(i, arg.coeffs(i) > 0 ? rhs : -rhs);
+    }
+  }
+  if (rhs_offset != 0) {
+    FillDomainInProto(ReadDomainFromProto(arg).AdditionWith(Domain(rhs_offset)),
+                      ct->mutable_linear());
+  }
 }
 
 // Identify Boolean variable that makes the constraint always true when set to
@@ -2497,10 +4714,8 @@ bool CpModelPresolver::PropagateDomainsInLinear(int ct_index,
 // This operation is similar to coefficient strengthening in the MIP world.
 void CpModelPresolver::ExtractEnforcementLiteralFromLinearConstraint(
     int ct_index, ConstraintProto* ct) {
-  if (ct->constraint_case() != ConstraintProto::ConstraintCase::kLinear ||
-      context_->ModelIsUnsat()) {
-    return;
-  }
+  if (ct->constraint_case() != ConstraintProto::kLinear) return;
+  if (context_->ModelIsUnsat()) return;
 
   const LinearConstraintProto& arg = ct->linear();
   const int num_vars = arg.vars_size();
@@ -2512,15 +4727,23 @@ void CpModelPresolver::ExtractEnforcementLiteralFromLinearConstraint(
   int64_t min_sum = 0;
   int64_t max_sum = 0;
   int64_t max_coeff_magnitude = 0;
+  int64_t min_coeff_magnitude = std::numeric_limits<int64_t>::max();
   for (int i = 0; i < num_vars; ++i) {
     const int ref = arg.vars(i);
     const int64_t coeff = arg.coeffs(i);
-    const int64_t term_a = coeff * context_->MinOf(ref);
-    const int64_t term_b = coeff * context_->MaxOf(ref);
-    max_coeff_magnitude = std::max(max_coeff_magnitude, std::abs(coeff));
-    min_sum += std::min(term_a, term_b);
-    max_sum += std::max(term_a, term_b);
+    if (coeff > 0) {
+      max_coeff_magnitude = std::max(max_coeff_magnitude, coeff);
+      min_coeff_magnitude = std::min(min_coeff_magnitude, coeff);
+      min_sum += coeff * context_->MinOf(ref);
+      max_sum += coeff * context_->MaxOf(ref);
+    } else {
+      max_coeff_magnitude = std::max(max_coeff_magnitude, -coeff);
+      min_coeff_magnitude = std::min(min_coeff_magnitude, -coeff);
+      min_sum += coeff * context_->MaxOf(ref);
+      max_sum += coeff * context_->MinOf(ref);
+    }
   }
+  if (max_coeff_magnitude == 1) return;
 
   // We can only extract enforcement literals if the maximum coefficient
   // magnitude is large enough. Note that we handle complex domain.
@@ -2531,8 +4754,30 @@ void CpModelPresolver::ExtractEnforcementLiteralFromLinearConstraint(
   const auto& domain = ct->linear().domain();
   const int64_t ub_threshold = domain[domain.size() - 2] - min_sum;
   const int64_t lb_threshold = max_sum - domain[1];
-  const Domain rhs_domain = ReadDomainFromProto(ct->linear());
-  if (max_coeff_magnitude < std::max(ub_threshold, lb_threshold)) return;
+  if (max_coeff_magnitude + min_coeff_magnitude <
+      std::max(ub_threshold, lb_threshold)) {
+    // We also have other kind of coefficient strengthening.
+    // In something like 3x + 5y <= 6, the coefficient 5 can be changed to 6.
+    // And in 5x + 12y <= 12, the coeff 5 can be changed to 6 (not sure how to
+    // generalize this one).
+    if (domain.size() == 2 && min_coeff_magnitude > 1 &&
+        min_coeff_magnitude < max_coeff_magnitude) {
+      const int64_t rhs_min = domain[0];
+      const int64_t rhs_max = domain[1];
+      if (min_sum >= rhs_min &&
+          max_coeff_magnitude + min_coeff_magnitude > rhs_max - min_sum) {
+        LowerThanCoeffStrengthening(/*from_lower_bound=*/true,
+                                    min_coeff_magnitude, rhs_max - min_sum, ct);
+        return;
+      }
+      if (max_sum <= rhs_max &&
+          max_coeff_magnitude + min_coeff_magnitude > max_sum - rhs_min) {
+        LowerThanCoeffStrengthening(/*from_lower_bound=*/false,
+                                    min_coeff_magnitude, max_sum - rhs_min, ct);
+        return;
+      }
+    }
+  }
 
   // We need the constraint to be only bounded on one side in order to extract
   // enforcement literal.
@@ -2547,14 +4792,17 @@ void CpModelPresolver::ExtractEnforcementLiteralFromLinearConstraint(
   // not be the most efficient, but it simplify the presolve code by not having
   // to do anything special to trigger a new presolving of these constraints.
   // Try to improve if this becomes a problem.
-  //
-  // TODO(user): At the end of the presolve we should probably remerge any
-  // identical linear constraints. That also cover the corner cases where
-  // constraints are just redundant...
+  const Domain rhs_domain = ReadDomainFromProto(ct->linear());
   const bool lower_bounded = min_sum < rhs_domain.Min();
   const bool upper_bounded = max_sum > rhs_domain.Max();
   if (!lower_bounded && !upper_bounded) return;
   if (lower_bounded && upper_bounded) {
+    // We disable this for now.
+    if (true) return;
+
+    // Lets not split except if we extract enforcement.
+    if (max_coeff_magnitude < std::max(ub_threshold, lb_threshold)) return;
+
     context_->UpdateRuleStats("linear: split boxed constraint");
     ConstraintProto* new_ct1 = context_->working_model->add_constraints();
     *new_ct1 = *ct;
@@ -2573,7 +4821,9 @@ void CpModelPresolver::ExtractEnforcementLiteralFromLinearConstraint(
                       new_ct2->mutable_linear());
 
     context_->UpdateNewConstraintsVariableUsage();
-    return (void)RemoveConstraint(ct);
+    ct->Clear();
+    context_->UpdateConstraintVariableUsage(ct_index);
+    return;
   }
 
   // Any coefficient greater than this will cause the constraint to be trivially
@@ -2581,12 +4831,32 @@ void CpModelPresolver::ExtractEnforcementLiteralFromLinearConstraint(
   // remove coefficient, the threshold do not change!
   const int64_t threshold = lower_bounded ? ub_threshold : lb_threshold;
 
+  // All coeffs in [second_threshold, threshold) can be reduced to
+  // second_threshold.
+  //
+  // TODO(user): If 2 * min_coeff_magnitude >= bound, then the constraint can
+  // be completely rewriten to 2 * (enforcement_part) + sum var >= 2 which is
+  // what happen eventually when bound is even, but not if it is odd currently.
+  int64_t second_threshold =
+      std::max(MathUtil::CeilOfRatio(threshold, int64_t{2}),
+               threshold - min_coeff_magnitude);
+
+  // Tricky: The second threshold only work if the domain is simple. If the
+  // domain has holes, changing the coefficient might change whether the
+  // variable can be at one or not by herself.
+  //
+  // TODO(user): We could still reduce it to the smaller value with same
+  // feasibility.
+  if (rhs_domain.NumIntervals() > 1) {
+    second_threshold = threshold;  // Disable.
+  }
+
   // Do we only extract Booleans?
   //
   // Note that for now the default is false, and also there are problem calling
   // GetOrCreateVarValueEncoding() after expansion because we might have removed
   // the variable used in the encoding.
-  const bool only_booleans =
+  const bool only_extract_booleans =
       !context_->params().presolve_extract_integer_enforcement() ||
       context_->ModelIsExpanded();
 
@@ -2604,12 +4874,37 @@ void CpModelPresolver::ExtractEnforcementLiteralFromLinearConstraint(
       coeff = -coeff;
     }
 
+    // TODO(user): If the encoding Boolean already exist, we could extract
+    // the non-Boolean enforcement term.
     const bool is_boolean = context_->CanBeUsedAsLiteral(ref);
     if (context_->IsFixed(ref) || coeff < threshold ||
-        (only_booleans && !is_boolean)) {
-      // We keep this term.
+        (only_extract_booleans && !is_boolean)) {
       mutable_arg->set_vars(new_size, mutable_arg->vars(i));
-      mutable_arg->set_coeffs(new_size, mutable_arg->coeffs(i));
+
+      int64_t new_magnitude = std::abs(arg.coeffs(i));
+      if (coeff > threshold) {
+        // We keep this term but reduces its coeff.
+        // This is only for the case where only_extract_booleans == true.
+        new_magnitude = threshold;
+        context_->UpdateRuleStats("linear: coefficient strenghtening");
+      } else if (coeff > second_threshold && coeff < threshold) {
+        // This cover the special case where one big + on small is enough
+        // to satisfy the constraint, we can reduce the big.
+        new_magnitude = second_threshold;
+        context_->UpdateRuleStats("linear: advanced coefficient strenghtening");
+      }
+      if (coeff != new_magnitude) {
+        if (lower_bounded) {
+          // coeff * (X - LB + LB) -> new_magnitude * (X - LB) + coeff * LB
+          rhs_offset -= (coeff - new_magnitude) * context_->MinOf(ref);
+        } else {
+          // coeff * (X - UB + UB) -> new_magnitude * (X - UB) + coeff * UB
+          rhs_offset -= (coeff - new_magnitude) * context_->MaxOf(ref);
+        }
+      }
+
+      mutable_arg->set_coeffs(
+          new_size, arg.coeffs(i) > 0 ? new_magnitude : -new_magnitude);
       ++new_size;
       continue;
     }
@@ -2638,9 +4933,9 @@ void CpModelPresolver::ExtractEnforcementLiteralFromLinearConstraint(
   mutable_arg->mutable_vars()->Truncate(new_size);
   mutable_arg->mutable_coeffs()->Truncate(new_size);
   FillDomainInProto(rhs_domain.AdditionWith(Domain(rhs_offset)), mutable_arg);
-  if (some_integer_encoding_were_extracted) {
-    context_->UpdateNewConstraintsVariableUsage();
+  if (some_integer_encoding_were_extracted || new_size == 1) {
     context_->UpdateConstraintVariableUsage(ct_index);
+    context_->UpdateNewConstraintsVariableUsage();
   }
 }
 
@@ -2683,9 +4978,9 @@ void CpModelPresolver::ExtractAtMostOneFromLinear(ConstraintProto* ct) {
     }
     if (at_most_one.size() > 1) {
       if (type == 0) {
-        context_->UpdateRuleStats("linear: extracted at most one (max).");
+        context_->UpdateRuleStats("linear: extracted at most one (max)");
       } else {
-        context_->UpdateRuleStats("linear: extracted at most one (min).");
+        context_->UpdateRuleStats("linear: extracted at most one (min)");
       }
       ConstraintProto* new_ct = context_->working_model->add_constraints();
       new_ct->set_name(ct->name());
@@ -2700,10 +4995,13 @@ void CpModelPresolver::ExtractAtMostOneFromLinear(ConstraintProto* ct) {
 // Convert some linear constraint involving only Booleans to their Boolean
 // form.
 bool CpModelPresolver::PresolveLinearOnBooleans(ConstraintProto* ct) {
-  if (ct->constraint_case() != ConstraintProto::ConstraintCase::kLinear ||
-      context_->ModelIsUnsat()) {
-    return false;
-  }
+  if (ct->linear().vars().empty()) return false;
+  if (context_->ModelIsUnsat()) return false;
+
+  // For special kind of constraint detection.
+  int64_t sum_of_coeffs = 0;
+  int num_positive = 0;
+  int num_negative = 0;
 
   const LinearConstraintProto& arg = ct->linear();
   const int num_vars = arg.vars_size();
@@ -2720,12 +5018,15 @@ bool CpModelPresolver::PresolveLinearOnBooleans(ConstraintProto* ct) {
     if (context_->MinOf(var) != 0) return false;
     if (context_->MaxOf(var) != 1) return false;
 
+    sum_of_coeffs += coeff;
     if (coeff > 0) {
+      ++num_positive;
       max_sum += coeff;
       min_coeff = std::min(min_coeff, coeff);
       max_coeff = std::max(max_coeff, coeff);
     } else {
       // We replace the Boolean ref, by a ref to its negation (1 - x).
+      ++num_negative;
       min_sum += coeff;
       min_coeff = std::min(min_coeff, -coeff);
       max_coeff = std::max(max_coeff, -coeff);
@@ -2744,11 +5045,32 @@ bool CpModelPresolver::PresolveLinearOnBooleans(ConstraintProto* ct) {
        min_sum + min_coeff > rhs_domain.Max()) ||
       (!rhs_domain.Contains(max_sum) &&
        max_sum - min_coeff < rhs_domain.Min())) {
-    context_->UpdateRuleStats("linear: all booleans and trivially false");
-    return MarkConstraintAsFalse(ct);
+    return MarkConstraintAsFalse(ct,
+                                 "linear: all booleans and trivially false");
   }
   if (Domain(min_sum, max_sum).IsIncludedIn(rhs_domain)) {
     context_->UpdateRuleStats("linear: all booleans and trivially true");
+    return RemoveConstraint(ct);
+  }
+
+  // This discover cases like "A + B + C - 3*D = 0"
+  // where all Booleans must be equivalent!
+  // This happens a lot on woodlands09.mps for instance.
+  //
+  // TODO(user): generalize if enforced?
+  // TODO(user): generalize to other variant! Use DP to identify constraint with
+  // just one or two solutions? or a few solution with same variable values?
+  if (ct->enforcement_literal().empty() && sum_of_coeffs == 0 &&
+      (num_negative == 1 || num_positive == 1) && rhs_domain.IsFixed() &&
+      rhs_domain.FixedValue() == 0) {
+    // This forces either all variable at 1 or all at zero.
+    context_->UpdateRuleStats("linear: all equivalent!");
+    for (int i = 1; i < num_vars; ++i) {
+      if (!context_->StoreBooleanEqualityRelation(ct->linear().vars(0),
+                                                  ct->linear().vars(i))) {
+        return false;
+      }
+    }
     return RemoveConstraint(ct);
   }
 
@@ -2808,6 +5130,7 @@ bool CpModelPresolver::PresolveLinearOnBooleans(ConstraintProto* ct) {
              min_sum + 2 * min_coeff > rhs_domain.Max() &&
              rhs_domain.back().start <= min_sum) {
     // At most one Boolean is true.
+    // TODO(user): Support enforced at most one.
     context_->UpdateRuleStats("linear: positive at most one");
     const auto copy = arg;
     ct->mutable_at_most_one()->clear_literals();
@@ -2821,6 +5144,7 @@ bool CpModelPresolver::PresolveLinearOnBooleans(ConstraintProto* ct) {
              max_sum - 2 * min_coeff < rhs_domain.Min() &&
              rhs_domain.front().end >= max_sum) {
     // At most one Boolean is false.
+    // TODO(user): Support enforced at most one.
     context_->UpdateRuleStats("linear: negative at most one");
     const auto copy = arg;
     ct->mutable_at_most_one()->clear_literals();
@@ -2834,6 +5158,7 @@ bool CpModelPresolver::PresolveLinearOnBooleans(ConstraintProto* ct) {
              min_sum + min_coeff >= rhs_domain.Min() &&
              min_sum + 2 * min_coeff > rhs_domain.Max() &&
              min_sum + max_coeff <= rhs_domain.Max()) {
+    // TODO(user): Support enforced exactly one.
     context_->UpdateRuleStats("linear: positive equal one");
     ConstraintProto* exactly_one = context_->working_model->add_constraints();
     exactly_one->set_name(ct->name());
@@ -2848,6 +5173,7 @@ bool CpModelPresolver::PresolveLinearOnBooleans(ConstraintProto* ct) {
              max_sum - min_coeff <= rhs_domain.Max() &&
              max_sum - 2 * min_coeff < rhs_domain.Min() &&
              max_sum - max_coeff >= rhs_domain.Min()) {
+    // TODO(user): Support enforced exactly one.
     context_->UpdateRuleStats("linear: negative equal one");
     ConstraintProto* exactly_one = context_->working_model->add_constraints();
     exactly_one->set_name(ct->name());
@@ -2899,21 +5225,32 @@ bool CpModelPresolver::PresolveInterval(int c, ConstraintProto* ct) {
   // If the size is < 0, then the interval cannot be performed.
   if (!ct->enforcement_literal().empty() && context_->SizeMax(c) < 0) {
     context_->UpdateRuleStats("interval: negative size implies unperformed");
-    return MarkConstraintAsFalse(ct);
+    return MarkOptionalIntervalAsFalse(ct);
   }
 
-  bool changed = false;
   if (ct->enforcement_literal().empty()) {
+    bool domain_changed = false;
     // Size can't be negative.
     if (!context_->IntersectDomainWith(
             interval->size(), Domain(0, std::numeric_limits<int64_t>::max()),
-            &changed)) {
+            &domain_changed)) {
       return false;
     }
-    context_->UpdateRuleStats(
-        "interval: performed intervals must have a positive size");
+    if (domain_changed) {
+      context_->UpdateRuleStats(
+          "interval: performed intervals must have a positive size");
+    }
   }
 
+  // Note that the linear relation is stored elsewhere, so it is safe to just
+  // remove such special interval constraint.
+  if (context_->ConstraintVariableGraphIsUpToDate() &&
+      context_->IntervalUsage(c) == 0) {
+    context_->UpdateRuleStats("intervals: removed unused interval");
+    return RemoveConstraint(ct);
+  }
+
+  bool changed = false;
   changed |= CanonicalizeLinearExpression(*ct, interval->mutable_start());
   changed |= CanonicalizeLinearExpression(*ct, interval->mutable_size());
   changed |= CanonicalizeLinearExpression(*ct, interval->mutable_end());
@@ -2922,19 +5259,21 @@ bool CpModelPresolver::PresolveInterval(int c, ConstraintProto* ct) {
 
 // TODO(user): avoid code duplication between expand and presolve.
 bool CpModelPresolver::PresolveInverse(ConstraintProto* ct) {
+  // TODO(user): add support for this case.
+  if (HasEnforcementLiteral(*ct)) return false;
   const int size = ct->inverse().f_direct().size();
   bool changed = false;
 
   // Make sure the domains are included in [0, size - 1).
   for (const int ref : ct->inverse().f_direct()) {
     if (!context_->IntersectDomainWith(ref, Domain(0, size - 1), &changed)) {
-      VLOG(1) << "Empty domain for a variable in ExpandInverse()";
+      VLOG(1) << "Empty domain for a variable in PresolveInverse()";
       return false;
     }
   }
   for (const int ref : ct->inverse().f_inverse()) {
     if (!context_->IntersectDomainWith(ref, Domain(0, size - 1), &changed)) {
-      VLOG(1) << "Empty domain for a variable in ExpandInverse()";
+      VLOG(1) << "Empty domain for a variable in PresolveInverse()";
       return false;
     }
   }
@@ -2994,7 +5333,7 @@ bool CpModelPresolver::PresolveInverse(ConstraintProto* ct) {
             changed = true;
             if (!context_->IntersectDomainWith(
                     direct[i], Domain::FromValues(possible_values))) {
-              VLOG(1) << "Empty domain for a variable in ExpandInverse()";
+              VLOG(1) << "Empty domain for a variable in PresolveInverse()";
               return false;
             }
           }
@@ -3019,399 +5358,408 @@ bool CpModelPresolver::PresolveInverse(ConstraintProto* ct) {
   return false;
 }
 
-bool CpModelPresolver::PresolveElement(ConstraintProto* ct) {
+bool CpModelPresolver::PresolveElement(int c, ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
 
-  if (ct->element().vars().empty()) {
-    context_->UpdateRuleStats("element: empty array");
-    return context_->NotifyThatModelIsUnsat();
+  if (ct->element().exprs().empty()) {
+    return MarkConstraintAsFalse(ct, "element: empty array");
   }
 
-  const int index_ref = ct->element().index();
-  const int target_ref = ct->element().target();
+  bool changed = false;
+  changed |= CanonicalizeLinearExpression(
+      *ct, ct->mutable_element()->mutable_linear_index());
+  changed |= CanonicalizeLinearExpression(
+      *ct, ct->mutable_element()->mutable_linear_target());
+  for (int i = 0; i < ct->element().exprs_size(); ++i) {
+    changed |= CanonicalizeLinearExpression(
+        *ct, ct->mutable_element()->mutable_exprs(i));
+  }
 
-  // TODO(user): think about this once we do have such constraint.
-  if (HasEnforcementLiteral(*ct)) return false;
+  const LinearExpressionProto& index = ct->element().linear_index();
+  const LinearExpressionProto& target = ct->element().linear_target();
 
-  bool all_constants = true;
-  absl::flat_hash_set<int64_t> constant_set;
-  bool all_included_in_target_domain = true;
+  // TODO(user): add support for this case.
+  if (HasEnforcementLiteral(*ct)) return changed;
 
+  // Reduce index domain from the array size.
   {
-    bool reduced_index_domain = false;
-    if (!context_->IntersectDomainWith(index_ref,
-                                       Domain(0, ct->element().vars_size() - 1),
-                                       &reduced_index_domain)) {
+    bool index_modified = false;
+    if (!context_->IntersectDomainWith(
+            index, Domain(0, ct->element().exprs_size() - 1),
+            &index_modified)) {
       return false;
     }
-
-    // Filter impossible index values if index == +/- target
-    //
-    // Note that this must be done before the unique_index/target rule.
-    if (PositiveRef(target_ref) == PositiveRef(index_ref)) {
-      std::vector<int64_t> possible_indices;
-      const Domain& index_domain = context_->DomainOf(index_ref);
-      for (const int64_t index_value : index_domain.Values()) {
-        const int ref = ct->element().vars(index_value);
-        const int64_t target_value =
-            target_ref == index_ref ? index_value : -index_value;
-        if (context_->DomainContains(ref, target_value)) {
-          possible_indices.push_back(target_value);
-        }
-      }
-      if (possible_indices.size() < index_domain.Size()) {
-        if (!context_->IntersectDomainWith(
-                index_ref, Domain::FromValues(possible_indices))) {
-          return true;
-        }
-        context_->UpdateRuleStats(
-            "element: reduced index domain when target equals index");
-      }
-    }
-
-    // Filter possible index values. Accumulate variable domains to build
-    // a possible target domain.
-    Domain infered_domain;
-    const Domain& initial_index_domain = context_->DomainOf(index_ref);
-    const Domain& target_domain = context_->DomainOf(target_ref);
-    std::vector<int64_t> possible_indices;
-    for (const int64_t value : initial_index_domain.Values()) {
-      CHECK_GE(value, 0);
-      CHECK_LT(value, ct->element().vars_size());
-      const int ref = ct->element().vars(value);
-      const Domain& domain = context_->DomainOf(ref);
-      if (domain.IntersectionWith(target_domain).IsEmpty()) continue;
-      possible_indices.push_back(value);
-      if (domain.IsFixed()) {
-        constant_set.insert(domain.Min());
-      } else {
-        all_constants = false;
-      }
-      if (!domain.IsIncludedIn(target_domain)) {
-        all_included_in_target_domain = false;
-      }
-      infered_domain = infered_domain.UnionWith(domain);
-    }
-    if (possible_indices.size() < initial_index_domain.Size()) {
-      if (!context_->IntersectDomainWith(
-              index_ref, Domain::FromValues(possible_indices))) {
-        return true;
-      }
-      context_->UpdateRuleStats("element: reduced index domain");
-    }
-    bool domain_modified = false;
-    if (!context_->IntersectDomainWith(target_ref, infered_domain,
-                                       &domain_modified)) {
-      return true;
-    }
-    if (domain_modified) {
-      context_->UpdateRuleStats("element: reduced target domain");
+    if (index_modified) {
+      context_->UpdateRuleStats(
+          "element: reduced index domain from array size");
     }
   }
 
-  // If the index is fixed, this is a equality constraint.
-  if (context_->IsFixed(index_ref)) {
-    const int var = ct->element().vars(context_->MinOf(index_ref));
-    if (var != target_ref) {
-      LinearConstraintProto* const lin =
-          context_->working_model->add_constraints()->mutable_linear();
-      lin->add_vars(var);
-      lin->add_coeffs(-1);
-      lin->add_vars(target_ref);
-      lin->add_coeffs(1);
-      lin->add_domain(0);
-      lin->add_domain(0);
-      context_->UpdateNewConstraintsVariableUsage();
+  // Special case if the index is fixed.
+  if (context_->IsFixed(index)) {
+    const int64_t index_value = context_->FixedValue(index);
+    ConstraintProto* new_ct = context_->working_model->add_constraints();
+    new_ct->mutable_linear()->add_domain(0);
+    new_ct->mutable_linear()->add_domain(0);
+    AddLinearExpressionToLinearConstraint(target, 1, new_ct->mutable_linear());
+    AddLinearExpressionToLinearConstraint(ct->element().exprs(index_value), -1,
+                                          new_ct->mutable_linear());
+    bool is_impossible = false;
+    context_->CanonicalizeLinearConstraint(new_ct, &is_impossible);
+    if (is_impossible) {
+      return context_->NotifyThatModelIsUnsat(
+          "element: impossible fixed index");
     }
+    context_->UpdateNewConstraintsVariableUsage();
     context_->UpdateRuleStats("element: fixed index");
     return RemoveConstraint(ct);
   }
 
-  // If the accessible part of the array is made of a single constant value,
-  // then we do not care about the index. And, because of the previous target
-  // domain reduction, the target is also fixed.
-  if (all_constants && constant_set.size() == 1) {
-    CHECK(context_->IsFixed(target_ref));
-    context_->UpdateRuleStats("element: one value array");
-    return RemoveConstraint(ct);
+  // We know index is not fixed.
+  const int index_var = index.vars(0);
+
+  {
+    // Cleanup the array: if exprs[i] contains index_var, fix its value.
+    const Domain& index_var_domain = context_->DomainOf(index_var);
+    std::vector<int64_t> reached_indices(ct->element().exprs_size(), false);
+    for (const int64_t index_var_value : index_var_domain.Values()) {
+      const int64_t index_value =
+          AffineExpressionValueAt(index, index_var_value);
+      reached_indices[index_value] = true;
+      const LinearExpressionProto& expr = ct->element().exprs(index_value);
+      if (expr.vars_size() == 1 && expr.vars(0) == index_var) {
+        const int64_t expr_value =
+            AffineExpressionValueAt(expr, index_var_value);
+        ct->mutable_element()->mutable_exprs(index_value)->clear_vars();
+        ct->mutable_element()->mutable_exprs(index_value)->clear_coeffs();
+        ct->mutable_element()
+            ->mutable_exprs(index_value)
+            ->set_offset(expr_value);
+        changed = true;
+        context_->UpdateRuleStats(
+            "element: fix expression depending on the index");
+      }
+    }
+
+    // Cleanup the array: clear unreached expressions.
+    for (int i = 0; i < ct->element().exprs_size(); ++i) {
+      if (!reached_indices[i]) {
+        ct->mutable_element()->mutable_exprs(i)->Clear();
+        changed = true;
+      }
+    }
   }
 
-  // Special case when the index is boolean, and the array does not contain
-  // variables.
-  if (context_->MinOf(index_ref) == 0 && context_->MaxOf(index_ref) == 1 &&
-      all_constants) {
-    const int64_t v0 = context_->MinOf(ct->element().vars(0));
-    const int64_t v1 = context_->MinOf(ct->element().vars(1));
+  // Canonicalization and cleanups of the expressions could have messed up the
+  // var-constraint graph.
+  if (changed) context_->UpdateConstraintVariableUsage(c);
 
-    LinearConstraintProto* const lin =
-        context_->working_model->add_constraints()->mutable_linear();
-    lin->add_vars(target_ref);
-    lin->add_coeffs(1);
-    lin->add_vars(index_ref);
-    lin->add_coeffs(v0 - v1);
-    lin->add_domain(v0);
-    lin->add_domain(v0);
-    context_->UpdateNewConstraintsVariableUsage();
-    context_->UpdateRuleStats("element: linearize constant element of size 2");
-    return RemoveConstraint(ct);
+  // Reduces the domain of the index.
+  {
+    const Domain& index_var_domain = context_->DomainOf(index_var);
+    const Domain& target_domain = context_->DomainSuperSetOf(target);
+    std::vector<int64_t> possible_index_var_values;
+    for (const int64_t index_var_value : index_var_domain.Values()) {
+      const int64_t index_value =
+          AffineExpressionValueAt(index, index_var_value);
+      const LinearExpressionProto& expr = ct->element().exprs(index_value);
+
+      bool is_possible_index;
+      if (target.vars_size() == 1 && target.vars(0) == index_var) {
+        // The target domain can be reduced if it shares its variable with the
+        // index.
+        is_possible_index = context_->DomainContains(
+            expr, AffineExpressionValueAt(target, index_var_value));
+      } else {
+        is_possible_index =
+            context_->IntersectionOfAffineExprsIsNotEmpty(target, expr);
+      }
+
+      if (is_possible_index) {
+        possible_index_var_values.push_back(index_var_value);
+      } else {
+        ct->mutable_element()->mutable_exprs(index_value)->Clear();
+        changed = true;
+      }
+    }
+    if (possible_index_var_values.size() < index_var_domain.Size()) {
+      if (!context_->IntersectDomainWith(
+              index_var, Domain::FromValues(possible_index_var_values))) {
+        return true;
+      }
+      context_->UpdateRuleStats("element: reduced index domain ");
+      // If the index is fixed, this is a equality constraint.
+      if (context_->IsFixed(index)) {
+        ConstraintProto* const eq = context_->working_model->add_constraints();
+        eq->mutable_linear()->add_domain(0);
+        eq->mutable_linear()->add_domain(0);
+        AddLinearExpressionToLinearConstraint(target, 1, eq->mutable_linear());
+        AddLinearExpressionToLinearConstraint(
+            ct->element().exprs(context_->FixedValue(index)), -1,
+            eq->mutable_linear());
+        context_->CanonicalizeLinearConstraint(eq);
+        context_->UpdateNewConstraintsVariableUsage();
+        context_->UpdateRuleStats("element: fixed index");
+        return RemoveConstraint(ct);
+      }
+    }
   }
 
-  // If the index has a canonical affine representative, rewrite the element.
-  const AffineRelation::Relation r_index =
-      context_->GetAffineRelation(index_ref);
-  if (r_index.representative != index_ref) {
-    // Checks the domains are synchronized.
-    if (context_->DomainOf(r_index.representative).Size() >
-        context_->DomainOf(index_ref).Size()) {
-      // Postpone, we will come back later when domains are synchronized.
+  bool all_included_in_target_domain = true;
+  {
+    // Accumulate expressions domains to build a superset of the target domain.
+    Domain infered_domain;
+    const Domain& index_var_domain = context_->DomainOf(index_var);
+    const Domain& target_domain = context_->DomainSuperSetOf(target);
+    for (const int64_t index_var_value : index_var_domain.Values()) {
+      const int64_t index_value =
+          AffineExpressionValueAt(index, index_var_value);
+      CHECK_GE(index_value, 0);
+      CHECK_LT(index_value, ct->element().exprs_size());
+      const LinearExpressionProto& expr = ct->element().exprs(index_value);
+      const Domain expr_domain = context_->DomainSuperSetOf(expr);
+      if (!expr_domain.IsIncludedIn(target_domain)) {
+        all_included_in_target_domain = false;
+      }
+      infered_domain = infered_domain.UnionWith(expr_domain);
+    }
+
+    bool domain_modified = false;
+    if (!context_->IntersectDomainWith(target, infered_domain,
+                                       &domain_modified)) {
       return true;
     }
-    const int r_ref = r_index.representative;
-    const int64_t r_min = context_->MinOf(r_ref);
-    const int64_t r_max = context_->MaxOf(r_ref);
-    const int array_size = ct->element().vars_size();
-    if (r_min != 0) {
-      context_->UpdateRuleStats("TODO element: representative has bad domain");
-    } else if (r_index.offset >= 0 && r_index.offset < array_size &&
-               r_index.offset + r_max * r_index.coeff >= 0 &&
-               r_index.offset + r_max * r_index.coeff < array_size) {
-      // This will happen eventually when domains are synchronized.
-      ElementConstraintProto* const element =
-          context_->working_model->add_constraints()->mutable_element();
-      for (int64_t v = 0; v <= r_max; ++v) {
-        const int64_t scaled_index = v * r_index.coeff + r_index.offset;
-        CHECK_GE(scaled_index, 0);
-        CHECK_LT(scaled_index, array_size);
-        element->add_vars(ct->element().vars(scaled_index));
-      }
-      element->set_index(r_ref);
-      element->set_target(target_ref);
-
-      if (r_index.coeff == 1) {
-        context_->UpdateRuleStats("element: shifed index ");
-      } else {
-        context_->UpdateRuleStats("element: scaled index");
-      }
-      context_->UpdateNewConstraintsVariableUsage();
-      return RemoveConstraint(ct);
+    if (domain_modified) {
+      context_->UpdateRuleStats("element: reduce target domain");
     }
   }
 
-  // Should have been taken care of ealier.
-  DCHECK(!context_->IsFixed(index_ref));
+  bool all_constants = true;
+  {
+    const Domain& index_var_domain = context_->DomainOf(index_var);
+    std::vector<int64_t> expr_constants;
+
+    for (const int64_t index_var_value : index_var_domain.Values()) {
+      const int64_t index_value =
+          AffineExpressionValueAt(index, index_var_value);
+      const LinearExpressionProto& expr = ct->element().exprs(index_value);
+      if (context_->IsFixed(expr)) {
+        expr_constants.push_back(context_->FixedValue(expr));
+      } else {
+        all_constants = false;
+        break;
+      }
+    }
+  }
+
+  // Detect is the element can be rewritten as a * target + b * index == c.
+  if (all_constants) {
+    if (context_->IsFixed(target)) {
+      // If the accessible part of the array is made of a single constant
+      // value, then we do not care about the index. And, because of the
+      // previous target domain reduction, the target is also fixed.
+      context_->UpdateRuleStats("element: one value array");
+      return RemoveConstraint(ct);
+    }
+    int64_t first_index_var_value;
+    int64_t first_target_var_value;
+    int64_t d_index = 0;
+    int64_t d_target = 0;
+    int num_terms = 0;
+    bool is_affine = true;
+    const Domain& index_var_domain = context_->DomainOf(index_var);
+    for (const int64_t index_var_value : index_var_domain.Values()) {
+      ++num_terms;
+      const int64_t index_value =
+          AffineExpressionValueAt(index, index_var_value);
+      const int64_t expr_value =
+          context_->FixedValue(ct->element().exprs(index_value));
+      const int64_t target_var_value = GetInnerVarValue(target, expr_value);
+      if (num_terms == 1) {
+        first_index_var_value = index_var_value;
+        first_target_var_value = target_var_value;
+      } else if (num_terms == 2) {
+        d_index = index_var_value - first_index_var_value;
+        d_target = target_var_value - first_target_var_value;
+        const int64_t gcd = std::gcd(d_index, d_target);
+        d_index /= gcd;
+        d_target /= gcd;
+      } else {
+        const int64_t offset = CapSub(
+            CapProd(d_index, CapSub(target_var_value, first_target_var_value)),
+            CapProd(d_target, CapSub(index_var_value, first_index_var_value)));
+        if (offset != 0) {
+          is_affine = false;
+          break;
+        }
+      }
+    }
+    if (is_affine) {
+      const int64_t offset = CapSub(CapProd(first_target_var_value, d_index),
+                                    CapProd(first_index_var_value, d_target));
+      if (!AtMinOrMaxInt64(offset)) {
+        ConstraintProto* const lin = context_->working_model->add_constraints();
+        lin->mutable_linear()->add_vars(target.vars(0));
+        lin->mutable_linear()->add_coeffs(d_index);
+        lin->mutable_linear()->add_vars(index_var);
+        lin->mutable_linear()->add_coeffs(-d_target);
+        lin->mutable_linear()->add_domain(offset);
+        lin->mutable_linear()->add_domain(offset);
+        context_->CanonicalizeLinearConstraint(lin);
+        context_->UpdateNewConstraintsVariableUsage();
+        context_->UpdateRuleStats("element: rewrite as affine constraint");
+        return RemoveConstraint(ct);
+      }
+    }
+  }
 
   // If a variable (target or index) appears only in this constraint, it does
   // not necessarily mean that we can remove the constraint, as the variable
-  // can be used multiple time_exprs in the element. So let's count the local
+  // can be used multiple times in the element. So let's count the local
   // uses of each variable.
+  //
+  // TODO(user): now that we used fixed values for these case, this is no longer
+  // needed I think.
   absl::flat_hash_map<int, int> local_var_occurrence_counter;
-  local_var_occurrence_counter[PositiveRef(index_ref)]++;
-  local_var_occurrence_counter[PositiveRef(target_ref)]++;
-
-  for (const ClosedInterval interval : context_->DomainOf(index_ref)) {
-    for (int64_t value = interval.start; value <= interval.end; ++value) {
-      DCHECK_GE(value, 0);
-      DCHECK_LT(value, ct->element().vars_size());
-      const int ref = ct->element().vars(value);
-      local_var_occurrence_counter[PositiveRef(ref)]++;
+  {
+    auto count = [&local_var_occurrence_counter](
+                     const LinearExpressionProto& expr) mutable {
+      for (const int var : expr.vars()) {
+        local_var_occurrence_counter[var]++;
+      }
+    };
+    count(index);
+    count(target);
+    for (const int64_t index_var_value :
+         context_->DomainOf(index_var).Values()) {
+      count(
+          ct->element().exprs(AffineExpressionValueAt(index, index_var_value)));
     }
   }
 
-  if (context_->VariableIsUniqueAndRemovable(index_ref) &&
-      local_var_occurrence_counter.at(PositiveRef(index_ref)) == 1) {
-    if (all_constants) {
-      // This constraint is just here to reduce the domain of the target! We can
-      // add it to the mapping_model to reconstruct the index value during
-      // postsolve and get rid of it now.
-      context_->UpdateRuleStats("element: trivial target domain reduction");
-      context_->MarkVariableAsRemoved(index_ref);
-      *(context_->mapping_model->add_constraints()) = *ct;
-      return RemoveConstraint(ct);
-    } else {
-      context_->UpdateRuleStats("TODO element: index not used elsewhere");
-    }
+  if (context_->VariableIsUniqueAndRemovable(index_var) &&
+      local_var_occurrence_counter.at(index_var) == 1 && all_constants) {
+    // This constraint is just here to reduce the domain of the target! We can
+    // add it to the mapping_model to reconstruct the index value during
+    // postsolve and get rid of it now.
+    //
+    // The non constant case is handled during expansion.
+    context_->UpdateRuleStats(
+        "element: removed as the index is not used elsewhere");
+    context_->MarkVariableAsRemoved(index_var);
+    context_->NewMappingConstraint(*ct, __FILE__, __LINE__);
+    return RemoveConstraint(ct);
   }
 
-  if (!context_->IsFixed(target_ref) &&
-      context_->VariableIsUniqueAndRemovable(target_ref) &&
-      local_var_occurrence_counter.at(PositiveRef(target_ref)) == 1) {
-    if (all_included_in_target_domain) {
-      context_->UpdateRuleStats("element: trivial index domain reduction");
-      context_->MarkVariableAsRemoved(target_ref);
-      *(context_->mapping_model->add_constraints()) = *ct;
-      return RemoveConstraint(ct);
-    } else {
-      context_->UpdateRuleStats("TODO element: target not used elsewhere");
-    }
+  // The case where all domains are not included in the target domain is handled
+  // during expansion.
+  if (!context_->IsFixed(target) &&
+      context_->VariableIsUniqueAndRemovable(target.vars(0)) &&
+      local_var_occurrence_counter.at(target.vars(0)) == 1 &&
+      all_included_in_target_domain && std::abs(target.coeffs(0)) == 1) {
+    context_->UpdateRuleStats(
+        "element: removed as the target is not used elsewhere");
+    context_->MarkVariableAsRemoved(target.vars(0));
+    context_->NewMappingConstraint(*ct, __FILE__, __LINE__);
+    return RemoveConstraint(ct);
   }
 
-  return false;
+  return changed;
 }
 
 bool CpModelPresolver::PresolveTable(ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
-  if (HasEnforcementLiteral(*ct)) return false;
-  if (ct->table().vars().empty()) {
-    context_->UpdateRuleStats("table: empty constraint");
+
+  bool changed = false;
+  for (int i = 0; i < ct->table().exprs_size(); ++i) {
+    changed |= CanonicalizeLinearExpression(
+        *ct, ct->mutable_table()->mutable_exprs(i));
+  }
+
+  const int initial_num_exprs = ct->table().exprs_size();
+  if (initial_num_exprs > 0) CanonicalizeTable(context_, ct);
+  changed |= (ct->table().exprs_size() != initial_num_exprs);
+
+  if (ct->table().exprs().empty()) {
+    context_->UpdateRuleStats("table: no expressions");
     return RemoveConstraint(ct);
   }
 
-  const int initial_num_vars = ct->table().vars_size();
-  bool changed = true;
-
-  // Query existing affine relations.
-  std::vector<AffineRelation::Relation> affine_relations;
-  std::vector<int64_t> old_var_lb;
-  std::vector<int64_t> old_var_ub;
-  {
-    for (int v = 0; v < initial_num_vars; ++v) {
-      const int ref = ct->table().vars(v);
-      AffineRelation::Relation r = context_->GetAffineRelation(ref);
-      affine_relations.push_back(r);
-      old_var_lb.push_back(context_->MinOf(ref));
-      old_var_ub.push_back(context_->MaxOf(ref));
-      if (r.representative != ref) {
-        changed = true;
-        ct->mutable_table()->set_vars(v, r.representative);
-        context_->UpdateRuleStats(
-            "table: replace variable by canonical affine one");
-      }
+  if (ct->table().values().empty()) {
+    if (ct->table().negated()) {
+      context_->UpdateRuleStats("table: negative table without tuples");
+      return RemoveConstraint(ct);
+    } else {
+      return MarkConstraintAsFalse(ct, "table: positive table without tuples");
     }
   }
 
-  // Check for duplicate occurrences of variables.
-  // If the ith index is -1, then the variable is not a duplicate of a smaller
-  // index variable. It if is != from -1, then the values stored is the new
-  // index of the first occurrence of the variable.
-  std::vector<int> old_index_of_duplicate_to_new_index_of_first_occurrence(
-      initial_num_vars, -1);
-  // If == -1, then the variable is a duplicate of a smaller index variable.
-  std::vector<int> old_index_to_new_index(initial_num_vars, -1);
-  int num_vars = 0;
-  {
-    absl::flat_hash_map<int, int> first_visit;
-    for (int p = 0; p < initial_num_vars; ++p) {
-      const int ref = ct->table().vars(p);
-      const int var = PositiveRef(ref);
-      const auto& it = first_visit.find(var);
-      if (it != first_visit.end()) {
-        const int previous = it->second;
-        old_index_of_duplicate_to_new_index_of_first_occurrence[p] = previous;
-        context_->UpdateRuleStats("table: duplicate variables");
-        changed = true;
-      } else {
-        ct->mutable_table()->set_vars(num_vars, ref);
-        first_visit[var] = num_vars;
-        old_index_to_new_index[p] = num_vars;
-        num_vars++;
-      }
+  int num_fixed_exprs = 0;
+  for (const LinearExpressionProto& expr : ct->table().exprs()) {
+    if (context_->IsFixed(expr)) ++num_fixed_exprs;
+  }
+  if (num_fixed_exprs == ct->table().exprs_size()) {
+    context_->UpdateRuleStats("table: all expressions are fixed");
+    DCHECK_LE(ct->table().values_size(), num_fixed_exprs);
+    if (ct->table().negated() == ct->table().values().empty()) {
+      context_->UpdateRuleStats("table: always true");
+      return RemoveConstraint(ct);
+    } else {
+      return MarkConstraintAsFalse(ct, "table: always false");
     }
-
-    if (num_vars < initial_num_vars) {
-      ct->mutable_table()->mutable_vars()->Truncate(num_vars);
-    }
+    return RemoveConstraint(ct);
   }
 
-  // Check each tuple for validity w.r.t. affine relations, variable domains,
-  // and consistency with duplicate variables. Reduce the size of the tuple in
-  // case of duplicate variables.
-  std::vector<std::vector<int64_t>> new_tuples;
-  const int initial_num_tuples = ct->table().values_size() / initial_num_vars;
-  std::vector<absl::flat_hash_set<int64_t>> new_domains(num_vars);
-
-  {
-    std::vector<int64_t> tuple(num_vars);
-    new_tuples.reserve(initial_num_tuples);
-    for (int i = 0; i < initial_num_tuples; ++i) {
-      bool delete_row = false;
-      std::string tmp;
-      for (int j = 0; j < initial_num_vars; ++j) {
-        const int64_t old_value = ct->table().values(i * initial_num_vars + j);
-
-        // Corner case to avoid overflow, assuming the domain where already
-        // propagated between a variable and its affine representative.
-        if (old_value < old_var_lb[j] || old_value > old_var_ub[j]) {
-          delete_row = true;
-          break;
-        }
-
-        // Affine relations are defined on the initial variables.
-        const AffineRelation::Relation& r = affine_relations[j];
-        const int64_t value = (old_value - r.offset) / r.coeff;
-        if (value * r.coeff + r.offset != old_value) {
-          // Value not reachable by affine relation.
-          delete_row = true;
-          break;
-        }
-        const int mapped_position = old_index_to_new_index[j];
-        if (mapped_position == -1) {  // The current variable is duplicate.
-          const int new_index_of_first_occurrence =
-              old_index_of_duplicate_to_new_index_of_first_occurrence[j];
-          if (value != tuple[new_index_of_first_occurrence]) {
-            delete_row = true;
-            break;
-          }
-        } else {
-          const int ref = ct->table().vars(mapped_position);
-          if (!context_->DomainContains(ref, value)) {
-            delete_row = true;
-            break;
-          }
-          tuple[mapped_position] = value;
-        }
-      }
-      if (delete_row) {
-        changed = true;
-        continue;
-      }
-      new_tuples.push_back(tuple);
-      for (int j = 0; j < num_vars; ++j) {
-        new_domains[j].insert(tuple[j]);
-      }
-    }
-    gtl::STLSortAndRemoveDuplicates(&new_tuples);
-    if (new_tuples.size() < initial_num_tuples) {
-      context_->UpdateRuleStats("table: removed rows");
-    }
-  }
-
-  // Update the list of tuples if needed.
-  if (changed) {
-    ct->mutable_table()->clear_values();
-    for (const std::vector<int64_t>& t : new_tuples) {
-      for (const int64_t v : t) {
-        ct->mutable_table()->add_values(v);
-      }
-    }
+  if (num_fixed_exprs > 0) {
+    CanonicalizeTable(context_, ct);
   }
 
   // Nothing more to do for negated tables.
   if (ct->table().negated()) return changed;
 
-  // Filter the variable domains.
-  for (int j = 0; j < num_vars; ++j) {
-    const int ref = ct->table().vars(j);
-    if (!context_->IntersectDomainWith(
-            PositiveRef(ref),
-            Domain::FromValues(std::vector<int64_t>(new_domains[j].begin(),
-                                                    new_domains[j].end())),
-            &changed)) {
+  // And for constraints with enforcement literals.
+  if (HasEnforcementLiteral(*ct)) return changed;
+
+  // Filter the variables domains.
+  const int num_exprs = ct->table().exprs_size();
+  const int num_tuples = ct->table().values_size() / num_exprs;
+  std::vector<std::vector<int64_t>> new_domains(num_exprs);
+  for (int e = 0; e < num_exprs; ++e) {
+    const LinearExpressionProto& expr = ct->table().exprs(e);
+    if (context_->IsFixed(expr)) {
+      new_domains[e].push_back(context_->FixedValue(expr));
+      continue;
+    }
+
+    for (int t = 0; t < num_tuples; ++t) {
+      new_domains[e].push_back(ct->table().values(t * num_exprs + e));
+    }
+    gtl::STLSortAndRemoveDuplicates(&new_domains[e]);
+    DCHECK_EQ(1, expr.vars_size());
+    DCHECK_EQ(1, expr.coeffs(0));
+    DCHECK_EQ(0, expr.offset());
+    const int var = expr.vars(0);
+    bool domain_modified = false;
+    if (!context_->IntersectDomainWith(var, Domain::FromValues(new_domains[e]),
+                                       &domain_modified)) {
       return true;
     }
+    if (domain_modified) {
+      context_->UpdateRuleStats("table: reduce variable domain");
+    }
   }
-  if (changed) {
-    context_->UpdateRuleStats("table: reduced variable domains");
-  }
-  if (num_vars == 1) {
-    // Now that we properly update the domain, we can remove the constraint.
+
+  if (num_exprs == 1) {
+    // Now that we have properly updated the domain, we can remove the
+    // constraint.
     context_->UpdateRuleStats("table: only one column!");
     return RemoveConstraint(ct);
   }
 
   // Check that the table is not complete or just here to exclude a few tuples.
   double prod = 1.0;
-  for (int j = 0; j < num_vars; ++j) prod *= new_domains[j].size();
-  if (prod == new_tuples.size()) {
+  for (int e = 0; e < num_exprs; ++e) prod *= new_domains[e].size();
+  if (prod == static_cast<double>(num_tuples)) {
     context_->UpdateRuleStats("table: all tuples!");
     return RemoveConstraint(ct);
   }
@@ -3419,17 +5767,25 @@ bool CpModelPresolver::PresolveTable(ConstraintProto* ct) {
   // Convert to the negated table if we gain a lot of entries by doing so.
   // Note however that currently the negated table do not propagate as much as
   // it could.
-  if (new_tuples.size() > 0.7 * prod) {
-    // Enumerate all tuples.
-    std::vector<std::vector<int64_t>> var_to_values(num_vars);
-    for (int j = 0; j < num_vars; ++j) {
-      var_to_values[j].assign(new_domains[j].begin(), new_domains[j].end());
+  if (static_cast<double>(num_tuples) > 0.7 * prod) {
+    std::vector<std::vector<int64_t>> current_tuples(num_tuples);
+    for (int t = 0; t < num_tuples; ++t) {
+      current_tuples[t].resize(num_exprs);
+      for (int e = 0; e < num_exprs; ++e) {
+        current_tuples[t][e] = ct->table().values(t * num_exprs + e);
+      }
+    }
+
+    // Enumerate all possible tuples.
+    std::vector<std::vector<int64_t>> var_to_values(num_exprs);
+    for (int e = 0; e < num_exprs; ++e) {
+      var_to_values[e].assign(new_domains[e].begin(), new_domains[e].end());
     }
     std::vector<std::vector<int64_t>> all_tuples(prod);
     for (int i = 0; i < prod; ++i) {
-      all_tuples[i].resize(num_vars);
+      all_tuples[i].resize(num_exprs);
       int index = i;
-      for (int j = 0; j < num_vars; ++j) {
+      for (int j = 0; j < num_exprs; ++j) {
         all_tuples[i][j] = var_to_values[j][index % var_to_values[j].size()];
         index /= var_to_values[j].size();
       }
@@ -3437,9 +5793,10 @@ bool CpModelPresolver::PresolveTable(ConstraintProto* ct) {
     gtl::STLSortAndRemoveDuplicates(&all_tuples);
 
     // Compute the complement of new_tuples.
-    std::vector<std::vector<int64_t>> diff(prod - new_tuples.size());
+    std::vector<std::vector<int64_t>> diff(prod - num_tuples);
     std::set_difference(all_tuples.begin(), all_tuples.end(),
-                        new_tuples.begin(), new_tuples.end(), diff.begin());
+                        current_tuples.begin(), current_tuples.end(),
+                        diff.begin());
 
     // Negate the constraint.
     ct->mutable_table()->set_negated(!ct->table().negated());
@@ -3449,174 +5806,199 @@ bool CpModelPresolver::PresolveTable(ConstraintProto* ct) {
     }
     context_->UpdateRuleStats("table: negated");
   }
+
   return changed;
-}
-
-bool CpModelPresolver::PresolveAllDiff(ConstraintProto* ct) {
-  if (context_->ModelIsUnsat()) return false;
-  if (HasEnforcementLiteral(*ct)) return false;
-
-  AllDifferentConstraintProto& all_diff = *ct->mutable_all_diff();
-
-  bool constraint_has_changed = false;
-  for (LinearExpressionProto& exp :
-       *(ct->mutable_all_diff()->mutable_exprs())) {
-    constraint_has_changed |= CanonicalizeLinearExpression(*ct, &exp);
-  }
-
-  for (;;) {
-    const int size = all_diff.exprs_size();
-    if (size == 0) {
-      context_->UpdateRuleStats("all_diff: empty constraint");
-      return RemoveConstraint(ct);
-    }
-    if (size == 1) {
-      context_->UpdateRuleStats("all_diff: only one variable");
-      return RemoveConstraint(ct);
-    }
-
-    bool something_was_propagated = false;
-    std::vector<LinearExpressionProto> kept_expressions;
-    for (int i = 0; i < size; ++i) {
-      if (!context_->IsFixed(all_diff.exprs(i))) {
-        kept_expressions.push_back(all_diff.exprs(i));
-        continue;
-      }
-
-      const int64_t value = context_->MinOf(all_diff.exprs(i));
-      bool propagated = false;
-      for (int j = 0; j < size; ++j) {
-        if (i == j) continue;
-        if (context_->DomainContains(all_diff.exprs(j), value)) {
-          if (!context_->IntersectDomainWith(all_diff.exprs(j),
-                                             Domain(value).Complement())) {
-            return true;
-          }
-          propagated = true;
-        }
-      }
-      if (propagated) {
-        context_->UpdateRuleStats("all_diff: propagated fixed expressions");
-        something_was_propagated = true;
-      }
-    }
-
-    // CanonicalizeLinearExpression() made sure that only positive variable
-    // appears here, so this order will put expr and -expr one after the other.
-    std::sort(
-        kept_expressions.begin(), kept_expressions.end(),
-        [](const LinearExpressionProto& expr_a,
-           const LinearExpressionProto& expr_b) {
-          DCHECK_EQ(expr_a.vars_size(), 1);
-          DCHECK_EQ(expr_b.vars_size(), 1);
-          const int ref_a = expr_a.vars(0);
-          const int ref_b = expr_b.vars(0);
-          const int64_t coeff_a = expr_a.coeffs(0);
-          const int64_t coeff_b = expr_b.coeffs(0);
-          const int64_t abs_coeff_a = std::abs(coeff_a);
-          const int64_t abs_coeff_b = std::abs(coeff_b);
-          const int64_t offset_a = expr_a.offset();
-          const int64_t offset_b = expr_b.offset();
-          const int64_t abs_offset_a = std::abs(offset_a);
-          const int64_t abs_offset_b = std::abs(offset_b);
-          return std::tie(ref_a, abs_coeff_a, coeff_a, abs_offset_a, offset_a) <
-                 std::tie(ref_b, abs_coeff_b, coeff_b, abs_offset_b, offset_b);
-        });
-
-    // TODO(user): improve algorithm if of (a + offset) and (-a - offset)
-    // might not be together if (a - offset) is present.
-
-    for (int i = 1; i < kept_expressions.size(); ++i) {
-      if (LinearExpressionProtosAreEqual(kept_expressions[i],
-                                         kept_expressions[i - 1], 1)) {
-        return context_->NotifyThatModelIsUnsat(
-            "Duplicate variable in all_diff");
-      }
-      if (LinearExpressionProtosAreEqual(kept_expressions[i],
-                                         kept_expressions[i - 1], -1)) {
-        bool domain_modified = false;
-        if (!context_->IntersectDomainWith(kept_expressions[i],
-                                           Domain(0).Complement(),
-                                           &domain_modified)) {
-          return false;
-        }
-        if (domain_modified) {
-          context_->UpdateRuleStats(
-              "all_diff: remove 0 from expression appearing with its "
-              "opposite.");
-        }
-      }
-    }
-
-    if (kept_expressions.size() < all_diff.exprs_size()) {
-      all_diff.clear_exprs();
-      for (const LinearExpressionProto& expr : kept_expressions) {
-        *all_diff.add_exprs() = expr;
-      }
-      context_->UpdateRuleStats("all_diff: removed fixed variables");
-      something_was_propagated = true;
-      constraint_has_changed = true;
-      if (kept_expressions.size() <= 1) continue;
-    }
-
-    // Propagate mandatory value if the all diff is actually a permutation.
-    CHECK_GE(all_diff.exprs_size(), 2);
-    Domain domain = context_->DomainSuperSetOf(all_diff.exprs(0));
-    for (int i = 1; i < all_diff.exprs_size(); ++i) {
-      domain = domain.UnionWith(context_->DomainSuperSetOf(all_diff.exprs(i)));
-    }
-    if (all_diff.exprs_size() == domain.Size()) {
-      absl::flat_hash_map<int64_t, std::vector<LinearExpressionProto>>
-          value_to_exprs;
-      for (const LinearExpressionProto& expr : all_diff.exprs()) {
-        for (const int64_t v : context_->DomainOf(expr.vars(0)).Values()) {
-          value_to_exprs[expr.coeffs(0) * v + expr.offset()].push_back(expr);
-        }
-      }
-      bool propagated = false;
-      for (const auto& it : value_to_exprs) {
-        if (it.second.size() == 1 && !context_->IsFixed(it.second.front())) {
-          const LinearExpressionProto& expr = it.second.front();
-          if (!context_->IntersectDomainWith(expr, Domain(it.first))) {
-            return true;
-          }
-          propagated = true;
-        }
-      }
-      if (propagated) {
-        context_->UpdateRuleStats(
-            "all_diff: propagated mandatory values in permutation");
-        something_was_propagated = true;
-      }
-    }
-    if (!something_was_propagated) break;
-  }
-
-  return constraint_has_changed;
 }
 
 namespace {
 
-// Returns the sorted list of literals for given bool_or or at_most_one
-// constraint.
-std::vector<int> GetLiteralsFromSetPPCConstraint(const ConstraintProto& ct) {
-  std::vector<int> sorted_literals;
-  if (ct.constraint_case() == ConstraintProto::kAtMostOne) {
-    for (const int literal : ct.at_most_one().literals()) {
-      sorted_literals.push_back(literal);
-    }
-  } else if (ct.constraint_case() == ConstraintProto::kBoolOr) {
-    for (const int literal : ct.bool_or().literals()) {
-      sorted_literals.push_back(literal);
-    }
-  } else if (ct.constraint_case() == ConstraintProto::kExactlyOne) {
-    for (const int literal : ct.exactly_one().literals()) {
-      sorted_literals.push_back(literal);
+// A container that is valid if only one value was added.
+class UniqueNonNegativeValue {
+ public:
+  void Add(int value) {
+    DCHECK_GE(value, 0);
+    if (value_ == -1) {
+      value_ = value;
+    } else {
+      value_ = -2;
     }
   }
-  std::sort(sorted_literals.begin(), sorted_literals.end());
-  return sorted_literals;
+
+  bool HasUniqueValue() const { return value_ >= 0; }
+
+  int64_t value() const {
+    DCHECK(HasUniqueValue());
+    return value_;
+  }
+
+ private:
+  int value_ = -1;
+};
+
+std::string Plural(int n, std::string_view s) {
+  return n <= 1 ? absl::StrCat(n, " ", s)
+                : absl::StrCat(FormatCounter(n), " ", s, "s");
+};
+
+}  // namespace
+
+bool CpModelPresolver::PresolveAllDiff(ConstraintProto* ct) {
+  if (context_->ModelIsUnsat()) return false;
+  // TODO(user): add support for this case.
+  if (HasEnforcementLiteral(*ct)) return false;
+
+  AllDifferentConstraintProto& all_diff = *ct->mutable_all_diff();
+
+  bool variables_have_changed = false;
+  for (LinearExpressionProto& exp :
+       *(ct->mutable_all_diff()->mutable_exprs())) {
+    variables_have_changed |= CanonicalizeLinearExpression(*ct, &exp);
+  }
+
+  const int size = all_diff.exprs_size();
+  if (size == 0) {
+    context_->UpdateRuleStats("all_diff: empty constraint");
+    return RemoveConstraint(ct);
+  }
+  if (size == 1) {
+    context_->UpdateRuleStats("all_diff: one expression");
+    return RemoveConstraint(ct);
+  }
+
+  absl::flat_hash_set<int64_t> fixed_values;
+  int new_size = 0;
+  for (int i = 0; i < size; ++i) {
+    if (!context_->IsFixed(all_diff.exprs(i))) {
+      if (i != new_size) {
+        *all_diff.mutable_exprs(new_size) = all_diff.exprs(i);
+      }
+      ++new_size;
+    } else {
+      const int64_t value = context_->FixedValue(all_diff.exprs(i));
+      if (!fixed_values.insert(value).second) {
+        return context_->NotifyThatModelIsUnsat(
+            "all_diff: duplicate fixed values");
+      }
+    }
+  }
+
+  if (new_size < size) {
+    all_diff.mutable_exprs()->DeleteSubrange(new_size, size - new_size);
+    context_->UpdateRuleStats("all_diff: remove fixed expressions");
+  }
+
+  if (!fixed_values.empty()) {
+    const Domain to_keep =
+        Domain::FromValues({fixed_values.begin(), fixed_values.end()})
+            .Complement();
+    bool propagated = false;
+    for (int i = 0; i < all_diff.exprs_size(); ++i) {
+      if (!context_->IntersectDomainWith(all_diff.exprs(i), to_keep,
+                                         &propagated)) {
+        return true;
+      }
+    }
+    if (propagated) {
+      context_->UpdateRuleStats("all_diff: propagate fixed expressions");
+    }
+  }
+
+  // Detect duplicate expressions, and remove impossible values from expressions
+  // with the same variable.
+  // We use btree_map to have a deterministic order.
+  absl::btree_map<int, std::vector<std::pair<int64_t, int64_t>>> terms;
+  std::vector<int64_t> forbidden_values;
+  for (const LinearExpressionProto& expr : all_diff.exprs()) {
+    if (expr.vars_size() != 1) continue;
+    terms[expr.vars(0)].push_back(
+        std::make_pair(expr.coeffs(0), expr.offset()));
+  }
+  for (auto& [var, terms] : terms) {
+    if (terms.size() == 1) continue;
+    std::sort(terms.begin(), terms.end());
+
+    // Check for duplicate expressions.
+    for (int i = 1; i < terms.size(); ++i) {
+      if (terms[i] == terms[i - 1]) {
+        return context_->NotifyThatModelIsUnsat(
+            "all_diff: duplicate expressions");
+      }
+    }
+
+    // Remove impossible values from expressions with the same variable.
+    //   a * var + b == c * var + d
+    //   -> (a - c) * var = d - b
+    // Therefore var cannot take the value (d - b) / (a - c) if integral.
+    forbidden_values.clear();
+    for (int i = 0; i + 1 < terms.size(); ++i) {
+      for (int j = i + 1; j < terms.size(); ++j) {
+        const int64_t coeff = terms[i].first - terms[j].first;
+        if (coeff == 0) continue;
+        const int64_t offset = terms[j].second - terms[i].second;
+        const int64_t value = offset / coeff;
+        if (value * coeff == offset) {
+          forbidden_values.push_back(value);
+        }
+      }
+    }
+    if (!forbidden_values.empty()) {
+      const Domain to_keep = Domain::FromValues(forbidden_values).Complement();
+      bool propagated = false;
+      if (!context_->IntersectDomainWith(var, to_keep, &propagated)) {
+        return true;
+      }
+      if (propagated) {
+        context_->UpdateRuleStats(
+            "all_diff: propagate expressions with the same variable");
+      }
+    }
+  }
+
+  // Propagate mandatory values if the all diff is actually a permutation.
+  if (all_diff.exprs_size() >= 2 && all_diff.exprs_size() <= 512) {
+    Domain union_of_domains = context_->DomainSuperSetOf(all_diff.exprs(0));
+    for (int i = 1; i < all_diff.exprs_size(); ++i) {
+      union_of_domains = union_of_domains.UnionWith(
+          context_->DomainSuperSetOf(all_diff.exprs(i)));
+    }
+
+    if (union_of_domains.Size() < all_diff.exprs_size()) {
+      return context_->NotifyThatModelIsUnsat(
+          "all_diff: more expressions than values");
+    }
+
+    if (all_diff.exprs_size() == union_of_domains.Size()) {
+      absl::btree_map<int64_t, UniqueNonNegativeValue> value_to_index;
+      for (int i = 0; i < all_diff.exprs_size(); ++i) {
+        const LinearExpressionProto& expr = all_diff.exprs(i);
+        DCHECK_EQ(expr.vars_size(), 1);
+        for (const int64_t v : context_->DomainOf(expr.vars(0)).Values()) {
+          value_to_index[AffineExpressionValueAt(expr, v)].Add(i);
+        }
+      }
+
+      bool propagated = false;
+      for (const auto& [value, unique_index] : value_to_index) {
+        if (!unique_index.HasUniqueValue()) continue;
+
+        const LinearExpressionProto& expr =
+            all_diff.exprs(unique_index.value());
+        if (!context_->IntersectDomainWith(expr, Domain(value), &propagated)) {
+          return true;
+        }
+      }
+
+      if (propagated) {
+        context_->UpdateRuleStats(
+            "all_diff: propagated mandatory values in permutation");
+      }
+    }
+  }
+
+  return variables_have_changed;
 }
+
+namespace {
 
 // Add the constraint (lhs => rhs) to the given proto. The hash map lhs ->
 // bool_and constraint index is used to merge implications with the same lhs.
@@ -3638,12 +6020,14 @@ void AddImplication(int lhs, int rhs, CpModelProto* proto,
 }
 
 template <typename ClauseContainer>
-void ExtractClauses(bool use_bool_and, const ClauseContainer& container,
-                    CpModelProto* proto) {
-  // We regroup the "implication" into bool_and to have a more consise proto and
+void ExtractClauses(bool merge_into_bool_and,
+                    absl::Span<const int> index_mapping,
+                    const ClauseContainer& container, CpModelProto* proto,
+                    std::string_view debug_name = "") {
+  // We regroup the "implication" into bool_and to have a more concise proto and
   // also for nicer information about the number of binary clauses.
   //
-  // Important: however, we do not do that for the model used during presolving
+  // Important: however, we do not do that for the model used during postsolving
   // since the order of the constraints might be important there depending on
   // how we perform the postsolve.
   absl::flat_hash_map<int, int> ref_to_bool_and;
@@ -3652,24 +6036,29 @@ void ExtractClauses(bool use_bool_and, const ClauseContainer& container,
     if (clause.empty()) continue;
 
     // bool_and.
-    if (use_bool_and && clause.size() == 2) {
-      const int a = clause[0].IsPositive()
-                        ? clause[0].Variable().value()
-                        : NegatedRef(clause[0].Variable().value());
-      const int b = clause[1].IsPositive()
-                        ? clause[1].Variable().value()
-                        : NegatedRef(clause[1].Variable().value());
-      AddImplication(NegatedRef(a), b, proto, &ref_to_bool_and);
+    //
+    // TODO(user): Be smarter in how we regroup clause of size 2?
+    if (merge_into_bool_and && clause.size() == 2) {
+      const int var_a = index_mapping[clause[0].Variable().value()];
+      const int var_b = index_mapping[clause[1].Variable().value()];
+      const int ref_a = clause[0].IsPositive() ? var_a : NegatedRef(var_a);
+      const int ref_b = clause[1].IsPositive() ? var_b : NegatedRef(var_b);
+      AddImplication(NegatedRef(ref_a), ref_b, proto, &ref_to_bool_and);
       continue;
     }
 
     // bool_or.
     ConstraintProto* ct = proto->add_constraints();
+    if (!debug_name.empty()) {
+      ct->set_name(debug_name);
+    }
+    ct->mutable_bool_or()->mutable_literals()->Reserve(clause.size());
     for (const Literal l : clause) {
+      const int var = index_mapping[l.Variable().value()];
       if (l.IsPositive()) {
-        ct->mutable_bool_or()->add_literals(l.Variable().value());
+        ct->mutable_bool_or()->add_literals(var);
       } else {
-        ct->mutable_bool_or()->add_literals(NegatedRef(l.Variable().value()));
+        ct->mutable_bool_or()->add_literals(NegatedRef(var));
       }
     }
   }
@@ -3682,21 +6071,111 @@ bool CpModelPresolver::PresolveNoOverlap(ConstraintProto* ct) {
   NoOverlapConstraintProto* proto = ct->mutable_no_overlap();
   bool changed = false;
 
-  // Filter absent intervals.
+  // Filter out absent intervals.
   {
-    const int initial_num_intervals = proto->intervals_size();
     int new_size = 0;
-
+    const int initial_num_intervals = proto->intervals_size();
     for (int i = 0; i < initial_num_intervals; ++i) {
       const int interval_index = proto->intervals(i);
       if (context_->ConstraintIsInactive(interval_index)) continue;
-
       proto->set_intervals(new_size++, interval_index);
     }
 
     if (new_size < initial_num_intervals) {
       proto->mutable_intervals()->Truncate(new_size);
       context_->UpdateRuleStats("no_overlap: removed absent intervals");
+      changed = true;
+    }
+
+    if (proto->intervals_size() == 1) {
+      context_->UpdateRuleStats("no_overlap: only one interval");
+      return RemoveConstraint(ct);
+    }
+    if (proto->intervals().empty()) {
+      context_->UpdateRuleStats("no_overlap: no intervals");
+      return RemoveConstraint(ct);
+    }
+  }
+
+  // TODO(user): add support for enforcement literals.
+  if (HasEnforcementLiteral(*ct)) return changed;
+
+  // Process duplicate intervals.
+  {
+    // Collect duplicate intervals.
+    absl::flat_hash_set<int> visited_intervals;
+    absl::flat_hash_set<int> duplicate_intervals;
+    for (const int interval_index : proto->intervals()) {
+      if (!visited_intervals.insert(interval_index).second) {
+        duplicate_intervals.insert(interval_index);
+      }
+    }
+
+    const int initial_num_intervals = proto->intervals_size();
+    int new_size = 0;
+    visited_intervals.clear();
+
+    for (int i = 0; i < initial_num_intervals; ++i) {
+      const int interval_index = proto->intervals(i);
+
+      if (duplicate_intervals.contains(interval_index)) {
+        // Once processed, we can always remove further duplicates.
+        if (!visited_intervals.insert(interval_index).second) continue;
+
+        ConstraintProto* interval_ct =
+            context_->working_model->mutable_constraints(interval_index);
+
+        // Case 1: size > 0. Interval must be unperformed.
+        if (context_->SizeMin(interval_index) > 0) {
+          if (HasEnforcementLiteral(*interval_ct)) {
+            context_->UpdateRuleStats(
+                "no_overlap: unperform duplicate non zero-sized intervals");
+            if (!MarkOptionalIntervalAsFalse(interval_ct)) {
+              return false;
+            }
+            // We can remove the interval from the no_overlap.
+            continue;
+          } else {
+            return context_->NotifyThatModelIsUnsat(
+                "no_overlap: duplicate interval with positive size");
+          }
+        }
+
+        // No need to do anything if the size is 0.
+        if (context_->SizeMax(interval_index) > 0) {
+          // Case 2: interval is performed. Size must be set to 0.
+          if (!context_->ConstraintIsOptional(interval_index)) {
+            if (!context_->IntersectDomainWith(interval_ct->interval().size(),
+                                               Domain(0))) {
+              return false;
+            }
+            context_->UpdateRuleStats(
+                "no_overlap: zero the size of performed duplicate intervals");
+            // We still need to add the interval to the no_overlap as zero sized
+            // intervals still cannot overlap with other intervals.
+          } else {  // Case 3: interval is optional and size can be > 0.
+            const int performed_literal = interval_ct->enforcement_literal(0);
+            ConstraintProto* size_eq_zero =
+                context_->working_model->add_constraints();
+            size_eq_zero->add_enforcement_literal(performed_literal);
+            size_eq_zero->mutable_linear()->add_domain(0);
+            size_eq_zero->mutable_linear()->add_domain(0);
+            AddLinearExpressionToLinearConstraint(
+                interval_ct->interval().size(), 1,
+                size_eq_zero->mutable_linear());
+            context_->UpdateRuleStats(
+                "no_overlap: make duplicate intervals as unperformed or zero "
+                "sized");
+            context_->UpdateNewConstraintsVariableUsage();
+          }
+        }
+      }
+
+      proto->set_intervals(new_size++, interval_index);
+    }
+
+    if (new_size < initial_num_intervals) {
+      proto->mutable_intervals()->Truncate(new_size);
       changed = true;
     }
   }
@@ -3745,6 +6224,7 @@ bool CpModelPresolver::PresolveNoOverlap(ConstraintProto* ct) {
     }
   }
 
+  bool move_constraint_last = false;
   if (!constant_intervals.empty()) {
     // Sort constant_intervals by start min.
     std::sort(constant_intervals.begin(), constant_intervals.end(),
@@ -3796,6 +6276,7 @@ bool CpModelPresolver::PresolveNoOverlap(ConstraintProto* ct) {
       new_interval->mutable_start()->set_offset(new_start);
       new_interval->mutable_size()->set_offset(new_end - new_start);
       new_interval->mutable_end()->set_offset(new_end);
+      move_constraint_last = true;
     }
 
     // Cleanup the original proto.
@@ -3820,6 +6301,60 @@ bool CpModelPresolver::PresolveNoOverlap(ConstraintProto* ct) {
     }
   }
 
+  {
+    // Special case for "all-diff" encoded as no-overlap.
+    int num_size_zero_or_one = 0;
+    bool has_optional_size_one = false;
+    for (const int index : proto->intervals()) {
+      const ConstraintProto& interval_ct =
+          context_->working_model->constraints(index);
+      const LinearExpressionProto& size = interval_ct.interval().size();
+      if (size.vars().empty() && size.offset() >= 0 && size.offset() <= 1) {
+        ++num_size_zero_or_one;
+      }
+      if (size.vars().empty() && size.offset() == 1 &&
+          !interval_ct.enforcement_literal().empty()) {
+        has_optional_size_one = true;
+      }
+    }
+    const int initial_num_intervals = proto->intervals().size();
+    if (num_size_zero_or_one == initial_num_intervals) {
+      if (has_optional_size_one) {
+        // If there is only size zero or one, we can remove the size zero
+        // intervals as there is no constraint on them.
+        int new_size = 0;
+        for (const int index : proto->intervals()) {
+          const IntervalConstraintProto& interval =
+              context_->working_model->constraints(index).interval();
+          if (interval.size().offset() == 0) continue;
+          proto->set_intervals(new_size++, index);
+        }
+        if (new_size < initial_num_intervals) {
+          proto->mutable_intervals()->Truncate(new_size);
+          changed = true;
+          context_->UpdateRuleStats("no_overlap: removed size 0 from all diff");
+        }
+      } else {
+        // All size one intervals are present, we can convert to an
+        // all_different constraint, and remove size 0 intervals.
+        AllDifferentConstraintProto* all_diff =
+            context_->AddEnforcedConstraint(ct)->mutable_all_diff();
+        for (const int index : proto->intervals()) {
+          const IntervalConstraintProto& interval =
+              context_->working_model->constraints(index).interval();
+          if (interval.size().offset() == 0) continue;
+          *all_diff->add_exprs() = interval.start();
+        }
+        if (all_diff->exprs_size() < initial_num_intervals) {
+          context_->UpdateRuleStats("no_overlap: removed size 0 from all diff");
+        }
+        context_->UpdateNewConstraintsVariableUsage();
+        context_->UpdateRuleStats("no_overlap: converted to all diff");
+        return RemoveConstraint(ct);
+      }
+    }
+  }
+
   if (proto->intervals_size() == 1) {
     context_->UpdateRuleStats("no_overlap: only one interval");
     return RemoveConstraint(ct);
@@ -3829,49 +6364,407 @@ bool CpModelPresolver::PresolveNoOverlap(ConstraintProto* ct) {
     return RemoveConstraint(ct);
   }
 
+  // Unfortunately, because we want all intervals to appear before a constraint
+  // that uses them, we need to move the constraint last when we merged constant
+  // intervals.
+  if (move_constraint_last) {
+    changed = true;
+    *context_->working_model->add_constraints() = *ct;
+    context_->UpdateNewConstraintsVariableUsage();
+    return RemoveConstraint(ct);
+  }
+
   return changed;
 }
 
-bool CpModelPresolver::PresolveNoOverlap2D(int c, ConstraintProto* ct) {
+bool CpModelPresolver::PresolveNoOverlap2DFramed(
+    absl::Span<const Rectangle> fixed_boxes,
+    absl::Span<const RectangleInRange> non_fixed_boxes, ConstraintProto* ct) {
+  const NoOverlap2DConstraintProto& proto = ct->no_overlap_2d();
+
+  DCHECK(!non_fixed_boxes.empty());
+  Rectangle bounding_box = non_fixed_boxes[0].bounding_area;
+  for (const RectangleInRange& box : non_fixed_boxes) {
+    bounding_box.GrowToInclude(box.bounding_area);
+  }
+  std::vector<Rectangle> espace_for_single_box =
+      FindEmptySpaces(bounding_box, {fixed_boxes.begin(), fixed_boxes.end()});
+  // TODO(user): Find a faster way to see if fixed boxes are delimiting a
+  // rectangle.
+  std::vector<Rectangle> empty;
+  ReduceNumberofBoxesGreedy(&espace_for_single_box, &empty);
+  ReduceNumberOfBoxesExactMandatory(&espace_for_single_box, &empty);
+  if (espace_for_single_box.size() != 1) {
+    // Not a rectangular frame, since the inside is not a rectangle.
+    return false;
+  }
+  Rectangle fixed_boxes_bb = fixed_boxes.front();
+  for (const Rectangle& box : fixed_boxes) {
+    fixed_boxes_bb.GrowToInclude(box);
+  }
+  const Rectangle framed_region = espace_for_single_box.front();
+  for (const RectangleInRange& box : non_fixed_boxes) {
+    if (!box.bounding_area.IsInsideOf(fixed_boxes_bb)) {
+      // Something can be outside of the frame.
+      return false;
+    }
+    if (non_fixed_boxes.size() > 1 &&
+        (2 * box.x_size <= framed_region.SizeX() ||
+         2 * box.y_size <= framed_region.SizeY())) {
+      // We can fit two boxes in the delimited space between the fixed boxes, so
+      // we cannot replace it by an at-most-one.
+      return false;
+    }
+    const int x_interval_index = proto.x_intervals(box.box_index);
+    const int y_interval_index = proto.y_intervals(box.box_index);
+    if (!context_->working_model->constraints(x_interval_index)
+             .enforcement_literal()
+             .empty() &&
+        !context_->working_model->constraints(y_interval_index)
+             .enforcement_literal()
+             .empty()) {
+      if (context_->working_model->constraints(x_interval_index)
+              .enforcement_literal(0) !=
+          context_->working_model->constraints(y_interval_index)
+              .enforcement_literal(0)) {
+        // Two different enforcement literals.
+        return false;
+      }
+    }
+  }
+  // All this no_overlap_2d constraint is doing is forcing at most one of
+  // the non-fixed boxes to be in the `framed_region` rectangle. A
+  // better representation of this is to simply enforce that the items fit
+  // that rectangle with linear constraints and add a at-most-one constraint.
+  std::vector<int> enforcement_literals_for_amo;
+  bool has_mandatory = false;
+  for (const RectangleInRange& box : non_fixed_boxes) {
+    const int box_index = box.box_index;
+    const int x_interval_index = proto.x_intervals(box_index);
+    const int y_interval_index = proto.y_intervals(box_index);
+    const ConstraintProto& x_interval_ct =
+        context_->working_model->constraints(x_interval_index);
+    const ConstraintProto& y_interval_ct =
+        context_->working_model->constraints(y_interval_index);
+    if (x_interval_ct.enforcement_literal().empty() &&
+        y_interval_ct.enforcement_literal().empty()) {
+      // Mandatory box, update the domains.
+      if (has_mandatory) {
+        return context_->NotifyThatModelIsUnsat(
+            "Two mandatory boxes in the same space");
+      }
+      has_mandatory = true;
+      if (!context_->IntersectDomainWith(x_interval_ct.interval().start(),
+                                         Domain(framed_region.x_min.value(),
+                                                framed_region.x_max.value()))) {
+        return true;
+      }
+      if (!context_->IntersectDomainWith(x_interval_ct.interval().end(),
+                                         Domain(framed_region.x_min.value(),
+                                                framed_region.x_max.value()))) {
+        return true;
+      }
+      if (!context_->IntersectDomainWith(y_interval_ct.interval().start(),
+                                         Domain(framed_region.y_min.value(),
+                                                framed_region.y_max.value()))) {
+        return true;
+      }
+      if (!context_->IntersectDomainWith(y_interval_ct.interval().end(),
+                                         Domain(framed_region.y_min.value(),
+                                                framed_region.y_max.value()))) {
+        return true;
+      }
+    } else {
+      auto add_linear_constraint = [&](const ConstraintProto& interval_ct,
+                                       int enforcement_literal,
+                                       IntegerValue min, IntegerValue max) {
+        // TODO(user): If size is constant add only one linear constraint
+        // instead of two.
+        context_->AddImplyInDomain(enforcement_literal,
+                                   interval_ct.interval().start(),
+                                   Domain(min.value(), max.value()));
+        context_->AddImplyInDomain(enforcement_literal,
+                                   interval_ct.interval().end(),
+                                   Domain(min.value(), max.value()));
+      };
+      const int enforcement_literal =
+          x_interval_ct.enforcement_literal().empty()
+              ? y_interval_ct.enforcement_literal(0)
+              : x_interval_ct.enforcement_literal(0);
+      enforcement_literals_for_amo.push_back(enforcement_literal);
+      add_linear_constraint(x_interval_ct, enforcement_literal,
+                            framed_region.x_min, framed_region.x_max);
+      add_linear_constraint(y_interval_ct, enforcement_literal,
+                            framed_region.y_min, framed_region.y_max);
+    }
+  }
+  if (has_mandatory) {
+    for (const int lit : enforcement_literals_for_amo) {
+      if (!context_->SetLiteralToFalse(lit)) {
+        return true;
+      }
+    }
+  } else if (enforcement_literals_for_amo.size() > 1) {
+    context_->working_model->add_constraints()
+        ->mutable_at_most_one()
+        ->mutable_literals()
+        ->Add(enforcement_literals_for_amo.begin(),
+              enforcement_literals_for_amo.end());
+  }
+  context_->UpdateRuleStats("no_overlap_2d: at most one rectangle in region");
+  context_->UpdateNewConstraintsVariableUsage();
+  return RemoveConstraint(ct);
+}
+
+bool CpModelPresolver::ExpandEncoded2DBinPacking(
+    absl::Span<const Rectangle> fixed_boxes,
+    absl::Span<const RectangleInRange> non_fixed_boxes, ConstraintProto* ct) {
+  const Disjoint2dPackingResult disjoint_packing_presolve_result =
+      DetectDisjointRegionIn2dPacking(
+          non_fixed_boxes, fixed_boxes,
+          context_->params()
+              .maximum_regions_to_split_in_disconnected_no_overlap_2d());
+  if (disjoint_packing_presolve_result.bins.empty()) return false;
+
+  const NoOverlap2DConstraintProto& proto = ct->no_overlap_2d();
+  std::vector<SolutionCrush::BoxInAreaLiteral> box_in_area_lits;
+  absl::flat_hash_map<int, std::vector<int>> box_to_presence_literal;
+  // For the boxes that are optional, add a presence literal for each box in a
+  // fake "absent" bin.
+  for (int idx = 0; idx < non_fixed_boxes.size(); ++idx) {
+    const int b = non_fixed_boxes[idx].box_index;
+    const ConstraintProto& x_interval_ct =
+        context_->working_model->constraints(proto.x_intervals(b));
+    const ConstraintProto& y_interval_ct =
+        context_->working_model->constraints(proto.y_intervals(b));
+    if (x_interval_ct.enforcement_literal().empty() &&
+        y_interval_ct.enforcement_literal().empty()) {
+      // Mandatory box, cannot be in the "absent" bin -1.
+      continue;
+    }
+    int enforcement_literal = x_interval_ct.enforcement_literal().empty()
+                                  ? y_interval_ct.enforcement_literal(0)
+                                  : x_interval_ct.enforcement_literal(0);
+    int potentially_other_enforcement_literal =
+        y_interval_ct.enforcement_literal().empty()
+            ? x_interval_ct.enforcement_literal(0)
+            : y_interval_ct.enforcement_literal(0);
+
+    if (enforcement_literal == potentially_other_enforcement_literal) {
+      // The box is in the "absent" bin -1.
+      box_to_presence_literal[idx].push_back(NegatedRef(enforcement_literal));
+    } else {
+      const int interval_is_absent_literal =
+          context_->NewBoolVarWithConjunction(
+              {enforcement_literal, potentially_other_enforcement_literal});
+
+      BoolArgumentProto* bool_or =
+          context_->working_model->add_constraints()->mutable_bool_or();
+      bool_or->add_literals(NegatedRef(interval_is_absent_literal));
+      for (const int lit :
+           {enforcement_literal, potentially_other_enforcement_literal}) {
+        context_->AddImplication(NegatedRef(interval_is_absent_literal), lit);
+        bool_or->add_literals(NegatedRef(lit));
+      }
+      box_to_presence_literal[idx].push_back(interval_is_absent_literal);
+    }
+  }
+  // Now create the literals "item i in bin j".
+  for (int bin_index = 0;
+       bin_index < disjoint_packing_presolve_result.bins.size(); ++bin_index) {
+    const Disjoint2dPackingResult::Bin& bin =
+        disjoint_packing_presolve_result.bins[bin_index];
+    NoOverlap2DConstraintProto new_no_overlap_2d;
+    for (const Rectangle& ret : bin.fixed_boxes) {
+      new_no_overlap_2d.add_x_intervals(
+          context_->working_model->constraints_size());
+      new_no_overlap_2d.add_y_intervals(
+          context_->working_model->constraints_size() + 1);
+      IntervalConstraintProto* new_interval =
+          context_->working_model->add_constraints()->mutable_interval();
+      new_interval->mutable_start()->set_offset(ret.x_min.value());
+      new_interval->mutable_size()->set_offset(ret.SizeX().value());
+      new_interval->mutable_end()->set_offset(ret.x_max.value());
+
+      new_interval =
+          context_->working_model->add_constraints()->mutable_interval();
+      new_interval->mutable_start()->set_offset(ret.y_min.value());
+      new_interval->mutable_size()->set_offset(ret.SizeY().value());
+      new_interval->mutable_end()->set_offset(ret.y_max.value());
+    }
+    for (const int idx : bin.non_fixed_box_indexes) {
+      int presence_in_box_lit = context_->NewBoolVar("binpacking");
+      box_to_presence_literal[idx].push_back(presence_in_box_lit);
+      const int b = non_fixed_boxes[idx].box_index;
+      box_in_area_lits.push_back({.box_index = b,
+                                  .area_index = bin_index,
+                                  .literal = presence_in_box_lit});
+      const ConstraintProto& x_interval_ct =
+          context_->working_model->constraints(proto.x_intervals(b));
+      const ConstraintProto& y_interval_ct =
+          context_->working_model->constraints(proto.y_intervals(b));
+      ConstraintProto* new_interval_x =
+          context_->working_model->add_constraints();
+      *new_interval_x = x_interval_ct;
+      new_interval_x->clear_enforcement_literal();
+      new_interval_x->add_enforcement_literal(presence_in_box_lit);
+      ConstraintProto* new_interval_y =
+          context_->working_model->add_constraints();
+      *new_interval_y = y_interval_ct;
+      new_interval_y->clear_enforcement_literal();
+      new_interval_y->add_enforcement_literal(presence_in_box_lit);
+      new_no_overlap_2d.add_x_intervals(
+          context_->working_model->constraints_size() - 2);
+      new_no_overlap_2d.add_y_intervals(
+          context_->working_model->constraints_size() - 1);
+    }
+    context_->working_model->add_constraints()->mutable_no_overlap_2d()->Swap(
+        &new_no_overlap_2d);
+  }
+
+  // Each box is in exactly one bin (including the fake "absent" bin).
+  for (int box_index = 0; box_index < non_fixed_boxes.size(); ++box_index) {
+    const std::vector<int>& presence_literals =
+        box_to_presence_literal[box_index];
+    if (presence_literals.empty()) {
+      return context_->NotifyThatModelIsUnsat(
+          "A mandatory box cannot be placed in any position");
+    }
+    auto* exactly_one =
+        context_->working_model->add_constraints()->mutable_exactly_one();
+    for (const int presence_literal : presence_literals) {
+      exactly_one->add_literals(presence_literal);
+    }
+  }
+  CompactVectorVector<int, Rectangle> areas;
+  for (int bin_index = 0;
+       bin_index < disjoint_packing_presolve_result.bins.size(); ++bin_index) {
+    areas.Add(disjoint_packing_presolve_result.bins[bin_index].bin_area);
+  }
+  solution_crush_.AssignVariableToPackingArea(
+      areas, *context_->working_model, proto.x_intervals(), proto.y_intervals(),
+      box_in_area_lits);
+  context_->UpdateNewConstraintsVariableUsage();
+  context_->UpdateRuleStats(
+      "no_overlap_2d: fixed boxes partition available space, converted "
+      "to optional regions");
+  return RemoveConstraint(ct);
+}
+
+bool CpModelPresolver::PresolveNoOverlap2D(int /*c*/, ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) {
     return false;
   }
-
+  // TODO(user): add support for enforcement literals.
   const NoOverlap2DConstraintProto& proto = ct->no_overlap_2d();
-  const int initial_num_boxes = proto.x_intervals_size();
-
-  bool has_zero_sizes = false;
-  bool x_constant = true;
-  bool y_constant = true;
+  bool truncated = false;
 
   // Filter absent boxes.
-  int new_size = 0;
-  std::vector<Rectangle> bounding_boxes;
-  std::vector<int> active_boxes;
+  {
+    const int initial_num_boxes = proto.x_intervals_size();
+    int new_size = 0;
+    for (int i = 0; i < proto.x_intervals_size(); ++i) {
+      const int x_interval_index = proto.x_intervals(i);
+      const int y_interval_index = proto.y_intervals(i);
+
+      ct->mutable_no_overlap_2d()->set_x_intervals(new_size, x_interval_index);
+      ct->mutable_no_overlap_2d()->set_y_intervals(new_size, y_interval_index);
+
+      // We don't want to fully presolve the intervals (intervals have their own
+      // presolve), but we don't want to bother with negative sizes downstream
+      // in this function, so we want to remove them ASAP.
+      for (const int interval_index : {x_interval_index, y_interval_index}) {
+        if (context_->StartMin(interval_index) >
+            context_->EndMax(interval_index)) {
+          const ConstraintProto& interval_ct =
+              context_->working_model->constraints(interval_index);
+          if (interval_ct.enforcement_literal_size() == 1) {
+            const int literal = interval_ct.enforcement_literal(0);
+            if (!context_->SetLiteralToFalse(literal)) {
+              return true;
+            }
+          } else {
+            return context_->NotifyThatModelIsUnsat(
+                "no_overlap_2d: impossible interval");
+          }
+        }
+
+        if (context_->SizeMin(interval_index) < 0) {
+          const ConstraintProto& interval_ct =
+              context_->working_model->constraints(interval_index);
+          if (interval_ct.enforcement_literal().empty()) {
+            bool domain_changed = false;
+            // Size can't be negative.
+            if (!context_->IntersectDomainWith(
+                    interval_ct.interval().size(),
+                    Domain(0, std::numeric_limits<int64_t>::max()),
+                    &domain_changed)) {
+              return false;
+            }
+          }
+        }
+      }
+
+      if (context_->ConstraintIsInactive(x_interval_index) ||
+          context_->ConstraintIsInactive(y_interval_index)) {
+        continue;
+      }
+
+      new_size++;
+    }
+
+    if (new_size < initial_num_boxes) {
+      truncated = true;
+      context_->UpdateRuleStats("no_overlap_2d: removed inactive boxes");
+      ct->mutable_no_overlap_2d()->mutable_x_intervals()->Truncate(new_size);
+      ct->mutable_no_overlap_2d()->mutable_y_intervals()->Truncate(new_size);
+    }
+
+    if (new_size == 0) {
+      context_->UpdateRuleStats("no_overlap_2d: no boxes");
+      return RemoveConstraint(ct);
+    }
+
+    if (new_size == 1) {
+      context_->UpdateRuleStats("no_overlap_2d: only one box");
+      return RemoveConstraint(ct);
+    }
+  }
+
+  if (HasEnforcementLiteral(*ct)) return false;
+
+  bool x_constant = true;
+  bool y_constant = true;
+  bool has_zero_sized_interval = false;
+  bool has_potential_zero_sized_interval = false;
+
+  std::vector<Rectangle> bounding_boxes, fixed_boxes, non_fixed_bounding_boxes;
+  std::vector<RectangleInRange> non_fixed_boxes;
+  absl::flat_hash_set<int> fixed_item_indexes;
   for (int i = 0; i < proto.x_intervals_size(); ++i) {
     const int x_interval_index = proto.x_intervals(i);
     const int y_interval_index = proto.y_intervals(i);
 
-    if (context_->ConstraintIsInactive(x_interval_index) ||
-        context_->ConstraintIsInactive(y_interval_index)) {
-      continue;
-    }
-
-    if (proto.boxes_with_null_area_can_overlap() &&
-        (context_->SizeMax(x_interval_index) == 0 ||
-         context_->SizeMax(y_interval_index) == 0)) {
-      if (proto.boxes_with_null_area_can_overlap()) continue;
-      has_zero_sizes = true;
-    }
-    ct->mutable_no_overlap_2d()->set_x_intervals(new_size, x_interval_index);
-    ct->mutable_no_overlap_2d()->set_y_intervals(new_size, y_interval_index);
     bounding_boxes.push_back(
         {IntegerValue(context_->StartMin(x_interval_index)),
          IntegerValue(context_->EndMax(x_interval_index)),
          IntegerValue(context_->StartMin(y_interval_index)),
          IntegerValue(context_->EndMax(y_interval_index))});
-    active_boxes.push_back(new_size);
-    new_size++;
+    if (context_->IntervalIsConstant(x_interval_index) &&
+        context_->IntervalIsConstant(y_interval_index) &&
+        context_->SizeMax(x_interval_index) > 0 &&
+        context_->SizeMax(y_interval_index) > 0) {
+      fixed_boxes.push_back(bounding_boxes.back());
+      fixed_item_indexes.insert(i);
+    } else {
+      non_fixed_bounding_boxes.push_back(bounding_boxes.back());
+      non_fixed_boxes.push_back(
+          {.box_index = i,
+           .bounding_area = bounding_boxes.back(),
+           .x_size = std::max(int64_t{0}, context_->SizeMin(x_interval_index)),
+           .y_size =
+               std::max(int64_t{0}, context_->SizeMin(y_interval_index))});
+    }
 
     if (x_constant && !context_->IntervalIsConstant(x_interval_index)) {
       x_constant = false;
@@ -3879,12 +6772,21 @@ bool CpModelPresolver::PresolveNoOverlap2D(int c, ConstraintProto* ct) {
     if (y_constant && !context_->IntervalIsConstant(y_interval_index)) {
       y_constant = false;
     }
+    if (context_->SizeMax(x_interval_index) <= 0 ||
+        context_->SizeMax(y_interval_index) <= 0) {
+      has_zero_sized_interval = true;
+    }
+    if (context_->SizeMin(x_interval_index) <= 0 ||
+        context_->SizeMin(y_interval_index) <= 0) {
+      has_potential_zero_sized_interval = true;
+    }
   }
 
-  std::vector<absl::Span<int>> components = GetOverlappingRectangleComponents(
-      bounding_boxes, absl::MakeSpan(active_boxes));
+  const CompactVectorVector<int> components =
+      GetOverlappingRectangleComponents(bounding_boxes);
   if (components.size() > 1) {
-    for (const absl::Span<int> boxes : components) {
+    for (int i = 0; i < components.size(); ++i) {
+      absl::Span<const int> boxes = components[i];
       if (boxes.size() <= 1) continue;
 
       NoOverlap2DConstraintProto* new_no_overlap_2d =
@@ -3899,26 +6801,28 @@ bool CpModelPresolver::PresolveNoOverlap2D(int c, ConstraintProto* ct) {
     return RemoveConstraint(ct);
   }
 
-  if (!has_zero_sizes && (x_constant || y_constant)) {
+  // TODO(user): handle this case. See issue #4068.
+  if (!has_zero_sized_interval && (x_constant || y_constant)) {
     context_->UpdateRuleStats(
-        "no_overlap_2d: a dimension is constant, splitting into many no "
-        "overlaps");
+        "no_overlap_2d: a dimension is constant, splitting into many "
+        "no_overlaps");
     std::vector<IndexedInterval> indexed_intervals;
-    for (int i = 0; i < new_size; ++i) {
+    for (int i = 0; i < proto.x_intervals_size(); ++i) {
       int x = proto.x_intervals(i);
       int y = proto.y_intervals(i);
       if (x_constant) std::swap(x, y);
       indexed_intervals.push_back({x, IntegerValue(context_->StartMin(y)),
                                    IntegerValue(context_->EndMax(y))});
     }
-    std::vector<std::vector<int>> no_overlaps;
-    ConstructOverlappingSets(/*already_sorted=*/false, &indexed_intervals,
-                             &no_overlaps);
-    for (const std::vector<int>& no_overlap : no_overlaps) {
+    CompactVectorVector<int> no_overlaps;
+    absl::c_stable_sort(indexed_intervals,
+                        IndexedInterval::ComparatorByStart());
+    ConstructOverlappingSets(absl::MakeSpan(indexed_intervals), &no_overlaps);
+    for (int i = 0; i < no_overlaps.size(); ++i) {
       ConstraintProto* new_ct = context_->working_model->add_constraints();
       // Unfortunately, the Assign() method does not work in or-tools as the
       // protobuf int32_t type is not the int type.
-      for (const int i : no_overlap) {
+      for (const int i : no_overlaps[i]) {
         new_ct->mutable_no_overlap()->add_intervals(i);
       }
     }
@@ -3926,23 +6830,109 @@ bool CpModelPresolver::PresolveNoOverlap2D(int c, ConstraintProto* ct) {
     return RemoveConstraint(ct);
   }
 
-  if (new_size < initial_num_boxes) {
-    context_->UpdateRuleStats("no_overlap_2d: removed inactive boxes");
-    ct->mutable_no_overlap_2d()->mutable_x_intervals()->Truncate(new_size);
-    ct->mutable_no_overlap_2d()->mutable_y_intervals()->Truncate(new_size);
+  // We check if the fixed boxes are not overlapping so downstream code can
+  // assume it to be true.
+  if (!FindPartialRectangleIntersections(fixed_boxes).empty()) {
+    return context_->NotifyThatModelIsUnsat(
+        "Two fixed boxes in no_overlap_2d overlap");
   }
 
-  if (new_size == 0) {
-    context_->UpdateRuleStats("no_overlap_2d: no boxes");
+  if (non_fixed_bounding_boxes.empty()) {
+    context_->UpdateRuleStats("no_overlap_2d: all boxes are fixed");
     return RemoveConstraint(ct);
   }
 
-  if (new_size == 1) {
-    context_->UpdateRuleStats("no_overlap_2d: only one box");
+  // TODO(user): presolve the zero-size fixed items so they are disjoint from
+  // the other fixed items. Then the following presolve is still valid. On the
+  // other hand, we cannot do much with non-fixed zero-size items.
+  if (!has_potential_zero_sized_interval && !fixed_boxes.empty()) {
+    const bool presolved =
+        PresolveFixed2dRectangles(non_fixed_boxes, &fixed_boxes);
+    if (presolved) {
+      NoOverlap2DConstraintProto new_no_overlap_2d;
+
+      // Replace the old fixed intervals by the new ones.
+      const int old_size = proto.x_intervals_size();
+      for (int i = 0; i < old_size; ++i) {
+        if (fixed_item_indexes.contains(i)) {
+          continue;
+        }
+        new_no_overlap_2d.add_x_intervals(proto.x_intervals(i));
+        new_no_overlap_2d.add_y_intervals(proto.y_intervals(i));
+      }
+      for (const Rectangle& fixed_box : fixed_boxes) {
+        const int item_x_interval =
+            context_->working_model->constraints().size();
+        IntervalConstraintProto* new_interval =
+            context_->working_model->add_constraints()->mutable_interval();
+        new_interval->mutable_start()->set_offset(fixed_box.x_min.value());
+        new_interval->mutable_size()->set_offset(fixed_box.SizeX().value());
+        new_interval->mutable_end()->set_offset(fixed_box.x_max.value());
+
+        const int item_y_interval =
+            context_->working_model->constraints().size();
+        new_interval =
+            context_->working_model->add_constraints()->mutable_interval();
+        new_interval->mutable_start()->set_offset(fixed_box.y_min.value());
+        new_interval->mutable_size()->set_offset(fixed_box.SizeY().value());
+        new_interval->mutable_end()->set_offset(fixed_box.y_max.value());
+
+        new_no_overlap_2d.add_x_intervals(item_x_interval);
+        new_no_overlap_2d.add_y_intervals(item_y_interval);
+      }
+      context_->working_model->add_constraints()->mutable_no_overlap_2d()->Swap(
+          &new_no_overlap_2d);
+      context_->UpdateNewConstraintsVariableUsage();
+      context_->UpdateRuleStats("no_overlap_2d: presolved fixed rectangles");
+      return RemoveConstraint(ct);
+    }
+  }
+
+  if (!fixed_boxes.empty() && fixed_boxes.size() <= 4 &&
+      !non_fixed_boxes.empty() && !has_potential_zero_sized_interval) {
+    if (PresolveNoOverlap2DFramed(fixed_boxes, non_fixed_boxes, ct)) {
+      return true;
+    }
+  }
+
+  // If the non-fixed boxes are disjoint but connected by fixed boxes, we can
+  // split the constraint and duplicate the fixed boxes. To avoid duplicating
+  // too many fixed boxes, we do this after we we applied the presolve reducing
+  // their number to as few as possible.
+  const CompactVectorVector<int> non_fixed_components =
+      GetOverlappingRectangleComponents(non_fixed_bounding_boxes);
+  if (non_fixed_components.size() > 1) {
+    for (int i = 0; i < non_fixed_components.size(); ++i) {
+      // Note: we care about components of size 1 because they might be
+      // overlapping with the fixed boxes.
+      absl::Span<const int> indexes = non_fixed_components[i];
+
+      NoOverlap2DConstraintProto* new_no_overlap_2d =
+          context_->working_model->add_constraints()->mutable_no_overlap_2d();
+      for (const int idx : indexes) {
+        const int b = non_fixed_boxes[idx].box_index;
+        new_no_overlap_2d->add_x_intervals(proto.x_intervals(b));
+        new_no_overlap_2d->add_y_intervals(proto.y_intervals(b));
+      }
+      for (const int b : fixed_item_indexes) {
+        new_no_overlap_2d->add_x_intervals(proto.x_intervals(b));
+        new_no_overlap_2d->add_y_intervals(proto.y_intervals(b));
+      }
+    }
+    context_->UpdateNewConstraintsVariableUsage();
+    context_->UpdateRuleStats(
+        "no_overlap_2d: split into disjoint components duplicating fixed "
+        "boxes");
     return RemoveConstraint(ct);
   }
 
-  return new_size < initial_num_boxes;
+  if (!has_potential_zero_sized_interval) {
+    if (ExpandEncoded2DBinPacking(fixed_boxes, non_fixed_boxes, ct)) {
+      return true;
+    }
+  }
+  RunPropagatorsForConstraint(*ct);
+  return truncated;
 }
 
 namespace {
@@ -3953,8 +6943,28 @@ LinearExpressionProto ConstantExpressionProto(int64_t value) {
 }
 }  // namespace
 
+void CpModelPresolver::DetectDuplicateIntervals(
+    int c, google::protobuf::RepeatedField<int32_t>* intervals) {
+  interval_representative_.clear();
+  bool changed = false;
+  const int size = intervals->size();
+  for (int i = 0; i < size; ++i) {
+    const int index = (*intervals)[i];
+    const auto [it, inserted] = interval_representative_.insert({index, index});
+    if (it->second != index) {
+      changed = true;
+      intervals->Set(i, it->second);
+      context_->UpdateRuleStats(
+          "intervals: change duplicate index inside constraint");
+    }
+  }
+  if (changed) context_->UpdateConstraintVariableUsage(c);
+}
+
 bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
+  // TODO(user): add support for enforcement literals.
+  if (HasEnforcementLiteral(*ct)) return false;
 
   CumulativeConstraintProto* proto = ct->mutable_cumulative();
 
@@ -3978,13 +6988,85 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
     }
   }
 
+  // Merge identical intervals.
   {
-    // Filter absent intervals, or zero demands, or demand incompatible with the
-    // capacity.
+    std::vector<int> intervals = {proto->intervals().begin(),
+                                  proto->intervals().end()};
+    gtl::STLSortAndRemoveDuplicates(&intervals);
+    if (intervals.size() < proto->intervals_size()) {
+      absl::btree_map<int, std::vector<LinearExpressionProto>>
+          interval_to_sizes;
+      for (int i = 0; i < proto->intervals_size(); ++i) {
+        interval_to_sizes[proto->intervals(i)].push_back(proto->demands(i));
+      }
+
+      absl::btree_map<int, int64_t> terms;
+      proto->clear_intervals();
+      proto->clear_demands();
+      for (const auto& [interval, demands] : interval_to_sizes) {
+        terms.clear();
+        int64_t offset = 0;
+        for (const LinearExpressionProto& demand : demands) {
+          for (int i = 0; i < demand.vars_size(); ++i) {
+            terms[demand.vars(i)] += demand.coeffs(i);
+          }
+          offset += demand.offset();
+        }
+        if (terms.size() <= 1) {
+          proto->add_intervals(interval);
+          LinearExpressionProto* demand = proto->add_demands();
+          for (const auto& [var, coeff] : terms) {
+            demand->add_vars(var);
+            demand->add_coeffs(coeff);
+          }
+          demand->set_offset(offset);
+          context_->UpdateRuleStats(
+              "cumulative: merged demands of identical interval");
+        } else {
+          LinearConstraintProto* sum_of_terms =
+              context_->working_model->add_constraints()->mutable_linear();
+          std::vector<int> vars;
+          vars.reserve(terms.size());
+          std::vector<int64_t> coeffs;
+          coeffs.reserve(terms.size());
+          Domain new_domain(0);
+          for (const auto& [var, coeff] : terms) {
+            vars.push_back(var);
+            coeffs.push_back(coeff);
+            new_domain = new_domain.AdditionWith(
+                context_->DomainOf(var).ContinuousMultiplicationBy(coeff));
+            sum_of_terms->add_vars(var);
+            sum_of_terms->add_coeffs(coeff);
+          }
+          const int variable_demand = context_->NewIntVar(new_domain);
+          context_->solution_crush().SetVarToLinearExpression(variable_demand,
+                                                              vars, coeffs);
+          sum_of_terms->add_vars(variable_demand);
+          sum_of_terms->add_coeffs(-1);
+          FillDomainInProto(0, sum_of_terms);
+          context_->UpdateNewConstraintsVariableUsage();
+
+          proto->add_intervals(interval);
+          LinearExpressionProto* demand = proto->add_demands();
+          demand->add_vars(variable_demand);
+          demand->add_coeffs(1);
+          demand->set_offset(offset);
+          changed = true;
+
+          context_->UpdateRuleStats(
+              "cumulative: merged variable demands of identical interval");
+        }
+      }
+    }
+  }
+
+  // Filter absent intervals, or zero demands, or demand incompatible with the
+  // capacity.
+  {
     int new_size = 0;
     int num_zero_demand_removed = 0;
     int num_zero_size_removed = 0;
-    int num_incompatible_demands = 0;
+    int num_incompatible_intervals = 0;
     for (int i = 0; i < proto->intervals_size(); ++i) {
       if (context_->ConstraintIsInactive(proto->intervals(i))) continue;
 
@@ -3995,30 +7077,63 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
         continue;
       }
 
-      if (context_->SizeMax(proto->intervals(i)) == 0) {
+      const int interval_index = proto->intervals(i);
+      if (context_->SizeMax(interval_index) <= 0) {
         // Size 0 intervals cannot contribute to a cumulative.
         num_zero_size_removed++;
         continue;
       }
 
-      if (context_->MinOf(demand_expr) > capacity_max) {
-        if (context_->ConstraintIsOptional(proto->intervals(i))) {
+      // Inconsistent intervals cannot be performed.
+      const int64_t start_min = context_->StartMin(interval_index);
+      const int64_t end_max = context_->EndMax(interval_index);
+      if (start_min > end_max) {
+        if (context_->ConstraintIsOptional(interval_index)) {
           ConstraintProto* interval_ct =
-              context_->working_model->mutable_constraints(proto->intervals(i));
+              context_->working_model->mutable_constraints(interval_index);
           DCHECK_EQ(interval_ct->enforcement_literal_size(), 1);
           const int literal = interval_ct->enforcement_literal(0);
           if (!context_->SetLiteralToFalse(literal)) {
             return true;
           }
-          num_incompatible_demands++;
+          num_incompatible_intervals++;
           continue;
-        } else {  // Interval is performed.
+        } else {
           return context_->NotifyThatModelIsUnsat(
-              "cumulative: performed demand exceeds capacity.");
+              "cumulative: inconsistent intervals cannot be performed");
         }
       }
 
-      proto->set_intervals(new_size, proto->intervals(i));
+      if (context_->MinOf(demand_expr) > capacity_max) {
+        if (context_->ConstraintIsOptional(interval_index)) {
+          if (context_->SizeMin(interval_index) > 0) {
+            ConstraintProto* interval_ct =
+                context_->working_model->mutable_constraints(interval_index);
+            DCHECK_EQ(interval_ct->enforcement_literal_size(), 1);
+            const int literal = interval_ct->enforcement_literal(0);
+            if (!context_->SetLiteralToFalse(literal)) {
+              return true;
+            }
+            num_incompatible_intervals++;
+            continue;
+          }
+        } else {  // Interval performed.
+          // Try to set the size to 0.
+          const ConstraintProto& interval_ct =
+              context_->working_model->constraints(interval_index);
+          if (!context_->IntersectDomainWith(interval_ct.interval().size(),
+                                             {0, 0})) {
+            return true;
+          }
+          context_->UpdateRuleStats(
+              "cumulative: zero size of performed demand that exceeds "
+              "capacity");
+          ++num_zero_demand_removed;
+          continue;
+        }
+      }
+
+      proto->set_intervals(new_size, interval_index);
       *proto->mutable_demands(new_size) = proto->demands(i);
       new_size++;
     }
@@ -4039,9 +7154,9 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
       context_->UpdateRuleStats(
           "cumulative: removed intervals with a size of zero");
     }
-    if (num_incompatible_demands > 0) {
+    if (num_incompatible_intervals > 0) {
       context_->UpdateRuleStats(
-          "cumulative: removed intervals demands greater than the capacity");
+          "cumulative: removed intervals that can't be performed");
     }
   }
 
@@ -4051,6 +7166,7 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
       const int interval = proto->intervals(i);
       const LinearExpressionProto& demand_expr = proto->demands(i);
       if (context_->ConstraintIsOptional(interval)) continue;
+      if (context_->SizeMin(interval) <= 0) continue;
       bool domain_changed = false;
       if (!context_->IntersectDomainWith(demand_expr, {0, capacity_max},
                                          &domain_changed)) {
@@ -4100,7 +7216,7 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
   // separate function to unit test it more properly.
   {
     // Build max load profiles.
-    std::map<int64_t, int64_t> time_to_demand_deltas;
+    absl::btree_map<int64_t, int64_t> time_to_demand_deltas;
     const int64_t capacity_min = context_->MinOf(proto->capacity());
     for (int i = 0; i < proto->intervals_size(); ++i) {
       const int interval_index = proto->intervals(i);
@@ -4175,7 +7291,7 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
           proto->mutable_demands()->begin() + new_size,
           proto->mutable_demands()->end());
       context_->UpdateRuleStats(
-          "cumulative: remove never conflicting intervals.");
+          "cumulative: remove never conflicting intervals");
     }
   }
 
@@ -4188,13 +7304,15 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
     int64_t max_of_performed_demand_mins = 0;
     int64_t sum_of_max_demands = 0;
     for (int i = 0; i < proto->intervals_size(); ++i) {
+      const int interval_index = proto->intervals(i);
       const ConstraintProto& interval_ct =
-          context_->working_model->constraints(proto->intervals(i));
+          context_->working_model->constraints(interval_index);
 
       const LinearExpressionProto& demand_expr = proto->demands(i);
       sum_of_max_demands += context_->MaxOf(demand_expr);
 
-      if (interval_ct.enforcement_literal().empty()) {
+      if (interval_ct.enforcement_literal().empty() &&
+          context_->SizeMin(interval_index) > 0) {
         max_of_performed_demand_mins = std::max(max_of_performed_demand_mins,
                                                 context_->MinOf(demand_expr));
       }
@@ -4202,7 +7320,7 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
 
     const LinearExpressionProto& capacity_expr = proto->capacity();
     if (max_of_performed_demand_mins > context_->MinOf(capacity_expr)) {
-      context_->UpdateRuleStats("cumulative: propagate min capacity.");
+      context_->UpdateRuleStats("cumulative: propagate min capacity");
       if (!context_->IntersectDomainWith(
               capacity_expr, Domain(max_of_performed_demand_mins,
                                     std::numeric_limits<int64_t>::max()))) {
@@ -4230,7 +7348,7 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
         gcd = 1;
         break;
       }
-      gcd = MathUtil::GCD64(gcd, context_->MinOf(demand_expr));
+      gcd = std::gcd(gcd, context_->MinOf(demand_expr));
       if (gcd == 1) break;
     }
     if (gcd > 1) {
@@ -4256,7 +7374,6 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
   int num_greater_half_capacity = 0;
 
   bool has_optional_interval = false;
-  bool all_starts_are_variables = true;
   for (int i = 0; i < num_intervals; ++i) {
     const int index = proto->intervals(i);
     // TODO(user): adapt in the presence of optional intervals.
@@ -4270,11 +7387,12 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
     if (context_->SizeMin(index) == 1 && context_->SizeMax(index) == 1) {
       num_duration_one++;
     }
-    if (context_->SizeMin(index) == 0) {
+    if (context_->SizeMin(index) <= 0) {
       // The behavior for zero-duration interval is currently not the same in
       // the no-overlap and the cumulative constraint.
       return changed;
     }
+
     const int64_t demand_min = context_->MinOf(demand_expr);
     const int64_t demand_max = context_->MaxOf(demand_expr);
     if (demand_min > capacity_max / 2) {
@@ -4294,7 +7412,7 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
     } else if (demand_max > capacity_max) {
       if (ct.enforcement_literal().empty()) {
         context_->UpdateRuleStats(
-            "cumulative: demand_max exceeds capacity max.");
+            "cumulative: demand_max exceeds capacity max");
         if (!context_->IntersectDomainWith(
                 demand_expr,
                 Domain(std::numeric_limits<int64_t>::min(), capacity_max))) {
@@ -4304,19 +7422,30 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
         // TODO(user): we abort because we cannot convert this to a no_overlap
         // for instance.
         context_->UpdateRuleStats(
-            "cumulative: demand_max of optional interval exceeds capacity.");
+            "cumulative: demand_max of optional interval exceeds capacity");
         return changed;
       }
     }
   }
   if (num_greater_half_capacity == num_intervals) {
-    if (num_duration_one == num_intervals && !has_optional_interval &&
-        all_starts_are_variables) {
+    if (num_duration_one == num_intervals && !has_optional_interval) {
       context_->UpdateRuleStats("cumulative: convert to all_different");
       ConstraintProto* new_ct = context_->working_model->add_constraints();
       auto* arg = new_ct->mutable_all_diff();
       for (const LinearExpressionProto& expr : start_exprs) {
         *arg->add_exprs() = expr;
+      }
+      if (!context_->IsFixed(capacity_expr)) {
+        const int64_t capacity_min = context_->MinOf(capacity_expr);
+        for (const LinearExpressionProto& expr : proto->demands()) {
+          if (capacity_min >= context_->MaxOf(expr)) continue;
+          LinearConstraintProto* fit =
+              context_->working_model->add_constraints()->mutable_linear();
+          fit->add_domain(0);
+          fit->add_domain(std::numeric_limits<int64_t>::max());
+          AddLinearExpressionToLinearConstraint(capacity_expr, 1, fit);
+          AddLinearExpressionToLinearConstraint(expr, -1, fit);
+        }
       }
       context_->UpdateNewConstraintsVariableUsage();
       return RemoveConstraint(ct);
@@ -4353,11 +7482,13 @@ bool CpModelPresolver::PresolveCumulative(ConstraintProto* ct) {
     }
   }
 
+  RunPropagatorsForConstraint(*ct);
   return changed;
 }
 
 bool CpModelPresolver::PresolveRoutes(ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
+  // TODO(user): add support for this case.
   if (HasEnforcementLiteral(*ct)) return false;
   RoutesConstraintProto& proto = *ct->mutable_routes();
 
@@ -4369,6 +7500,14 @@ bool CpModelPresolver::PresolveRoutes(ConstraintProto* ct) {
     const int ref = proto.literals(i);
     const int tail = proto.tails(i);
     const int head = proto.heads(i);
+
+    if (tail >= has_incoming_or_outgoing_arcs.size()) {
+      has_incoming_or_outgoing_arcs.resize(tail + 1, false);
+    }
+    if (head >= has_incoming_or_outgoing_arcs.size()) {
+      has_incoming_or_outgoing_arcs.resize(head + 1, false);
+    }
+
     if (context_->LiteralIsFalse(ref)) {
       context_->UpdateRuleStats("routes: removed false arcs");
       continue;
@@ -4377,12 +7516,6 @@ bool CpModelPresolver::PresolveRoutes(ConstraintProto* ct) {
     proto.set_tails(new_size, tail);
     proto.set_heads(new_size, head);
     ++new_size;
-    if (tail >= has_incoming_or_outgoing_arcs.size()) {
-      has_incoming_or_outgoing_arcs.resize(tail + 1, false);
-    }
-    if (head >= has_incoming_or_outgoing_arcs.size()) {
-      has_incoming_or_outgoing_arcs.resize(head + 1, false);
-    }
     has_incoming_or_outgoing_arcs[tail] = true;
     has_incoming_or_outgoing_arcs[head] = true;
   }
@@ -4395,13 +7528,6 @@ bool CpModelPresolver::PresolveRoutes(ConstraintProto* ct) {
         "routes: graph with nodes and no arcs");
   }
 
-  if (new_size < num_arcs) {
-    proto.mutable_literals()->Truncate(new_size);
-    proto.mutable_tails()->Truncate(new_size);
-    proto.mutable_heads()->Truncate(new_size);
-    return true;
-  }
-
   // if a node misses an incomping or outgoing arc, the model is trivially
   // infeasible.
   for (int n = 0; n < has_incoming_or_outgoing_arcs.size(); ++n) {
@@ -4411,11 +7537,20 @@ bool CpModelPresolver::PresolveRoutes(ConstraintProto* ct) {
     }
   }
 
+  if (new_size < num_arcs) {
+    proto.mutable_literals()->Truncate(new_size);
+    proto.mutable_tails()->Truncate(new_size);
+    proto.mutable_heads()->Truncate(new_size);
+    return true;
+  }
+
+  RunPropagatorsForConstraint(*ct);
   return false;
 }
 
 bool CpModelPresolver::PresolveCircuit(ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
+  // TODO(user): add support for this case.
   if (HasEnforcementLiteral(*ct)) return false;
   CircuitConstraintProto& proto = *ct->mutable_circuit();
 
@@ -4445,7 +7580,7 @@ bool CpModelPresolver::PresolveCircuit(ConstraintProto* ct) {
   // All the node must have some incoming and outgoing arcs.
   for (int i = 0; i < num_nodes; ++i) {
     if (incoming_arcs[i].empty() || outgoing_arcs[i].empty()) {
-      return MarkConstraintAsFalse(ct);
+      return MarkConstraintAsFalse(ct, "circuit: node with no arcs");
     }
   }
 
@@ -4485,7 +7620,7 @@ bool CpModelPresolver::PresolveCircuit(ConstraintProto* ct) {
           for (const int ref : refs) {
             if (ref != true_ref) {
               if (!context_->IsFixed(ref)) {
-                context_->UpdateRuleStats("circuit: set literal to false.");
+                context_->UpdateRuleStats("circuit: set literal to false");
                 loop_again = true;
               }
               if (!context_->SetLiteralToFalse(ref)) return true;
@@ -4496,7 +7631,7 @@ bool CpModelPresolver::PresolveCircuit(ConstraintProto* ct) {
     }
   }
   if (num_fixed_at_true > 0) {
-    context_->UpdateRuleStats("circuit: fixed singleton arcs.");
+    context_->UpdateRuleStats("circuit: fixed singleton arcs");
   }
 
   // Remove false arcs.
@@ -4523,7 +7658,7 @@ bool CpModelPresolver::PresolveCircuit(ConstraintProto* ct) {
     ++new_in_degree[proto.heads(i)];
     proto.set_tails(new_size, proto.tails(i));
     proto.set_heads(new_size, proto.heads(i));
-    proto.set_literals(new_size, proto.literals(i));
+    proto.set_literals(new_size, ref);
     ++new_size;
   }
 
@@ -4563,16 +7698,17 @@ bool CpModelPresolver::PresolveCircuit(ConstraintProto* ct) {
       for (int n = 0; n < num_nodes; ++n) {
         if (!visited[n] && !has_self_arc[n]) {
           // We have a subircuit, but it doesn't cover all the mandatory nodes.
-          return MarkConstraintAsFalse(ct);
+          return MarkConstraintAsFalse(
+              ct, "circuit: non-covering fixed subcircuit");
         }
       }
-      context_->UpdateRuleStats("circuit: fully specified.");
+      context_->UpdateRuleStats("circuit: fully specified");
       return RemoveConstraint(ct);
     }
   } else {
     // All self loop?
     if (num_true == new_size) {
-      context_->UpdateRuleStats("circuit: empty circuit.");
+      context_->UpdateRuleStats("circuit: empty circuit");
       return RemoveConstraint(ct);
     }
   }
@@ -4593,8 +7729,10 @@ bool CpModelPresolver::PresolveCircuit(ConstraintProto* ct) {
       }
       if (literals.size() == 2 && literals[0] != NegatedRef(literals[1])) {
         context_->UpdateRuleStats("circuit: degree 2");
-        context_->StoreBooleanEqualityRelation(literals[0],
-                                               NegatedRef(literals[1]));
+        if (!context_->StoreBooleanEqualityRelation(literals[0],
+                                                    NegatedRef(literals[1]))) {
+          return true;
+        }
       }
     }
   }
@@ -4604,148 +7742,62 @@ bool CpModelPresolver::PresolveCircuit(ConstraintProto* ct) {
     proto.mutable_tails()->Truncate(new_size);
     proto.mutable_heads()->Truncate(new_size);
     proto.mutable_literals()->Truncate(new_size);
-    context_->UpdateRuleStats("circuit: removed false arcs.");
+    context_->UpdateRuleStats("circuit: removed false arcs");
     return true;
   }
+  RunPropagatorsForConstraint(*ct);
   return false;
 }
 
 bool CpModelPresolver::PresolveAutomaton(ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
+  // TODO(user): add support for this case.
   if (HasEnforcementLiteral(*ct)) return false;
-  AutomatonConstraintProto& proto = *ct->mutable_automaton();
-  if (proto.vars_size() == 0 || proto.transition_label_size() == 0) {
+
+  AutomatonConstraintProto* proto = ct->mutable_automaton();
+  if (proto->exprs_size() == 0 || proto->transition_label_size() == 0) {
     return false;
   }
 
-  bool all_have_same_affine_relation = true;
-  std::vector<AffineRelation::Relation> affine_relations;
-  for (int v = 0; v < proto.vars_size(); ++v) {
-    const int var = ct->automaton().vars(v);
-    const AffineRelation::Relation r = context_->GetAffineRelation(var);
-    affine_relations.push_back(r);
-    if (r.representative == var) {
-      all_have_same_affine_relation = false;
-      break;
-    }
-    if (v > 0 && (r.coeff != affine_relations[v - 1].coeff ||
-                  r.offset != affine_relations[v - 1].offset)) {
-      all_have_same_affine_relation = false;
-      break;
-    }
+  bool changed = false;
+  for (int i = 0; i < proto->exprs_size(); ++i) {
+    changed |= CanonicalizeLinearExpression(*ct, proto->mutable_exprs(i));
   }
 
-  if (all_have_same_affine_relation) {  // Unscale labels.
-    for (int v = 0; v < proto.vars_size(); ++v) {
-      proto.set_vars(v, affine_relations[v].representative);
-    }
-    const AffineRelation::Relation rep = affine_relations.front();
-    int new_size = 0;
-    for (int t = 0; t < proto.transition_tail_size(); ++t) {
-      const int64_t label = proto.transition_label(t);
-      int64_t inverse_label = (label - rep.offset) / rep.coeff;
-      if (inverse_label * rep.coeff + rep.offset == label) {
-        if (new_size != t) {
-          proto.set_transition_tail(new_size, proto.transition_tail(t));
-          proto.set_transition_head(new_size, proto.transition_head(t));
-        }
-        proto.set_transition_label(new_size, inverse_label);
-        new_size++;
+  std::vector<absl::flat_hash_set<int64_t>> reachable_states;
+  std::vector<absl::flat_hash_set<int64_t>> reachable_labels;
+  PropagateAutomaton(*proto, *context_, &reachable_states, &reachable_labels);
+
+  // Filter domains and compute the union of all relevant labels.
+  for (int time = 0; time < reachable_labels.size(); ++time) {
+    const LinearExpressionProto& expr = proto->exprs(time);
+    if (context_->IsFixed(expr)) {
+      if (!reachable_labels[time].contains(context_->FixedValue(expr))) {
+        return MarkConstraintAsFalse(ct, "automaton: unsat");
+      }
+    } else {
+      std::vector<int64_t> unscaled_reachable_labels;
+      for (const int64_t label : reachable_labels[time]) {
+        unscaled_reachable_labels.push_back(GetInnerVarValue(expr, label));
+      }
+      bool removed_values = false;
+      if (!context_->IntersectDomainWith(
+              expr.vars(0), Domain::FromValues(unscaled_reachable_labels),
+              &removed_values)) {
+        return true;
+      }
+      if (removed_values) {
+        context_->UpdateRuleStats("automaton: reduce variable domain");
       }
     }
-    if (new_size < proto.transition_tail_size()) {
-      proto.mutable_transition_tail()->Truncate(new_size);
-      proto.mutable_transition_label()->Truncate(new_size);
-      proto.mutable_transition_head()->Truncate(new_size);
-      context_->UpdateRuleStats("automaton: remove invalid transitions");
-    }
-    context_->UpdateRuleStats("automaton: unscale all affine labels");
-    return true;
   }
 
-  Domain hull = context_->DomainOf(proto.vars(0));
-  for (int v = 1; v < proto.vars_size(); ++v) {
-    hull = hull.UnionWith(context_->DomainOf(proto.vars(v)));
-  }
-
-  int new_size = 0;
-  for (int t = 0; t < proto.transition_tail_size(); ++t) {
-    const int64_t label = proto.transition_label(t);
-    if (hull.Contains(label)) {
-      if (new_size != t) {
-        proto.set_transition_tail(new_size, proto.transition_tail(t));
-        proto.set_transition_label(new_size, label);
-        proto.set_transition_head(new_size, proto.transition_head(t));
-      }
-      new_size++;
-    }
-  }
-  if (new_size < proto.transition_tail_size()) {
-    proto.mutable_transition_tail()->Truncate(new_size);
-    proto.mutable_transition_label()->Truncate(new_size);
-    proto.mutable_transition_head()->Truncate(new_size);
-    context_->UpdateRuleStats("automaton: remove invalid transitions");
-    return false;
-  }
-
-  const int n = proto.vars_size();
-  const std::vector<int> vars = {proto.vars().begin(), proto.vars().end()};
-
-  // Compute the set of reachable state at each time point.
-  std::vector<std::set<int64_t>> reachable_states(n + 1);
-  reachable_states[0].insert(proto.starting_state());
-  reachable_states[n] = {proto.final_states().begin(),
-                         proto.final_states().end()};
-
-  // Forward.
-  for (int time = 0; time + 1 < n; ++time) {
-    for (int t = 0; t < proto.transition_tail_size(); ++t) {
-      const int64_t tail = proto.transition_tail(t);
-      const int64_t label = proto.transition_label(t);
-      const int64_t head = proto.transition_head(t);
-      if (!gtl::ContainsKey(reachable_states[time], tail)) continue;
-      if (!context_->DomainContains(vars[time], label)) continue;
-      reachable_states[time + 1].insert(head);
-    }
-  }
-
-  std::vector<std::set<int64_t>> reached_values(n);
-
-  // Backward.
-  for (int time = n - 1; time >= 0; --time) {
-    std::set<int64_t> new_set;
-    for (int t = 0; t < proto.transition_tail_size(); ++t) {
-      const int64_t tail = proto.transition_tail(t);
-      const int64_t label = proto.transition_label(t);
-      const int64_t head = proto.transition_head(t);
-
-      if (!gtl::ContainsKey(reachable_states[time], tail)) continue;
-      if (!context_->DomainContains(vars[time], label)) continue;
-      if (!gtl::ContainsKey(reachable_states[time + 1], head)) continue;
-      new_set.insert(tail);
-      reached_values[time].insert(label);
-    }
-    reachable_states[time].swap(new_set);
-  }
-
-  bool removed_values = false;
-  for (int time = 0; time < n; ++time) {
-    if (!context_->IntersectDomainWith(
-            vars[time],
-            Domain::FromValues(
-                {reached_values[time].begin(), reached_values[time].end()}),
-            &removed_values)) {
-      return false;
-    }
-  }
-  if (removed_values) {
-    context_->UpdateRuleStats("automaton: reduced variable domains");
-  }
-  return false;
+  return changed;
 }
 
 bool CpModelPresolver::PresolveReservoir(ConstraintProto* ct) {
   if (context_->ModelIsUnsat()) return false;
+  // TODO(user): add support for this case.
   if (HasEnforcementLiteral(*ct)) return false;
 
   ReservoirConstraintProto& proto = *ct->mutable_reservoir();
@@ -4753,9 +7805,12 @@ bool CpModelPresolver::PresolveReservoir(ConstraintProto* ct) {
   for (LinearExpressionProto& exp : *(proto.mutable_time_exprs())) {
     changed |= CanonicalizeLinearExpression(*ct, &exp);
   }
+  for (LinearExpressionProto& exp : *(proto.mutable_level_changes())) {
+    changed |= CanonicalizeLinearExpression(*ct, &exp);
+  }
 
   if (proto.active_literals().empty()) {
-    const int true_literal = context_->GetOrCreateConstantVar(1);
+    const int true_literal = context_->GetTrueLiteral();
     for (int i = 0; i < proto.time_exprs_size(); ++i) {
       proto.add_active_literals(true_literal);
     }
@@ -4763,7 +7818,8 @@ bool CpModelPresolver::PresolveReservoir(ConstraintProto* ct) {
   }
 
   const auto& demand_is_null = [&](int i) {
-    return proto.level_changes(i) == 0 ||
+    return (context_->IsFixed(proto.level_changes(i)) &&
+            context_->FixedValue(proto.level_changes(i)) == 0) ||
            context_->LiteralIsFalse(proto.active_literals(i));
   };
 
@@ -4778,32 +7834,40 @@ bool CpModelPresolver::PresolveReservoir(ConstraintProto* ct) {
     int new_size = 0;
     for (int i = 0; i < proto.level_changes_size(); ++i) {
       if (demand_is_null(i)) continue;
-      proto.set_level_changes(new_size, proto.level_changes(i));
+      *proto.mutable_level_changes(new_size) = proto.level_changes(i);
       *proto.mutable_time_exprs(new_size) = proto.time_exprs(i);
       proto.set_active_literals(new_size, proto.active_literals(i));
       new_size++;
     }
 
-    proto.mutable_level_changes()->Truncate(new_size);
+    proto.mutable_level_changes()->erase(
+        proto.mutable_level_changes()->begin() + new_size,
+        proto.mutable_level_changes()->end());
     proto.mutable_time_exprs()->erase(
         proto.mutable_time_exprs()->begin() + new_size,
         proto.mutable_time_exprs()->end());
     proto.mutable_active_literals()->Truncate(new_size);
 
     context_->UpdateRuleStats(
-        "reservoir: remove zero level_changes or inactive events.");
+        "reservoir: remove zero level_changes or inactive events");
+  }
+
+  // The rest of the presolve only applies if all demands are fixed.
+  for (const LinearExpressionProto& level_change : proto.level_changes()) {
+    if (!context_->IsFixed(level_change)) return changed;
   }
 
   const int num_events = proto.level_changes_size();
-  int64_t gcd =
-      proto.level_changes().empty() ? 0 : std::abs(proto.level_changes(0));
+  int64_t gcd = proto.level_changes().empty()
+                    ? 0
+                    : std::abs(context_->FixedValue(proto.level_changes(0)));
   int num_positives = 0;
   int num_negatives = 0;
   int64_t max_sum_of_positive_level_changes = 0;
   int64_t min_sum_of_negative_level_changes = 0;
   for (int i = 0; i < num_events; ++i) {
-    const int64_t demand = proto.level_changes(i);
-    gcd = MathUtil::GCD64(gcd, std::abs(demand));
+    const int64_t demand = context_->FixedValue(proto.level_changes(i));
+    gcd = std::gcd(gcd, std::abs(demand));
     if (demand > 0) {
       num_positives++;
       max_sum_of_positive_level_changes += demand;
@@ -4841,11 +7905,11 @@ bool CpModelPresolver::PresolveReservoir(ConstraintProto* ct) {
       (num_positives == 0 || num_negatives == 0)) {
     // If all level_changes have the same sign, and if the initial state is
     // always feasible, we do not care about the order, just the sum.
-    auto* const sum =
-        context_->working_model->add_constraints()->mutable_linear();
+    auto* const sum_ct = context_->working_model->add_constraints();
+    auto* const sum = sum_ct->mutable_linear();
     int64_t fixed_contrib = 0;
     for (int i = 0; i < proto.level_changes_size(); ++i) {
-      const int64_t demand = proto.level_changes(i);
+      const int64_t demand = context_->FixedValue(proto.level_changes(i));
       DCHECK_NE(demand, 0);
 
       const int active = proto.active_literals(i);
@@ -4861,12 +7925,19 @@ bool CpModelPresolver::PresolveReservoir(ConstraintProto* ct) {
     sum->add_domain(proto.min_level() - fixed_contrib);
     sum->add_domain(proto.max_level() - fixed_contrib);
     context_->UpdateRuleStats("reservoir: converted to linear");
+    bool changed = false;
+    if (!CanonicalizeLinear(sum_ct, &changed)) {
+      return true;
+    }
     return RemoveConstraint(ct);
   }
 
   if (gcd > 1) {
     for (int i = 0; i < proto.level_changes_size(); ++i) {
-      proto.set_level_changes(i, proto.level_changes(i) / gcd);
+      proto.mutable_level_changes(i)->set_offset(
+          context_->FixedValue(proto.level_changes(i)) / gcd);
+      proto.mutable_level_changes(i)->clear_vars();
+      proto.mutable_level_changes(i)->clear_coeffs();
     }
 
     // Adjust min and max levels.
@@ -4877,12 +7948,12 @@ bool CpModelPresolver::PresolveReservoir(ConstraintProto* ct) {
     proto.set_min_level(reduced_domain.Min());
     proto.set_max_level(reduced_domain.Max());
     context_->UpdateRuleStats(
-        "reservoir: simplify level_changes and levels by gcd.");
+        "reservoir: simplify level_changes and levels by gcd");
   }
 
   if (num_positives == 1 && num_negatives > 0) {
     context_->UpdateRuleStats(
-        "TODO reservoir: one producer, multiple consumers.");
+        "TODO reservoir: one producer, multiple consumers");
   }
 
   absl::flat_hash_set<std::tuple<int, int64_t, int64_t, int>> time_active_set;
@@ -4896,20 +7967,21 @@ bool CpModelPresolver::PresolveReservoir(ConstraintProto* ct) {
         context_->IsFixed(time) ? context_->FixedValue(time) : time.offset(),
         proto.active_literals(i));
     if (time_active_set.contains(key)) {
-      context_->UpdateRuleStats("TODO reservoir: merge synchronized events.");
+      context_->UpdateRuleStats("TODO reservoir: merge synchronized events");
       break;
     } else {
       time_active_set.insert(key);
     }
   }
 
+  RunPropagatorsForConstraint(*ct);
   return changed;
 }
 
 // TODO(user): It is probably more efficient to keep all the bool_and in a
 // global place during all the presolve, and just output them at the end
 // rather than modifying more than once the proto.
-void CpModelPresolver::ExtractBoolAnd() {
+void CpModelPresolver::ConvertToBoolAnd() {
   absl::flat_hash_map<int, int> ref_to_bool_and;
   const int num_constraints = context_->working_model->constraints_size();
   std::vector<int> to_remove;
@@ -4917,7 +7989,7 @@ void CpModelPresolver::ExtractBoolAnd() {
     const ConstraintProto& ct = context_->working_model->constraints(c);
     if (HasEnforcementLiteral(ct)) continue;
 
-    if (ct.constraint_case() == ConstraintProto::ConstraintCase::kBoolOr &&
+    if (ct.constraint_case() == ConstraintProto::kBoolOr &&
         ct.bool_or().literals().size() == 2) {
       AddImplication(NegatedRef(ct.bool_or().literals(0)),
                      ct.bool_or().literals(1), context_->working_model,
@@ -4926,7 +7998,7 @@ void CpModelPresolver::ExtractBoolAnd() {
       continue;
     }
 
-    if (ct.constraint_case() == ConstraintProto::ConstraintCase::kAtMostOne &&
+    if (ct.constraint_case() == ConstraintProto::kAtMostOne &&
         ct.at_most_one().literals().size() == 2) {
       AddImplication(ct.at_most_one().literals(0),
                      NegatedRef(ct.at_most_one().literals(1)),
@@ -4944,9 +8016,99 @@ void CpModelPresolver::ExtractBoolAnd() {
   }
 }
 
+void CpModelPresolver::RunPropagatorsForConstraint(const ConstraintProto& ct) {
+  if (context_->ModelIsUnsat()) return;
+
+  Model model;
+
+  // Enable as many propagators as possible. We do not care if some propagator
+  // is a bit slow or if the explanation is too big: anything that improves our
+  // bounds is an improvement.
+  SatParameters local_params;
+  local_params.set_use_try_edge_reasoning_in_no_overlap_2d(true);
+  local_params.set_exploit_all_precedences(true);
+  local_params.set_use_hard_precedences_in_cumulative(true);
+  local_params.set_max_num_intervals_for_timetable_edge_finding(1000);
+  local_params.set_use_overload_checker_in_cumulative(true);
+  local_params.set_use_strong_propagation_in_disjunctive(true);
+  local_params.set_use_timetable_edge_finding_in_cumulative(true);
+  local_params.set_max_pairs_pairwise_reasoning_in_no_overlap_2d(50000);
+  local_params.set_use_timetabling_in_no_overlap_2d(true);
+  local_params.set_use_energetic_reasoning_in_no_overlap_2d(true);
+  local_params.set_use_area_energetic_reasoning_in_no_overlap_2d(true);
+  local_params.set_use_conservative_scale_overload_checker(true);
+  local_params.set_use_dual_scheduling_heuristics(true);
+
+  model.GetOrCreate<TimeLimit>()->MergeWithGlobalTimeLimit(time_limit_);
+  std::vector<int> variable_mapping;
+  CreateValidModelWithSingleConstraint(ct, context_, &variable_mapping,
+                                       &tmp_model_);
+  DCHECK_EQ(ValidateCpModel(tmp_model_, false), "");
+  if (!LoadModelForPresolve(tmp_model_, std::move(local_params), context_,
+                            &model, "single constraint")) {
+    return;
+  }
+
+  time_limit_->AdvanceDeterministicTime(
+      model.GetOrCreate<TimeLimit>()->GetElapsedDeterministicTime());
+  auto* mapping = model.GetOrCreate<CpModelMapping>();
+  auto* integer_trail = model.GetOrCreate<IntegerTrail>();
+  auto* implication_graph = model.GetOrCreate<BinaryImplicationGraph>();
+  auto* trail = model.GetOrCreate<Trail>();
+
+  int num_changed_bounds = 0;
+  int num_fixed_bools = 0;
+  for (int var = 0; var < variable_mapping.size(); ++var) {
+    const int proto_var = variable_mapping[var];
+    if (mapping->IsBoolean(var)) {
+      const Literal l = mapping->Literal(var);
+      if (trail->Assignment().LiteralIsFalse(l)) {
+        if (!context_->SetLiteralToFalse(proto_var)) return;
+        ++num_fixed_bools;
+        continue;
+      } else if (trail->Assignment().LiteralIsTrue(l)) {
+        if (!context_->SetLiteralToTrue(proto_var)) return;
+        ++num_fixed_bools;
+        continue;
+      }
+      // Add Boolean equivalence relations.
+      const Literal r = implication_graph->RepresentativeOf(l);
+      if (r != l) {
+        const int r_var =
+            mapping->GetProtoVariableFromBooleanVariable(r.Variable());
+        if (r_var < 0) continue;
+        if (!context_->StoreBooleanEqualityRelation(
+                proto_var, r.IsPositive() ? r_var : NegatedRef(r_var))) {
+          return;
+        }
+      }
+    } else {
+      // Restrict variable domain.
+      bool changed = false;
+      if (!context_->IntersectDomainWith(
+              proto_var,
+              integer_trail->InitialVariableDomain(mapping->Integer(var)),
+              &changed)) {
+        return;
+      }
+      if (changed) ++num_changed_bounds;
+    }
+  }
+  if (num_changed_bounds > 0) {
+    context_->UpdateRuleStats("propagators: changed bounds",
+                              num_changed_bounds);
+  }
+  if (num_fixed_bools > 0) {
+    context_->UpdateRuleStats("propagators: fixed booleans", num_fixed_bools);
+  }
+}
+
 // TODO(user): It might make sense to run this in parallel. The same apply for
 // other expansive and self-contains steps like symmetry detection, etc...
 void CpModelPresolver::Probe() {
+  auto probing_timer =
+      std::make_unique<PresolveTimer>(__FUNCTION__, logger_, time_limit_);
+
   Model model;
   if (!LoadModelForProbing(context_, &model)) return;
 
@@ -4958,35 +8120,224 @@ void CpModelPresolver::Probe() {
   auto* sat_solver = model.GetOrCreate<SatSolver>();
   auto* mapping = model.GetOrCreate<CpModelMapping>();
   auto* prober = model.GetOrCreate<Prober>();
-  prober->ProbeBooleanVariables(/*deterministic_time_limit=*/1.0);
-  context_->time_limit()->AdvanceDeterministicTime(
+
+  // Try to detect trivial clauses thanks to implications.
+  // This can be slow, so we bound the amount of work done.
+  //
+  // Idea: If we have l1, l2 in a bool_or and not(l1) => l2, the constraint is
+  // always true.
+  //
+  // Correctness: Note that we always replace a clause with another one that
+  // subsumes it. So we are correct even if new clauses are learned and used
+  // for propagation along the way.
+  //
+  // TODO(user): Improve the algo?
+  const auto& assignment = sat_solver->Assignment();
+  prober->SetPropagationCallback([&](Literal decision) {
+    if (probing_timer->WorkLimitIsReached()) return;
+    const int decision_var =
+        mapping->GetProtoVariableFromBooleanVariable(decision.Variable());
+    if (decision_var < 0) return;
+    probing_timer->TrackSimpleLoop(
+        context_->VarToConstraints(decision_var).size());
+    std::vector<int> to_update;
+    for (const int c : context_->VarToConstraints(decision_var)) {
+      if (c < 0) continue;
+      const ConstraintProto& ct = context_->working_model->constraints(c);
+      if (ct.enforcement_literal().size() > 2) {
+        // Any l for which decision => l can be removed.
+        //
+        // If decision => not(l), constraint can never be satisfied. However
+        // because we don't know if this constraint was part of the
+        // propagation we replace it by an implication.
+        //
+        // TODO(user): remove duplication with code below.
+        // TODO(user): If decision appear positively, we could potentially
+        // remove a bunch of terms (all the ones involving variables implied
+        // by the decision) from the inner constraint, especially in the
+        // linear case.
+        int decision_ref;
+        int false_ref;
+        bool decision_is_positive = false;
+        bool has_false_literal = false;
+        bool simplification_possible = false;
+        probing_timer->TrackSimpleLoop(ct.enforcement_literal().size());
+        for (const int ref : ct.enforcement_literal()) {
+          const Literal lit = mapping->Literal(ref);
+          if (PositiveRef(ref) == decision_var) {
+            decision_ref = ref;
+            decision_is_positive = assignment.LiteralIsTrue(lit);
+            if (!decision_is_positive) break;
+            continue;
+          }
+          if (assignment.LiteralIsFalse(lit)) {
+            false_ref = ref;
+            has_false_literal = true;
+          } else if (assignment.LiteralIsTrue(lit)) {
+            // If decision => l, we can remove l from the list.
+            simplification_possible = true;
+          }
+        }
+        if (!decision_is_positive) continue;
+
+        if (has_false_literal) {
+          // Reduce to implication.
+          auto* mutable_ct = context_->working_model->mutable_constraints(c);
+          mutable_ct->Clear();
+          mutable_ct->add_enforcement_literal(decision_ref);
+          mutable_ct->mutable_bool_and()->add_literals(NegatedRef(false_ref));
+          context_->UpdateRuleStats(
+              "probing: reduced enforced constraint to implication");
+          to_update.push_back(c);
+          continue;
+        }
+
+        if (simplification_possible) {
+          int new_size = 0;
+          auto* mutable_enforcements =
+              context_->working_model->mutable_constraints(c)
+                  ->mutable_enforcement_literal();
+          for (const int ref : ct.enforcement_literal()) {
+            if (PositiveRef(ref) != decision_var &&
+                assignment.LiteralIsTrue(mapping->Literal(ref))) {
+              continue;
+            }
+            mutable_enforcements->Set(new_size++, ref);
+          }
+          mutable_enforcements->Truncate(new_size);
+          context_->UpdateRuleStats("probing: simplified enforcement list");
+          to_update.push_back(c);
+        }
+        continue;
+      }
+
+      if (ct.constraint_case() != ConstraintProto::kBoolOr) continue;
+      if (ct.bool_or().literals().size() <= 2) continue;
+
+      int decision_ref;
+      int true_ref;
+      bool decision_is_negative = false;
+      bool has_true_literal = false;
+      bool simplification_possible = false;
+      probing_timer->TrackSimpleLoop(ct.bool_or().literals().size());
+      for (const int ref : ct.bool_or().literals()) {
+        const Literal lit = mapping->Literal(ref);
+        if (PositiveRef(ref) == decision_var) {
+          decision_ref = ref;
+          decision_is_negative = assignment.LiteralIsFalse(lit);
+          if (!decision_is_negative) break;
+          continue;
+        }
+        if (assignment.LiteralIsTrue(lit)) {
+          true_ref = ref;
+          has_true_literal = true;
+        } else if (assignment.LiteralIsFalse(lit)) {
+          // If not(l1) => not(l2), we can remove l2 from the clause.
+          simplification_possible = true;
+        }
+      }
+      if (!decision_is_negative) continue;
+
+      if (has_true_literal) {
+        // This will later be merged with the current implications and removed
+        // if it is a duplicate.
+        auto* mutable_bool_or =
+            context_->working_model->mutable_constraints(c)->mutable_bool_or();
+        mutable_bool_or->mutable_literals()->Clear();
+        mutable_bool_or->add_literals(decision_ref);
+        mutable_bool_or->add_literals(true_ref);
+        context_->UpdateRuleStats("probing: bool_or reduced to implication");
+        to_update.push_back(c);
+        continue;
+      }
+
+      if (simplification_possible) {
+        int new_size = 0;
+        auto* mutable_bool_or =
+            context_->working_model->mutable_constraints(c)->mutable_bool_or();
+        for (const int ref : ct.bool_or().literals()) {
+          if (PositiveRef(ref) != decision_var &&
+              assignment.LiteralIsFalse(mapping->Literal(ref))) {
+            continue;
+          }
+          mutable_bool_or->set_literals(new_size++, ref);
+        }
+        mutable_bool_or->mutable_literals()->Truncate(new_size);
+        context_->UpdateRuleStats("probing: simplified clauses");
+        to_update.push_back(c);
+      }
+    }
+
+    absl::c_sort(to_update);
+    for (const int c : to_update) {
+      context_->UpdateConstraintVariableUsage(c);
+    }
+  });
+
+  prober->ProbeBooleanVariables(
+      context_->params().probing_deterministic_time_limit());
+
+  for (const auto& [expr, ub] : model.GetOrCreate<RootLevelLinear2Bounds>()
+                                    ->GetSortedNonTrivialUpperBounds()) {
+    if (expr.vars[0] == kNoIntegerVariable ||
+        expr.vars[1] == kNoIntegerVariable) {
+      continue;
+    }
+    const IntegerVariable var0 = PositiveVariable(expr.vars[0]);
+    const IntegerVariable var1 = PositiveVariable(expr.vars[1]);
+    const int proto_var0 = mapping->GetProtoVariableFromIntegerVariable(var0);
+    const int proto_var1 = mapping->GetProtoVariableFromIntegerVariable(var1);
+    if (proto_var0 < 0 || proto_var1 < 0) continue;
+    const int64_t coeff0 = VariableIsPositive(expr.vars[0])
+                               ? expr.coeffs[0].value()
+                               : -expr.coeffs[0].value();
+    const int64_t coeff1 = VariableIsPositive(expr.vars[1])
+                               ? expr.coeffs[1].value()
+                               : -expr.coeffs[1].value();
+    known_linear2_.Add(
+        GetLinearExpression2FromProto(proto_var0, coeff0, proto_var1, coeff1),
+        kMinIntegerValue, ub);
+  }
+
+  probing_timer->AddCounter("probed", prober->num_decisions());
+  probing_timer->AddToWork(
       model.GetOrCreate<TimeLimit>()->GetElapsedDeterministicTime());
-  if (sat_solver->IsModelUnsat() || !implication_graph->DetectEquivalences()) {
+  if (sat_solver->ModelIsUnsat() || !implication_graph->DetectEquivalences()) {
     return (void)context_->NotifyThatModelIsUnsat("during probing");
   }
 
+  time_limit_->ResetHistory();
+
   // Update the presolve context with fixed Boolean variables.
+  int num_fixed = 0;
   CHECK_EQ(sat_solver->CurrentDecisionLevel(), 0);
   for (int i = 0; i < sat_solver->LiteralTrail().Index(); ++i) {
     const Literal l = sat_solver->LiteralTrail()[i];
     const int var = mapping->GetProtoVariableFromBooleanVariable(l.Variable());
     if (var >= 0) {
       const int ref = l.IsPositive() ? var : NegatedRef(var);
+      if (context_->IsFixed(ref)) continue;
+      ++num_fixed;
       if (!context_->SetLiteralToTrue(ref)) return;
     }
   }
+  probing_timer->AddCounter("fixed_bools", num_fixed);
 
+  int num_equiv = 0;
+  int num_changed_bounds = 0;
   const int num_variables = context_->working_model->variables().size();
   auto* integer_trail = model.GetOrCreate<IntegerTrail>();
   for (int var = 0; var < num_variables; ++var) {
     // Restrict IntegerVariable domain.
     // Note that Boolean are already dealt with above.
     if (!mapping->IsBoolean(var)) {
+      bool changed = false;
       if (!context_->IntersectDomainWith(
-              var,
-              integer_trail->InitialVariableDomain(mapping->Integer(var)))) {
+              var, integer_trail->InitialVariableDomain(mapping->Integer(var)),
+              &changed)) {
         return;
       }
+      if (changed) ++num_changed_bounds;
       continue;
     }
 
@@ -4994,70 +8345,175 @@ void CpModelPresolver::Probe() {
     const Literal l = mapping->Literal(var);
     const Literal r = implication_graph->RepresentativeOf(l);
     if (r != l) {
+      ++num_equiv;
       const int r_var =
           mapping->GetProtoVariableFromBooleanVariable(r.Variable());
       CHECK_GE(r_var, 0);
-      context_->StoreBooleanEqualityRelation(
-          var, r.IsPositive() ? r_var : NegatedRef(r_var));
+      if (!context_->StoreBooleanEqualityRelation(
+              var, r.IsPositive() ? r_var : NegatedRef(r_var))) {
+        return;
+      }
+    }
+  }
+  probing_timer->AddCounter("new_bounds", num_changed_bounds);
+  probing_timer->AddCounter("equiv", num_equiv);
+  probing_timer->AddCounter("new_binary_clauses",
+                            prober->num_new_binary_clauses());
+
+  // Note that we prefer to run this after we exported all equivalence to the
+  // context, so that our enforcement list can be presolved to the best of our
+  // knowledge.
+  DetectDuplicateConstraintsWithDifferentEnforcements(
+      mapping, implication_graph, model.GetOrCreate<Trail>());
+
+  // Stop probing timer now and display info.
+  probing_timer.reset();
+
+  // Run clique merging using detected implications from probing.
+  if (context_->params().merge_at_most_one_work_limit() > 0.0) {
+    PresolveTimer timer("MaxClique", logger_, time_limit_);
+    std::vector<std::vector<Literal>> cliques;
+    std::vector<int> clique_ct_index;
+
+    // TODO(user): On large model, most of the time is spend in this copy,
+    // clearing and updating the constraint variable graph...
+    int64_t num_literals_before = 0;
+    const int num_constraints = context_->working_model->constraints_size();
+    for (int c = 0; c < num_constraints; ++c) {
+      ConstraintProto* ct = context_->working_model->mutable_constraints(c);
+      if (ct->constraint_case() == ConstraintProto::kAtMostOne) {
+        std::vector<Literal> clique;
+        for (const int ref : ct->at_most_one().literals()) {
+          clique.push_back(mapping->Literal(ref));
+        }
+        num_literals_before += clique.size();
+        cliques.push_back(clique);
+        ct->Clear();
+        context_->UpdateConstraintVariableUsage(c);
+      } else if (ct->constraint_case() == ConstraintProto::kBoolAnd) {
+        if (ct->enforcement_literal().size() != 1) continue;
+        const Literal enforcement =
+            mapping->Literal(ct->enforcement_literal(0));
+        for (const int ref : ct->bool_and().literals()) {
+          if (ref == ct->enforcement_literal(0)) continue;
+          num_literals_before += 2;
+          cliques.push_back({enforcement, mapping->Literal(ref).Negated()});
+        }
+        ct->Clear();
+        context_->UpdateConstraintVariableUsage(c);
+      }
+    }
+    const int64_t num_old_cliques = cliques.size();
+
+    // We adapt the limit if there is a lot of literals in amo/implications.
+    // Usually we can have big reduction on large problem so it seems
+    // worthwhile.
+    double limit = context_->params().merge_at_most_one_work_limit();
+    if (num_literals_before > 1e6) {
+      limit *= num_literals_before / 1e6;
+    }
+
+    double dtime = 0.0;
+    implication_graph->MergeAtMostOnes(absl::MakeSpan(cliques),
+                                       SafeDoubleToInt64(limit), &dtime);
+    timer.AddToWork(dtime);
+
+    // Note that because TransformIntoMaxCliques() extend cliques, we are ok
+    // to ignore any unmapped literal. In case of equivalent literal, we always
+    // use the smaller indices as a representative, so we should be good.
+    int num_new_cliques = 0;
+    int64_t num_literals_after = 0;
+    for (const std::vector<Literal>& clique : cliques) {
+      if (clique.empty()) continue;
+      num_new_cliques++;
+      num_literals_after += clique.size();
+      ConstraintProto* ct = context_->working_model->add_constraints();
+      for (const Literal literal : clique) {
+        const int var =
+            mapping->GetProtoVariableFromBooleanVariable(literal.Variable());
+        if (var < 0) continue;
+        if (literal.IsPositive()) {
+          ct->mutable_at_most_one()->add_literals(var);
+        } else {
+          ct->mutable_at_most_one()->add_literals(NegatedRef(var));
+        }
+      }
+
+      // Make sure we do not have duplicate variable reference.
+      PresolveAtMostOne(ct);
+    }
+    context_->UpdateNewConstraintsVariableUsage();
+    if (num_new_cliques != num_old_cliques) {
+      context_->UpdateRuleStats("at_most_one: transformed into max clique");
+    }
+
+    if (num_old_cliques != num_new_cliques ||
+        num_literals_before != num_literals_after) {
+      timer.AddMessage(
+          absl::StrCat("Merged ", Plural(num_old_cliques, "constraint"),
+                       " with ", Plural(num_literals_before, "literal"),
+                       " into ", Plural(num_new_cliques, "constraint"),
+                       " with ", Plural(num_literals_after, "literal")));
     }
   }
 }
 
-// TODO(user): What to do with the at_most_one/exactly_one constraints?
-// currently we do not take them into account here.
-void CpModelPresolver::PresolvePureSatPart() {
-  // TODO(user): Reenable some SAT presolve with
-  // keep_all_feasible_solutions set to true.
-  if (context_->ModelIsUnsat() || context_->keep_all_feasible_solutions) return;
+namespace {
 
-  const int num_variables = context_->working_model->variables_size();
-  SatPostsolver sat_postsolver(num_variables);
-  SatPresolver sat_presolver(&sat_postsolver, logger_);
-  sat_presolver.SetNumVariables(num_variables);
-  sat_presolver.SetTimeLimit(context_->time_limit());
-
-  SatParameters params = context_->params();
-
-  // The "full solver" postsolve does not support changing the value of a
-  // variable from the solution of the presolved problem, and we do need this
-  // for blocked clause. It should be possible to allow for this by adding extra
-  // variable to the mapping model at presolve and some linking constraints, but
-  // this is messy.
-  if (params.debug_postsolve_with_full_solver()) {
-    params.set_presolve_blocked_clause(false);
-  }
-
-  // TODO(user): BVA takes time_exprs and do not seems to help on the minizinc
-  // benchmarks. That said, it was useful on pure sat problems, so we may
-  // want to enable it.
-  params.set_presolve_use_bva(false);
-  sat_presolver.SetParameters(params);
-
-  // Converts a cp_model literal ref to a sat::Literal used by SatPresolver.
-  absl::flat_hash_set<int> used_variables;
-  auto convert = [&used_variables](int ref) {
-    used_variables.insert(PositiveRef(ref));
-    if (RefIsPositive(ref)) return Literal(BooleanVariable(ref), true);
-    return Literal(BooleanVariable(NegatedRef(ref)), false);
-  };
-
-  // We need all Boolean constraints to be presolved before loading them below.
-  // Otherwise duplicate literals might result in a wrong outcome.
-  //
-  // TODO(user): Be a bit more efficient, and enforce this invariant before we
-  // reach this point?
-  for (int c = 0; c < context_->working_model->constraints_size(); ++c) {
-    const ConstraintProto& ct = context_->working_model->constraints(c);
-    if (ct.constraint_case() == ConstraintProto::ConstraintCase::kBoolOr ||
-        ct.constraint_case() == ConstraintProto::ConstraintCase::kBoolAnd) {
-      if (PresolveOneConstraint(c)) {
-        context_->UpdateConstraintVariableUsage(c);
-      }
-      if (context_->ModelIsUnsat()) return;
+bool FixFromAssignment(const VariablesAssignment& assignment,
+                       absl::Span<const int> var_mapping,
+                       PresolveContext* context) {
+  const int num_vars = assignment.NumberOfVariables();
+  for (int i = 0; i < num_vars; ++i) {
+    const Literal lit(BooleanVariable(i), true);
+    const int ref = var_mapping[i];
+    if (assignment.LiteralIsTrue(lit)) {
+      if (!context->SetLiteralToTrue(ref)) return false;
+    } else if (assignment.LiteralIsFalse(lit)) {
+      if (!context->SetLiteralToFalse(ref)) return false;
     }
   }
+  return true;
+}
 
-  // Load all Clauses into the presolver and remove them from the current model.
+}  // namespace
+
+// TODO(user): What to do with the at_most_one/exactly_one constraints?
+// currently we do not take them into account here.
+bool CpModelPresolver::PresolvePureSatPart() {
+  // TODO(user): Reenable some SAT presolve with
+  // keep_all_feasible_solutions set to true.
+  if (context_->ModelIsUnsat()) return true;
+  if (context_->params().keep_all_feasible_solutions_in_presolve()) return true;
+
+  // Compute a dense re-indexing for the Booleans of the problem.
+  int num_variables = 0;
+  int num_ignored_variables = 0;
+  const int total_num_vars = context_->working_model->variables().size();
+  std::vector<int> new_index(total_num_vars, -1);
+  std::vector<int> new_to_old_index;
+  for (int i = 0; i < total_num_vars; ++i) {
+    if (!context_->CanBeUsedAsLiteral(i)) {
+      ++num_ignored_variables;
+      continue;
+    }
+
+    // This is important to not assign variable in equivalence to random values.
+    if (context_->VarToConstraints(i).empty()) continue;
+
+    new_to_old_index.push_back(i);
+    new_index[i] = num_variables++;
+    DCHECK_EQ(num_variables, new_to_old_index.size());
+  }
+
+  // The conversion from proto index to remapped Literal.
+  auto convert = [&new_index](int ref) {
+    const int index = new_index[PositiveRef(ref)];
+    DCHECK_NE(index, -1);
+    return Literal(BooleanVariable(index), RefIsPositive(ref));
+  };
+
+  // Load the pure-SAT part in a fresh Model.
   //
   // TODO(user): The removing and adding back of the same clause when nothing
   // happens in the presolve "seems" bad. That said, complexity wise, it is
@@ -5068,12 +8524,35 @@ void CpModelPresolver::PresolvePureSatPart() {
   // when we are sure we don't load duplicates at_most_one/implications in the
   // solver. Ideally, the pure sat presolve could be improved to handle at most
   // one, and we could merge this with what the ProcessSetPPC() is doing.
+  Model local_model;
+  local_model.GetOrCreate<TimeLimit>()->MergeWithGlobalTimeLimit(time_limit_);
+  auto* sat_solver = local_model.GetOrCreate<SatSolver>();
+  auto* graph = local_model.GetOrCreate<BinaryImplicationGraph>();
+  sat_solver->SetNumVariables(num_variables);
+
+  // Fix variables if any. Because we might not have reached the presove "fixed
+  // point" above, some variable in the added clauses might be fixed. We need to
+  // indicate this to the SAT presolver.
+  for (const int var : new_to_old_index) {
+    if (context_->IsFixed(var)) {
+      if (context_->LiteralIsTrue(var)) {
+        if (!sat_solver->AddUnitClause({convert(var)})) return false;
+      } else {
+        if (!sat_solver->AddUnitClause({convert(NegatedRef(var))})) {
+          return false;
+        }
+      }
+    }
+  }
+
   std::vector<Literal> clause;
   int num_removed_constraints = 0;
+  int num_ignored_constraints = 0;
+  const bool load_amo = context_->params().load_at_most_ones_in_sat_presolve();
   for (int i = 0; i < context_->working_model->constraints_size(); ++i) {
     const ConstraintProto& ct = context_->working_model->constraints(i);
 
-    if (ct.constraint_case() == ConstraintProto::ConstraintCase::kBoolOr) {
+    if (ct.constraint_case() == ConstraintProto::kBoolOr) {
       ++num_removed_constraints;
       clause.clear();
       for (const int ref : ct.bool_or().literals()) {
@@ -5082,14 +8561,57 @@ void CpModelPresolver::PresolvePureSatPart() {
       for (const int ref : ct.enforcement_literal()) {
         clause.push_back(convert(ref).Negated());
       }
-      sat_presolver.AddClause(clause);
+      sat_solver->AddProblemClause(clause);
 
       context_->working_model->mutable_constraints(i)->Clear();
       context_->UpdateConstraintVariableUsage(i);
       continue;
     }
 
-    if (ct.constraint_case() == ConstraintProto::ConstraintCase::kBoolAnd) {
+    // TODO(user): we should probably make sure we don't have empty amo.
+    if (load_amo && ct.constraint_case() == ConstraintProto::kAtMostOne &&
+        ct.enforcement_literal().empty() &&
+        !ct.at_most_one().literals().empty()) {
+      clause.clear();
+      for (const int ref : ct.at_most_one().literals()) {
+        clause.push_back(convert(ref));
+      }
+      if (!graph->AddAtMostOne(clause)) return false;
+
+      ++num_removed_constraints;
+      context_->working_model->mutable_constraints(i)->Clear();
+      context_->UpdateConstraintVariableUsage(i);
+      continue;
+    }
+
+    if (load_amo && ct.constraint_case() == ConstraintProto::kExactlyOne &&
+        ct.enforcement_literal().empty()) {
+      clause.clear();
+      for (const int ref : ct.exactly_one().literals()) {
+        clause.push_back(convert(ref));
+      }
+
+      // We load it as two constraints.
+      if (!graph->AddAtMostOne(clause)) return false;
+      sat_solver->AddProblemClause(clause);
+
+      ++num_removed_constraints;
+      context_->working_model->mutable_constraints(i)->Clear();
+      context_->UpdateConstraintVariableUsage(i);
+      continue;
+    }
+
+    if (ct.constraint_case() == ConstraintProto::kBoolAnd) {
+      // We currently do not expand "complex" bool_and that would result
+      // in too many literals.
+      const int left_size = ct.enforcement_literal().size();
+      const int right_size = ct.bool_and().literals().size();
+      if (left_size > 1 && right_size > 1 &&
+          (left_size + 1) * right_size > 10'000) {
+        ++num_ignored_constraints;
+        continue;
+      }
+
       ++num_removed_constraints;
       std::vector<Literal> clause;
       for (const int ref : ct.enforcement_literal()) {
@@ -5098,17 +8620,24 @@ void CpModelPresolver::PresolvePureSatPart() {
       clause.push_back(Literal(kNoLiteralIndex));  // will be replaced below.
       for (const int ref : ct.bool_and().literals()) {
         clause.back() = convert(ref);
-        sat_presolver.AddClause(clause);
+        sat_solver->AddProblemClause(clause);
       }
 
       context_->working_model->mutable_constraints(i)->Clear();
       context_->UpdateConstraintVariableUsage(i);
       continue;
     }
+
+    if (ct.constraint_case() == ConstraintProto::CONSTRAINT_NOT_SET) {
+      continue;
+    }
+
+    ++num_ignored_constraints;
   }
+  if (sat_solver->ModelIsUnsat()) return false;
 
   // Abort early if there was no Boolean constraints.
-  if (num_removed_constraints == 0) return;
+  if (num_removed_constraints == 0) return true;
 
   // Mark the variables appearing elsewhere or in the objective as non-removable
   // by the sat presolver.
@@ -5118,43 +8647,170 @@ void CpModelPresolver::PresolvePureSatPart() {
   // removing variable from the objective if they can be set to their "low"
   // objective value, and also removing enforcement literal that can be set to
   // false and don't appear elsewhere.
+  int num_in_extra_constraints = 0;
   std::vector<bool> can_be_removed(num_variables, false);
   for (int i = 0; i < num_variables; ++i) {
-    if (context_->VarToConstraints(i).empty()) {
+    const int var = new_to_old_index[i];
+    if (context_->VarToConstraints(var).empty()) {
       can_be_removed[i] = true;
-    }
-
-    // Because we might not have reached the presove "fixed point" above, some
-    // variable in the added clauses might be fixed. We need to indicate this to
-    // the SAT presolver.
-    if (used_variables.contains(i) && context_->IsFixed(i)) {
-      if (context_->LiteralIsTrue(i)) {
-        sat_presolver.AddClause({convert(i)});
-      } else {
-        sat_presolver.AddClause({convert(NegatedRef(i))});
-      }
+    } else {
+      // That might correspond to the objective or a variable with an affine
+      // relation that is still in the model.
+      ++num_in_extra_constraints;
     }
   }
 
-  // Run the presolve for a small number of passes.
-  // TODO(user): Add probing like we do in the pure sat solver presolve loop?
-  // TODO(user): Add a time limit, this can be slow on big SAT problem.
-  const int num_passes = params.presolve_use_bva() ? 4 : 1;
-  for (int i = 0; i < num_passes; ++i) {
-    const int old_num_clause = sat_postsolver.NumClauses();
-    if (!sat_presolver.Presolve(can_be_removed)) {
-      VLOG(1) << "UNSAT during SAT presolve.";
-      return (void)context_->NotifyThatModelIsUnsat();
+  // The "full solver" postsolve does not support changing the value of a
+  // variable from the solution of the presolved problem, and we do need this
+  // for blocked clause. It should be possible to allow for this by adding extra
+  // variable to the mapping model at presolve and some linking constraints, but
+  // this is messy.
+  //
+  // We also disable this if the user asked for tightened domain as this might
+  // fix variable to a potentially infeasible value, and just correct them later
+  // during postsolve of a particular solution.
+  SatParameters sat_params = context_->params();
+  if (sat_params.debug_postsolve_with_full_solver() ||
+      sat_params.fill_tightened_domains_in_response()) {
+    sat_params.set_presolve_blocked_clause(false);
+  }
+
+  // This option is only supported by the custom postsolve code.
+  if (!sat_params.debug_postsolve_with_full_solver()) {
+    sat_params.set_filter_sat_postsolve_clauses(true);
+  }
+
+  SatPostsolver sat_postsolver(num_variables);
+
+  // If the problem is a pure-SAT problem, we run the new SAT presolver.
+  // This takes more time but it is usually worthwile
+  //
+  // Note that the probing that it does is faster than the
+  // ProbeAndFindEquivalentLiteral() call below, but does not do equivalence
+  // detection as completely, so we still apply the other "probing" code
+  // afterwards even if it will not fix more literals, but it will do one pass
+  // of proper equivalence detection.
+  util_intops::StrongVector<LiteralIndex, LiteralIndex> equiv_map;
+  if (!context_->params().debug_postsolve_with_full_solver() &&
+      num_ignored_variables == 0 && num_ignored_constraints == 0 &&
+      num_in_extra_constraints == 0) {
+    // Some problems are formulated in such a way that our SAT heuristics
+    // simply works without conflict. Get them out of the way first because it
+    // is possible that the presolve lose this "lucky" ordering. This is in
+    // particular the case on the SAT14.crafted.complete-xxx-... problems.
+    if (!LookForTrivialSatSolution(/*deterministic_time_limit=*/1.0,
+                                   &local_model, logger_)) {
+      return false;
     }
+    if (sat_solver->LiteralTrail().Index() == num_variables) {
+      // Problem solved! We should be able to assign the solution.
+      CHECK(FixFromAssignment(sat_solver->Assignment(), new_to_old_index,
+                              context_));
+      return true;
+    }
+
+    SatPresolveOptions options;
+    options.log_info = true;  // log_info;
+    options.extract_binary_clauses_in_probing = false;
+    options.use_transitive_reduction = false;
+    options.deterministic_time_limit =
+        context_->params().presolve_probing_deterministic_time_limit();
+    options.use_equivalence_sat_sweeping =
+        context_->params().inprocessing_use_sat_sweeping();
+
+    auto* inprocessing = local_model.GetOrCreate<Inprocessing>();
+    inprocessing->ProvideLogger(logger_);
+    if (!inprocessing->PresolveLoop(options)) return false;
+    for (const auto& c : local_model.GetOrCreate<PostsolveClauses>()->clauses) {
+      sat_postsolver.Add(c[0], c);
+    }
+
+    // Probe + find equivalent literals.
+    // TODO(user): Use a derived time limit in the probing phase.
+    ProbeAndFindEquivalentLiteral(sat_solver, &sat_postsolver, &equiv_map,
+                                  logger_);
+
+    if (sat_solver->ModelIsUnsat()) return false;
+  } else {
+    // TODO(user): BVA takes time and does not seems to help on the minizinc
+    // benchmarks. So we currently disable it, except if we are on a pure-SAT
+    // problem, where we follow the default (true) or the user specified value.
+    sat_params.set_presolve_use_bva(false);
+  }
+
+  // Disable BVA if we want to keep the symmetries.
+  //
+  // TODO(user): We could still do it, we just need to do in a symmetric way
+  // and also update the generators to take into account the new variables. This
+  // do not seems that easy.
+  if (context_->params().keep_symmetry_in_presolve()) {
+    sat_params.set_presolve_use_bva(false);
+  }
+
+  // Update the time limit of the initial propagation.
+  if (!sat_solver->ResetToLevelZero()) return false;
+  time_limit_->AdvanceDeterministicTime(
+      local_model.GetOrCreate<TimeLimit>()->GetElapsedDeterministicTime());
+
+  // The "old" SAT presolve do not read at_most_ones.
+  // So extract them back from the sat_solver, and only continue with submodel.
+  graph->CleanupAllRemovedAndFixedVariables();
+  graph->ResetAtMostOneIterator();
+  while (true) {
+    absl::Span<const Literal> amo = graph->NextAtMostOne();
+    if (amo.empty()) break;
+
+    // Re-add the amo to the proto.
+    ConstraintProto* ct = context_->working_model->add_constraints();
+    ct->mutable_at_most_one()->mutable_literals()->Reserve(amo.size());
+    for (Literal l : amo) {
+      // TODO(user): ProbeAndFindEquivalentLiteral() do not register newly
+      // found equivalence to the BinaryImplicationGraph, It should so that
+      // we already get cleaned AMO here.
+      if (l.Index() < equiv_map.size()) {
+        l = Literal(equiv_map[l]);
+      }
+
+      const int var = new_to_old_index[l.Variable().value()];
+      ct->mutable_at_most_one()->add_literals(l.IsPositive() ? var
+                                                             : NegatedRef(var));
+
+      // These cannot be removed anymore by the old SAT presolver.
+      can_be_removed[l.Variable().value()] = false;
+    }
+  }
+  context_->UpdateNewConstraintsVariableUsage();
+
+  // Apply the "old" SAT presolve.
+  SatPresolver sat_presolver(&sat_postsolver, logger_);
+  sat_presolver.SetNumVariables(num_variables);
+  if (!equiv_map.empty()) {
+    sat_presolver.SetEquivalentLiteralMapping(equiv_map);
+  }
+  sat_presolver.SetTimeLimit(time_limit_);
+  sat_presolver.SetParameters(sat_params);
+
+  // Load in the presolver.
+  // Register the fixed variables with the postsolver.
+  for (int i = 0; i < sat_solver->LiteralTrail().Index(); ++i) {
+    sat_postsolver.FixVariable(sat_solver->LiteralTrail()[i]);
+  }
+  if (!sat_solver->ExtractClauses(&sat_presolver)) return false;
+
+  // Run the presolve for a small number of passes.
+  // TODO(user): Add a local time limit? this can be slow on big SAT problem.
+  for (int i = 0; i < 1; ++i) {
+    const int old_num_clause = sat_postsolver.NumClauses();
+    if (!sat_presolver.Presolve(can_be_removed)) return false;
     if (old_num_clause == sat_postsolver.NumClauses()) break;
   }
 
   // Add any new variables to our internal structure.
   const int new_num_variables = sat_presolver.NumVariables();
-  if (new_num_variables > context_->working_model->variables_size()) {
+  if (new_num_variables > num_variables) {
     VLOG(1) << "New variables added by the SAT presolver.";
-    for (int i = context_->working_model->variables_size();
-         i < new_num_variables; ++i) {
+    for (int i = num_variables; i < new_num_variables; ++i) {
+      new_to_old_index.push_back(context_->working_model->variables().size());
       IntegerVariableProto* var_proto =
           context_->working_model->add_variables();
       var_proto->add_domain(0);
@@ -5163,281 +8819,478 @@ void CpModelPresolver::PresolvePureSatPart() {
     context_->InitializeNewDomains();
   }
 
+  // Fix variables if any.
+  if (!FixFromAssignment(sat_postsolver.assignment(), new_to_old_index,
+                         context_)) {
+    return false;
+  }
+
   // Add the presolver clauses back into the model.
-  ExtractClauses(/*use_bool_and=*/true, sat_presolver, context_->working_model);
+  ExtractClauses(/*merge_into_bool_and=*/true, new_to_old_index, sat_presolver,
+                 context_->working_model);
 
   // Update the constraints <-> variables graph.
   context_->UpdateNewConstraintsVariableUsage();
 
+  // We mark as removed any variables removed by the pure SAT presolve.
+  // This is mainly to discover or avoid bug as we might have stale entries
+  // in our encoding hash-map for instance.
+  for (int i = 0; i < num_variables; ++i) {
+    const int var = new_to_old_index[i];
+    if (context_->VarToConstraints(var).empty()) {
+      context_->MarkVariableAsRemoved(var);
+    }
+  }
+
   // Add the sat_postsolver clauses to mapping_model.
-  //
-  // TODO(user): Mark removed variable as removed to detect any potential bugs.
-  ExtractClauses(/*use_bool_and=*/false, sat_postsolver,
-                 context_->mapping_model);
+  const std::string name =
+      absl::GetFlag(FLAGS_cp_model_debug_postsolve) ? "sat_postsolver" : "";
+  ExtractClauses(/*merge_into_bool_and=*/false, new_to_old_index,
+                 sat_postsolver, context_->mapping_model, name);
+  return true;
 }
 
-// TODO(user): The idea behind this was that it is better to have an objective
-// as spreaded as possible. However on some problems this have the opposite
-// effect. Like on a triangular matrix where each expansion reduced the size
-// of the objective by one. Investigate and fix?
-void CpModelPresolver::ExpandObjective() {
+void CpModelPresolver::ShiftObjectiveWithExactlyOnes() {
   if (context_->ModelIsUnsat()) return;
 
   // The objective is already loaded in the context, but we re-canonicalize
   // it with the latest information.
   if (!context_->CanonicalizeObjective()) {
-    (void)context_->NotifyThatModelIsUnsat();
     return;
   }
 
-  if (context_->time_limit()->LimitReached()) {
-    context_->WriteObjectiveToProto();
-    return;
-  }
-
-  // If the objective is a single variable, then we can usually remove this
-  // variable if it is only used in one linear equality constraint and we do
-  // just one expansion. This is because the domain of the variable will be
-  // transferred to our objective_domain.
-  int unique_expanded_constraint = -1;
-  const bool objective_was_a_single_variable =
-      context_->ObjectiveMap().size() == 1;
-
-  // To avoid a bad complexity, we need to compute the number of relevant
-  // constraints for each variables.
-  const int num_variables = context_->working_model->variables_size();
+  std::vector<int> exos;
   const int num_constraints = context_->working_model->constraints_size();
-  absl::flat_hash_set<int> relevant_constraints;
-  std::vector<int> var_to_num_relevant_constraints(num_variables, 0);
-  for (int ct_index = 0; ct_index < num_constraints; ++ct_index) {
-    const ConstraintProto& ct = context_->working_model->constraints(ct_index);
-    // Skip everything that is not a linear equality constraint.
-    if (!ct.enforcement_literal().empty() ||
-        ct.constraint_case() != ConstraintProto::ConstraintCase::kLinear ||
-        ct.linear().domain().size() != 2 ||
-        ct.linear().domain(0) != ct.linear().domain(1)) {
-      continue;
-    }
-
-    relevant_constraints.insert(ct_index);
-    const int num_terms = ct.linear().vars_size();
-    for (int i = 0; i < num_terms; ++i) {
-      var_to_num_relevant_constraints[PositiveRef(ct.linear().vars(i))]++;
+  for (int c = 0; c < num_constraints; ++c) {
+    const ConstraintProto& ct = context_->working_model->constraints(c);
+    if (!ct.enforcement_literal().empty()) continue;
+    if (ct.constraint_case() == ConstraintProto::kExactlyOne) {
+      exos.push_back(c);
     }
   }
 
-  std::set<int> var_to_process;
-  for (const auto entry : context_->ObjectiveMap()) {
-    const int var = entry.first;
-    CHECK(RefIsPositive(var));
-    if (var_to_num_relevant_constraints[var] != 0) {
-      var_to_process.insert(var);
-    }
-  }
-
-  // We currently never expand a variable more than once.
-  int num_expansions = 0;
-  int last_expanded_objective_var;
-  absl::flat_hash_set<int> processed_vars;
-  std::vector<int> new_vars_in_objective;
-  while (!relevant_constraints.empty()) {
-    // Find a not yet expanded var.
-    int objective_var = -1;
-    while (!var_to_process.empty()) {
-      const int var = *var_to_process.begin();
-      CHECK(!processed_vars.contains(var));
-      if (var_to_num_relevant_constraints[var] == 0) {
-        processed_vars.insert(var);
-        var_to_process.erase(var);
-        continue;
-      }
-      if (!context_->ObjectiveMap().contains(var)) {
-        // We do not mark it as processed in case it re-appear later.
-        var_to_process.erase(var);
-        continue;
-      }
-      objective_var = var;
-      break;
-    }
-
-    if (objective_var == -1) break;
-    CHECK(RefIsPositive(objective_var));
-    processed_vars.insert(objective_var);
-    var_to_process.erase(objective_var);
-
-    int expanded_linear_index = -1;
-    int64_t objective_coeff_in_expanded_constraint;
-    int64_t size_of_expanded_constraint = 0;
-    const auto& non_deterministic_list =
-        context_->VarToConstraints(objective_var);
-    std::vector<int> constraints_with_objective(non_deterministic_list.begin(),
-                                                non_deterministic_list.end());
-    std::sort(constraints_with_objective.begin(),
-              constraints_with_objective.end());
-    for (const int ct_index : constraints_with_objective) {
-      if (relevant_constraints.count(ct_index) == 0) continue;
-      const ConstraintProto& ct =
-          context_->working_model->constraints(ct_index);
-
-      // This constraint is relevant now, but it will never be later because
-      // it will contain the objective_var which is already processed!
-      relevant_constraints.erase(ct_index);
-      const int num_terms = ct.linear().vars_size();
+  // This is not the same from what we do in ExpandObjective() because we do not
+  // make the minimum cost zero but the second minimum. Note that when we do
+  // that, we still do not degrade the trivial objective bound as we would if we
+  // went any further.
+  //
+  // One reason why this might be beneficial is that it lower the maximum cost
+  // magnitude, making more Booleans with the same cost and thus simplifying
+  // the core optimizer job. I am not 100% sure.
+  //
+  // TODO(user): We need to loop a few time to reach a fixed point. Understand
+  // exactly if there is a fixed-point and how to reach it in a nicer way.
+  int num_shifts = 0;
+  for (int i = 0; i < 3; ++i) {
+    for (const int c : exos) {
+      const ConstraintProto& ct = context_->working_model->constraints(c);
+      const int num_terms = ct.exactly_one().literals().size();
+      if (num_terms <= 1) continue;
+      int64_t min_obj = std::numeric_limits<int64_t>::max();
+      int64_t second_min = std::numeric_limits<int64_t>::max();
       for (int i = 0; i < num_terms; ++i) {
-        var_to_num_relevant_constraints[PositiveRef(ct.linear().vars(i))]--;
-      }
-
-      // Find the coefficient of objective_var in this constraint, and perform
-      // various checks.
-      //
-      // TODO(user): This can crash the program if for some reason the linear
-      // constraint was not canonicalized and contains the objective variable
-      // twice. Currently this can only happen if the time limit was reached
-      // before all constraints where processed, but because we abort at the
-      // beginning of the function when this is the case we should be safe.
-      // However, it might be more robust to just handle this case properly.
-      bool is_present = false;
-      int64_t objective_coeff;
-      for (int i = 0; i < num_terms; ++i) {
-        const int ref = ct.linear().vars(i);
-        const int64_t coeff = ct.linear().coeffs(i);
-        if (PositiveRef(ref) == objective_var) {
-          CHECK(!is_present) << "Duplicate variables not supported.";
-          is_present = true;
-          objective_coeff = (ref == objective_var) ? coeff : -coeff;
-        } else {
-          // This is not possible since we only consider relevant constraints.
-          CHECK(!processed_vars.contains(PositiveRef(ref)));
+        const int literal = ct.exactly_one().literals(i);
+        const int64_t var_obj = context_->ObjectiveCoeff(PositiveRef(literal));
+        const int64_t obj = RefIsPositive(literal) ? var_obj : -var_obj;
+        if (obj < min_obj) {
+          second_min = min_obj;
+          min_obj = obj;
+        } else if (obj < second_min) {
+          second_min = obj;
         }
       }
-      CHECK(is_present);
-
-      // We use the longest equality we can find.
-      //
-      // TODO(user): Deal with objective_coeff with a magnitude greater than
-      // 1? This will only be possible if we change the objective coeff type
-      // to double.
-      if (std::abs(objective_coeff) == 1 &&
-          num_terms > size_of_expanded_constraint) {
-        expanded_linear_index = ct_index;
-        size_of_expanded_constraint = num_terms;
-        objective_coeff_in_expanded_constraint = objective_coeff;
-      }
-    }
-
-    if (expanded_linear_index != -1) {
-      // Update the objective map. Note that the division is possible because
-      // currently we only expand with coeff with a magnitude of 1.
-      CHECK_EQ(std::abs(objective_coeff_in_expanded_constraint), 1);
-      const ConstraintProto& ct =
-          context_->working_model->constraints(expanded_linear_index);
-      if (!context_->SubstituteVariableInObjective(
-              objective_var, objective_coeff_in_expanded_constraint, ct,
-              &new_vars_in_objective)) {
+      if (second_min == 0) continue;
+      ++num_shifts;
+      if (!context_->ShiftCostInExactlyOne(ct.exactly_one().literals(),
+                                           second_min)) {
         if (context_->ModelIsUnsat()) return;
         continue;
       }
-
-      context_->UpdateRuleStats("objective: expanded objective constraint.");
-
-      // Add not yet processed new variables.
-      for (const int var : new_vars_in_objective) {
-        if (!processed_vars.contains(var)) var_to_process.insert(var);
-      }
-
-      // If the objective variable wasn't used in other constraints and it can
-      // be reconstructed whatever the value of the other variables, we can
-      // remove the constraint.
-      //
-      // TODO(user): It should be possible to refactor the code so this is
-      // automatically done by the linear constraint singleton presolve rule.
-      if (context_->VarToConstraints(objective_var).size() == 1 &&
-          !context_->keep_all_feasible_solutions) {
-        // Compute implied domain on objective_var.
-        Domain implied_domain = ReadDomainFromProto(ct.linear());
-        for (int i = 0; i < size_of_expanded_constraint; ++i) {
-          const int ref = ct.linear().vars(i);
-          if (PositiveRef(ref) == objective_var) continue;
-          implied_domain =
-              implied_domain
-                  .AdditionWith(context_->DomainOf(ref).MultiplicationBy(
-                      -ct.linear().coeffs(i)))
-                  .RelaxIfTooComplex();
-        }
-        implied_domain = implied_domain.InverseMultiplicationBy(
-            objective_coeff_in_expanded_constraint);
-
-        // Remove the constraint if the implied domain is included in the
-        // domain of the objective_var term.
-        if (implied_domain.IsIncludedIn(context_->DomainOf(objective_var))) {
-          context_->MarkVariableAsRemoved(objective_var);
-          context_->UpdateRuleStats("objective: removed objective constraint.");
-          *(context_->mapping_model->add_constraints()) = ct;
-          context_->working_model->mutable_constraints(expanded_linear_index)
-              ->Clear();
-          context_->UpdateConstraintVariableUsage(expanded_linear_index);
-        } else {
-          unique_expanded_constraint = expanded_linear_index;
-        }
-      }
-
-      ++num_expansions;
-      last_expanded_objective_var = objective_var;
     }
   }
-
-  // Special case: If we just did one expansion of a single variable, then we
-  // can remove the expanded constraints if the objective wasn't used elsewhere.
-  if (num_expansions == 1 && objective_was_a_single_variable &&
-      unique_expanded_constraint != -1) {
-    context_->UpdateRuleStats(
-        "objective: removed unique objective constraint.");
-    ConstraintProto* mutable_ct = context_->working_model->mutable_constraints(
-        unique_expanded_constraint);
-    *(context_->mapping_model->add_constraints()) = *mutable_ct;
-    mutable_ct->Clear();
-    context_->MarkVariableAsRemoved(last_expanded_objective_var);
-    context_->UpdateConstraintVariableUsage(unique_expanded_constraint);
+  if (num_shifts > 0) {
+    context_->UpdateRuleStats("objective: shifted cost with exactly ones",
+                              num_shifts);
   }
-
-  // We re-do a canonicalization with the final linear expression.
-  if (!context_->CanonicalizeObjective()) {
-    (void)context_->NotifyThatModelIsUnsat();
-    return;
-  }
-  context_->WriteObjectiveToProto();
 }
 
-void CpModelPresolver::MergeNoOverlapConstraints() {
+bool CpModelPresolver::PropagateObjective() {
+  if (!context_->working_model->has_objective()) return true;
+  if (context_->ModelIsUnsat()) return false;
+  context_->WriteObjectiveToProto();
+
+  int64_t min_activity = 0;
+  int64_t max_variation = 0;
+  const CpObjectiveProto& objective = context_->working_model->objective();
+  const int num_terms = objective.vars().size();
+  for (int i = 0; i < num_terms; ++i) {
+    const int var = objective.vars(i);
+    const int64_t coeff = objective.coeffs(i);
+    CHECK(RefIsPositive(var));
+    CHECK_NE(coeff, 0);
+
+    const int64_t domain_min = context_->MinOf(var);
+    const int64_t domain_max = context_->MaxOf(var);
+    if (coeff > 0) {
+      min_activity += coeff * domain_min;
+    } else {
+      min_activity += coeff * domain_max;
+    }
+    const int64_t variation = std::abs(coeff) * (domain_max - domain_min);
+    max_variation = std::max(max_variation, variation);
+  }
+
+  // Infeasible ?
+  const int64_t slack =
+      CapSub(ReadDomainFromProto(objective).Max(), min_activity);
+  if (slack < 0) {
+    return context_->NotifyThatModelIsUnsat(
+        "infeasible while propagating objective");
+  }
+
+  // No propagation ?
+  if (max_variation <= slack) return true;
+
+  int num_propagations = 0;
+  for (int i = 0; i < num_terms; ++i) {
+    const int var = objective.vars(i);
+    const int64_t coeff = objective.coeffs(i);
+    const int64_t domain_min = context_->MinOf(var);
+    const int64_t domain_max = context_->MaxOf(var);
+
+    const int64_t new_diff = slack / std::abs(coeff);
+    if (new_diff >= domain_max - domain_min) continue;
+
+    ++num_propagations;
+    if (coeff > 0) {
+      if (!context_->IntersectDomainWith(
+              var, Domain(domain_min, domain_min + new_diff))) {
+        return false;
+      }
+    } else {
+      if (!context_->IntersectDomainWith(
+              var, Domain(domain_max - new_diff, domain_max))) {
+        return false;
+      }
+    }
+  }
+  CHECK_GT(num_propagations, 0);
+
+  context_->UpdateRuleStats("objective: restricted var domains by propagation",
+                            num_propagations);
+  return true;
+}
+
+// Expand the objective expression in some easy cases.
+//
+// The ideas is to look at all the "tight" equality constraints. These should
+// give a topological order on the variable in which we can perform
+// substitution.
+//
+// Basically, we will only use constraints of the form X' = sum ci * Xi' with ci
+// > 0 and the variable X' being shifted version >= 0. Note that if there is a
+// cycle with these constraints, all variables involved must be equal to each
+// other and likely zero. Otherwise, we can express everything in terms of the
+// leaves.
+//
+// This assumes we are more or less at the propagation fix point, even if we
+// try to address cases where we are not.
+void CpModelPresolver::ExpandObjective() {
+  if (time_limit_->LimitReached()) return;
   if (context_->ModelIsUnsat()) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
 
+  // The objective is already loaded in the context, but we re-canonicalize
+  // it with the latest information.
+  if (!context_->CanonicalizeObjective()) {
+    return;
+  }
+
+  const int num_variables = context_->working_model->variables_size();
   const int num_constraints = context_->working_model->constraints_size();
-  int old_num_no_overlaps = 0;
-  int old_num_intervals = 0;
 
-  // Extract the no-overlap constraints.
-  std::vector<int> disjunctive_index;
-  std::vector<std::vector<Literal>> cliques;
+  // We consider two types of shifted variables (X - LB(X)) and (UB(X) - X).
+  const auto get_index = [](int var, bool to_lb) {
+    return 2 * var + (to_lb ? 0 : 1);
+  };
+  const auto get_lit_index = [](int lit) {
+    return RefIsPositive(lit) ? 2 * lit : 2 * PositiveRef(lit) + 1;
+  };
+  const int num_nodes = 2 * num_variables;
+  std::vector<std::vector<int>> index_graph(num_nodes);
+
+  // TODO(user): instead compute how much each constraint can be further
+  // expanded?
+  std::vector<int> index_to_best_c(num_nodes, -1);
+  std::vector<int> index_to_best_size(num_nodes, 0);
+
+  // Lets see first if there are "tight" constraint and for which variables.
+  // We stop processing constraint if we have too many entries.
+  int num_entries = 0;
+  int num_propagations = 0;
+  int num_tight_variables = 0;
+  int num_tight_constraints = 0;
+  const int kNumEntriesThreshold = 1e8;
   for (int c = 0; c < num_constraints; ++c) {
+    if (num_entries > kNumEntriesThreshold) break;
+
     const ConstraintProto& ct = context_->working_model->constraints(c);
-    if (ct.constraint_case() != ConstraintProto::ConstraintCase::kNoOverlap) {
+    if (!ct.enforcement_literal().empty()) continue;
+
+    // Deal with exactly one.
+    // An exactly one is always tight on the upper bound of one term.
+    //
+    // Note(user): This code assume there is no fixed variable in the exactly
+    // one. We thus make sure the constraint is re-presolved if for some reason
+    // we didn't reach the fixed point before calling this code.
+    if (ct.constraint_case() == ConstraintProto::kExactlyOne) {
+      if (PresolveExactlyOne(context_->working_model->mutable_constraints(c))) {
+        context_->UpdateConstraintVariableUsage(c);
+      }
+    }
+    if (ct.constraint_case() == ConstraintProto::kExactlyOne) {
+      const int num_terms = ct.exactly_one().literals().size();
+      ++num_tight_constraints;
+      num_tight_variables += num_terms;
+      for (int i = 0; i < num_terms; ++i) {
+        if (num_entries > kNumEntriesThreshold) break;
+        const int neg_index = get_lit_index(ct.exactly_one().literals(i)) ^ 1;
+
+        const int old_c = index_to_best_c[neg_index];
+        if (old_c == -1 || num_terms > index_to_best_size[neg_index]) {
+          index_to_best_c[neg_index] = c;
+          index_to_best_size[neg_index] = num_terms;
+        }
+
+        for (int j = 0; j < num_terms; ++j) {
+          if (j == i) continue;
+          const int other_index = get_lit_index(ct.exactly_one().literals(j));
+          ++num_entries;
+          index_graph[neg_index].push_back(other_index);
+        }
+      }
       continue;
     }
-    std::vector<Literal> clique;
-    for (const int i : ct.no_overlap().intervals()) {
-      clique.push_back(Literal(BooleanVariable(i), true));
-    }
-    cliques.push_back(clique);
-    disjunctive_index.push_back(c);
 
-    old_num_no_overlaps++;
-    old_num_intervals += clique.size();
+    // Skip everything that is not a linear equality constraint.
+    if (!IsLinearEqualityConstraint(ct)) continue;
+
+    // Let see for which variable is it "tight". We need a coeff of 1, and that
+    // the implied bounds match exactly.
+    const auto [min_activity, max_activity] =
+        context_->ComputeMinMaxActivity(ct.linear());
+
+    bool is_tight = false;
+    const int64_t rhs = ct.linear().domain(0);
+    const int num_terms = ct.linear().vars_size();
+    for (int i = 0; i < num_terms; ++i) {
+      const int var = ct.linear().vars(i);
+      const int64_t coeff = ct.linear().coeffs(i);
+      if (std::abs(coeff) != 1) continue;
+      if (num_entries > kNumEntriesThreshold) break;
+
+      const int index = get_index(var, coeff > 0);
+
+      const int64_t var_range = context_->MaxOf(var) - context_->MinOf(var);
+      const int64_t implied_shifted_ub = rhs - min_activity;
+      if (implied_shifted_ub <= var_range) {
+        if (implied_shifted_ub < var_range) ++num_propagations;
+        is_tight = true;
+        ++num_tight_variables;
+
+        const int neg_index = index ^ 1;
+        const int old_c = index_to_best_c[neg_index];
+        if (old_c == -1 || num_terms > index_to_best_size[neg_index]) {
+          index_to_best_c[neg_index] = c;
+          index_to_best_size[neg_index] = num_terms;
+        }
+
+        for (int j = 0; j < num_terms; ++j) {
+          if (j == i) continue;
+          const int other_index =
+              get_index(ct.linear().vars(j), ct.linear().coeffs(j) > 0);
+          ++num_entries;
+          index_graph[neg_index].push_back(other_index);
+        }
+      }
+      const int64_t implied_shifted_lb = max_activity - rhs;
+      if (implied_shifted_lb <= var_range) {
+        if (implied_shifted_lb < var_range) ++num_propagations;
+        is_tight = true;
+        ++num_tight_variables;
+
+        const int old_c = index_to_best_c[index];
+        if (old_c == -1 || num_terms > index_to_best_size[index]) {
+          index_to_best_c[index] = c;
+          index_to_best_size[index] = num_terms;
+        }
+
+        for (int j = 0; j < num_terms; ++j) {
+          if (j == i) continue;
+          const int other_index =
+              get_index(ct.linear().vars(j), ct.linear().coeffs(j) < 0);
+          ++num_entries;
+          index_graph[index].push_back(other_index);
+        }
+      }
+    }
+    if (is_tight) ++num_tight_constraints;
   }
-  if (old_num_no_overlaps == 0) return;
+
+  // Note(user): We assume the fixed point was already reached by the linear
+  // presolve, so we don't add extra code here for that. But we still abort if
+  // some are left to cover corner cases were linear a still not propagated.
+  if (num_propagations > 0) {
+    context_->UpdateRuleStats("TODO objective: propagation possible!");
+    return;
+  }
+
+  // In most cases, we should have no cycle and thus a topo order.
+  //
+  // In case there is a cycle, then all member of a strongly connected component
+  // must be equivalent, this is because from X to Y, if we follow the chain we
+  // will have X = non_negative_sum + Y and Y = non_negative_sum + X.
+  //
+  // Moreover, many shifted variables will need to be zero once we start to have
+  // equivalence.
+  //
+  // TODO(user): Make the fixing to zero? or at least when this happen redo
+  // a presolve pass?
+  //
+  // TODO(user): Densify index to only look at variable that can be substituted
+  // further.
+  const auto topo_order = util::graph::FastTopologicalSort(index_graph);
+  if (!topo_order.ok()) {
+    // Tricky: We need to cache all domains to derive the proper relations.
+    // This is because StoreAffineRelation() might propagate them.
+    std::vector<int64_t> var_min(num_variables);
+    std::vector<int64_t> var_max(num_variables);
+    for (int var = 0; var < num_variables; ++var) {
+      var_min[var] = context_->MinOf(var);
+      var_max[var] = context_->MaxOf(var);
+    }
+
+    std::vector<std::vector<int>> components;
+    FindStronglyConnectedComponents(static_cast<int>(index_graph.size()),
+                                    index_graph, &components);
+    for (const std::vector<int>& compo : components) {
+      if (compo.size() == 1) continue;
+
+      const int rep_var = compo[0] / 2;
+      const bool rep_to_lp = (compo[0] % 2) == 0;
+      for (int i = 1; i < compo.size(); ++i) {
+        const int var = compo[i] / 2;
+        const bool to_lb = (compo[i] % 2) == 0;
+
+        // (rep - rep_lb) | (rep_ub - rep) == (var - var_lb) | (var_ub - var)
+        // +/- rep = +/- var + offset.
+        const int64_t rep_coeff = rep_to_lp ? 1 : -1;
+        const int64_t var_coeff = to_lb ? 1 : -1;
+        const int64_t offset =
+            (to_lb ? -var_min[var] : var_max[var]) -
+            (rep_to_lp ? -var_min[rep_var] : var_max[rep_var]);
+        if (!context_->StoreAffineRelation(rep_var, var, rep_coeff * var_coeff,
+                                           rep_coeff * offset)) {
+          return;
+        }
+      }
+      context_->UpdateRuleStats("objective: detected equivalence",
+                                compo.size() - 1);
+    }
+    return;
+  }
+
+  // If the removed variable is now unique, we could remove it if it is implied
+  // free. But this should already be done by RemoveSingletonInLinear(), so we
+  // don't redo it here.
+  int num_expands = 0;
+  int num_issues = 0;
+  for (const int index : *topo_order) {
+    if (index_graph[index].empty()) continue;
+
+    const int var = index / 2;
+    const int64_t obj_coeff = context_->ObjectiveCoeff(var);
+    if (obj_coeff == 0) continue;
+
+    const bool to_lb = (index % 2) == 0;
+    if (obj_coeff > 0 == to_lb) {
+      const ConstraintProto& ct =
+          context_->working_model->constraints(index_to_best_c[index]);
+      if (ct.constraint_case() == ConstraintProto::kExactlyOne) {
+        int64_t shift = 0;
+        for (const int lit : ct.exactly_one().literals()) {
+          if (PositiveRef(lit) == var) {
+            shift = RefIsPositive(lit) ? obj_coeff : -obj_coeff;
+            break;
+          }
+        }
+        if (shift == 0) {
+          ++num_issues;
+          continue;
+        }
+        if (!context_->ShiftCostInExactlyOne(ct.exactly_one().literals(),
+                                             shift)) {
+          if (context_->ModelIsUnsat()) return;
+          ++num_issues;
+          continue;
+        }
+        CHECK_EQ(context_->ObjectiveCoeff(var), 0);
+        ++num_expands;
+        continue;
+      }
+
+      int64_t objective_coeff_in_expanded_constraint = 0;
+      const int num_terms = ct.linear().vars().size();
+      for (int i = 0; i < num_terms; ++i) {
+        if (ct.linear().vars(i) == var) {
+          objective_coeff_in_expanded_constraint = ct.linear().coeffs(i);
+          break;
+        }
+      }
+      if (objective_coeff_in_expanded_constraint == 0) {
+        ++num_issues;
+        continue;
+      }
+
+      if (!context_->SubstituteVariableInObjective(
+              var, objective_coeff_in_expanded_constraint, ct)) {
+        if (context_->ModelIsUnsat()) return;
+        ++num_issues;
+        continue;
+      }
+
+      ++num_expands;
+    }
+  }
+
+  if (num_expands > 0) {
+    context_->UpdateRuleStats("objective: expanded via tight equality",
+                              num_expands);
+  }
+
+  timer.AddCounter("propagations", num_propagations);
+  timer.AddCounter("entries", num_entries);
+  timer.AddCounter("tight_variables", num_tight_variables);
+  timer.AddCounter("tight_constraints", num_tight_constraints);
+  timer.AddCounter("expands", num_expands);
+  timer.AddCounter("issues", num_issues);
+}
+
+bool CpModelPresolver::MergeCliqueConstraintsHelper(
+    std::vector<std::vector<Literal>>& cliques, std::string_view entry_name,
+    PresolveTimer& timer) {
+  if (cliques.empty()) return false;  // Nothing has changed.
+  const int num_constraints = context_->working_model->constraints_size();
+  int old_num_clique_constraints = cliques.size();
+  int old_num_entries = 0;
+  for (const std::vector<Literal>& clique : cliques) {
+    old_num_entries += clique.size();
+  }
 
   // We reuse the max-clique code from sat.
   Model local_model;
   local_model.GetOrCreate<Trail>()->Resize(num_constraints);
+  local_model.GetOrCreate<TimeLimit>()->MergeWithGlobalTimeLimit(time_limit_);
   auto* graph = local_model.GetOrCreate<BinaryImplicationGraph>();
   graph->Resize(num_constraints);
   for (const std::vector<Literal>& clique : cliques) {
@@ -5447,31 +9300,150 @@ void CpModelPresolver::MergeNoOverlapConstraints() {
   }
   CHECK(graph->DetectEquivalences());
   graph->TransformIntoMaxCliques(
-      &cliques, context_->params().merge_no_overlap_work_limit());
+      &cliques,
+      SafeDoubleToInt64(context_->params().merge_no_overlap_work_limit()));
 
-  // Replace each no-overlap with an extended version, or remove if empty.
-  int new_num_no_overlaps = 0;
-  int new_num_intervals = 0;
+  time_limit_->ResetHistory();
+
+  // Update the number of constraints and entries after the max-clique.
+  int new_num_clique_constraints = 0;
+  int new_num_entries = 0;
+  for (const std::vector<Literal>& clique : cliques) {
+    if (clique.empty()) continue;
+    new_num_clique_constraints++;
+    new_num_entries += clique.size();
+  }
+
+  if (old_num_clique_constraints != new_num_clique_constraints ||
+      old_num_entries != new_num_entries) {
+    timer.AddMessage(absl::StrCat(
+        "Merged ", Plural(old_num_clique_constraints, "constraint"), " with ",
+        Plural(old_num_entries, entry_name), " into ",
+        Plural(new_num_clique_constraints, "constraint"), " with ",
+        Plural(new_num_entries, entry_name)));
+    return true;
+  }
+
+  return false;  // Nothing has changed.
+}
+
+bool CpModelPresolver::MergeNoOverlapConstraints() {
+  PresolveTimer timer("MergeNoOverlap", logger_, time_limit_);
+  if (context_->ModelIsUnsat()) return false;
+  if (time_limit_->LimitReached()) return true;
+
+  const int num_constraints = context_->working_model->constraints_size();
+  // Extract the no-overlap constraints with no enforcement literals.
+  // TODO(user): generalize this to merge constraints with the same
+  // enforcement literals?
+  std::vector<int> disjunctive_index;
+  std::vector<std::vector<Literal>> cliques;
+  for (int c = 0; c < num_constraints; ++c) {
+    const ConstraintProto& ct = context_->working_model->constraints(c);
+    if (ct.constraint_case() != ConstraintProto::kNoOverlap) continue;
+    if (HasEnforcementLiteral(ct)) continue;
+    std::vector<Literal> clique;
+    for (const int i : ct.no_overlap().intervals()) {
+      clique.push_back(Literal(BooleanVariable(i), true));
+    }
+    cliques.push_back(clique);
+    disjunctive_index.push_back(c);
+  }
+
+  if (!MergeCliqueConstraintsHelper(cliques, "interval", timer)) {
+    return true;  // Nothing to do, and model is SAT.
+  }
+
+  // Remove previous no_overlap constraints and add the new recomputed ones.
   for (int i = 0; i < cliques.size(); ++i) {
     const int ct_index = disjunctive_index[i];
-    ConstraintProto* ct =
-        context_->working_model->mutable_constraints(ct_index);
-    ct->Clear();
+    if (RemoveConstraint(
+            context_->working_model->mutable_constraints(ct_index))) {
+      context_->UpdateConstraintVariableUsage(ct_index);
+    }
+  }
+  for (int i = 0; i < cliques.size(); ++i) {
     if (cliques[i].empty()) continue;
+    ConstraintProto* ct = context_->working_model->add_constraints();
     for (const Literal l : cliques[i]) {
       CHECK(l.IsPositive());
       ct->mutable_no_overlap()->add_intervals(l.Variable().value());
     }
-    new_num_no_overlaps++;
-    new_num_intervals += cliques[i].size();
   }
-  if (old_num_intervals != new_num_intervals ||
-      old_num_no_overlaps != new_num_no_overlaps) {
-    VLOG(1) << absl::StrCat("Merged ", old_num_no_overlaps, " no-overlaps (",
-                            old_num_intervals, " intervals) into ",
-                            new_num_no_overlaps, " no-overlaps (",
-                            new_num_intervals, " intervals).");
-    context_->UpdateRuleStats("no_overlap: merged constraints");
+  context_->UpdateRuleStats("no_overlap: merged constraints");
+  context_->UpdateNewConstraintsVariableUsage();
+  return true;
+}
+
+bool CpModelPresolver::MergeNoOverlap2DConstraints() {
+  PresolveTimer timer("MergeNoOverlap2D", logger_, time_limit_);
+  if (context_->ModelIsUnsat()) return false;
+  if (time_limit_->LimitReached()) return true;
+
+  const int num_constraints = context_->working_model->constraints_size();
+  // Extract the no-overlap constraints with no enforcement literals.
+  // TODO(user): generalize this to merge constraints with the same
+  // enforcement literals?
+  std::vector<int> no_overlap2d_index;
+  std::vector<std::vector<Literal>> cliques;
+  absl::flat_hash_map<std::pair<int, int>, int> rectangle_to_index;
+  std::vector<std::pair<int, int>> index_to_rectangle;
+  for (int c = 0; c < num_constraints; ++c) {
+    const ConstraintProto& ct = context_->working_model->constraints(c);
+    if (ct.constraint_case() != ConstraintProto::kNoOverlap2D) continue;
+    if (HasEnforcementLiteral(ct)) continue;
+    std::vector<Literal> clique;
+    for (int i = 0; i < ct.no_overlap_2d().x_intervals_size(); ++i) {
+      const std::pair<int, int> rect = {ct.no_overlap_2d().x_intervals(i),
+                                        ct.no_overlap_2d().y_intervals(i)};
+      const auto [it, inserted] =
+          rectangle_to_index.insert({rect, rectangle_to_index.size()});
+      if (inserted) index_to_rectangle.push_back(rect);
+      clique.push_back(Literal(BooleanVariable(it->second), true));
+    }
+    cliques.push_back(clique);
+    no_overlap2d_index.push_back(c);
+  }
+
+  if (!MergeCliqueConstraintsHelper(cliques, "rectangle", timer)) {
+    return true;  // Nothing to do, and model is SAT.
+  }
+
+  // Remove previous no_overlap constraints and add the new recomputed ones.
+  for (int i = 0; i < cliques.size(); ++i) {
+    const int ct_index = no_overlap2d_index[i];
+    if (RemoveConstraint(
+            context_->working_model->mutable_constraints(ct_index))) {
+      context_->UpdateConstraintVariableUsage(ct_index);
+    }
+  }
+  for (int i = 0; i < cliques.size(); ++i) {
+    if (cliques[i].empty()) continue;
+    ConstraintProto* ct = context_->working_model->add_constraints();
+    for (const Literal l : cliques[i]) {
+      CHECK(l.IsPositive());
+      const std::pair<int, int> rect = index_to_rectangle[l.Variable().value()];
+      ct->mutable_no_overlap_2d()->add_x_intervals(rect.first);
+      ct->mutable_no_overlap_2d()->add_y_intervals(rect.second);
+    }
+  }
+  context_->UpdateRuleStats("no_overlap_2d: merged constraints");
+  context_->UpdateNewConstraintsVariableUsage();
+  return true;
+}
+
+void CpModelPresolver::DetectEncodedComplexDomains(PresolveContext* context) {
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
+  if (context->ModelIsUnsat()) return;
+  if (time_limit_->LimitReached()) return;
+
+  std::vector<VariableEncodingLocalModel> local_models =
+      CreateVariableEncodingLocalModels(context);
+  for (VariableEncodingLocalModel& local_model : local_models) {
+    if (time_limit_->LimitReached()) return;
+    if (!DetectAllEncodedComplexDomain(context, local_model)) {
+      return;
+    }
   }
 }
 
@@ -5481,6 +9453,7 @@ void CpModelPresolver::MergeNoOverlapConstraints() {
 // it implies all literals at zero inside the exactly one.
 void CpModelPresolver::TransformIntoMaxCliques() {
   if (context_->ModelIsUnsat()) return;
+  if (context_->params().merge_at_most_one_work_limit() <= 0.0) return;
 
   auto convert = [](int ref) {
     if (RefIsPositive(ref)) return Literal(BooleanVariable(ref), true);
@@ -5489,11 +9462,12 @@ void CpModelPresolver::TransformIntoMaxCliques() {
   const int num_constraints = context_->working_model->constraints_size();
 
   // Extract the bool_and and at_most_one constraints.
+  // TODO(user): use probing info?
   std::vector<std::vector<Literal>> cliques;
 
   for (int c = 0; c < num_constraints; ++c) {
     ConstraintProto* ct = context_->working_model->mutable_constraints(c);
-    if (ct->constraint_case() == ConstraintProto::ConstraintCase::kAtMostOne) {
+    if (ct->constraint_case() == ConstraintProto::kAtMostOne) {
       std::vector<Literal> clique;
       for (const int ref : ct->at_most_one().literals()) {
         clique.push_back(convert(ref));
@@ -5502,8 +9476,7 @@ void CpModelPresolver::TransformIntoMaxCliques() {
       if (RemoveConstraint(ct)) {
         context_->UpdateConstraintVariableUsage(c);
       }
-    } else if (ct->constraint_case() ==
-               ConstraintProto::ConstraintCase::kBoolAnd) {
+    } else if (ct->constraint_case() == ConstraintProto::kBoolAnd) {
       if (ct->enforcement_literal().size() != 1) continue;
       const Literal enforcement = convert(ct->enforcement_literal(0));
       for (const int ref : ct->bool_and().literals()) {
@@ -5534,8 +9507,9 @@ void CpModelPresolver::TransformIntoMaxCliques() {
   if (!graph->DetectEquivalences()) {
     return (void)context_->NotifyThatModelIsUnsat();
   }
-  graph->TransformIntoMaxCliques(
-      &cliques, context_->params().merge_at_most_one_work_limit());
+  graph->MergeAtMostOnes(
+      absl::MakeSpan(cliques),
+      SafeDoubleToInt64(context_->params().merge_at_most_one_work_limit()));
 
   // Add the Boolean variable equivalence detected by DetectEquivalences().
   // Those are needed because TransformIntoMaxCliques() will replace all
@@ -5544,9 +9518,11 @@ void CpModelPresolver::TransformIntoMaxCliques() {
     const Literal l = Literal(BooleanVariable(var), true);
     if (graph->RepresentativeOf(l) != l) {
       const Literal r = graph->RepresentativeOf(l);
-      context_->StoreBooleanEqualityRelation(
-          var, r.IsPositive() ? r.Variable().value()
-                              : NegatedRef(r.Variable().value()));
+      if (!context_->StoreBooleanEqualityRelation(
+              var, r.IsPositive() ? r.Variable().value()
+                                  : NegatedRef(r.Variable().value()))) {
+        return;
+      }
     }
   }
 
@@ -5571,45 +9547,174 @@ void CpModelPresolver::TransformIntoMaxCliques() {
   }
   context_->UpdateNewConstraintsVariableUsage();
   if (num_new_cliques != num_old_cliques) {
-    context_->UpdateRuleStats("at_most_one: transformed into max clique.");
+    context_->UpdateRuleStats("at_most_one: transformed into max clique");
   }
 
   if (num_old_cliques != num_new_cliques ||
       num_literals_before != num_literals_after) {
-    SOLVER_LOG(logger_, "[MaxClique] Merged ", num_old_cliques, "(",
+    SOLVER_LOG(logger_, "[MaxClique] Merged ", num_old_cliques, " with ",
                num_literals_before, " literals) into ", num_new_cliques, "(",
                num_literals_after, " literals) at_most_ones.");
   }
 }
 
-namespace {
+void CpModelPresolver::TransformClausesToExactlyOne() {
+  if (context_->ModelIsUnsat()) return;
+  if (!context_->params().find_clauses_that_are_exactly_one()) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
 
-bool IsAffineIntAbs(ConstraintProto* ct) {
-  if (ct->constraint_case() != ConstraintProto::kLinMax ||
-      ct->lin_max().exprs_size() != 2 ||
-      ct->lin_max().target().vars_size() > 1 ||
-      ct->lin_max().exprs(0).vars_size() != 1 ||
-      ct->lin_max().exprs(1).vars_size() != 1) {
-    return false;
+  auto convert = [](int ref) {
+    if (RefIsPositive(ref)) return Literal(BooleanVariable(ref), true);
+    return Literal(BooleanVariable(NegatedRef(ref)), false);
+  };
+  const int num_constraints = context_->working_model->constraints_size();
+
+  // We reuse the BinaryImplicationGraph code to "propagate" 2-SAT.
+  Model local_model;
+  const int num_variables = context_->working_model->variables().size();
+  local_model.GetOrCreate<Trail>()->Resize(num_variables);
+  auto* graph = local_model.GetOrCreate<BinaryImplicationGraph>();
+  graph->Resize(num_variables);
+
+  // Extract the bool_and and at_most_one constraints.
+  // TODO(user): use probing info?
+  int num_amos = 0;
+  std::vector<Literal> tmp_clique;
+  std::vector<int> clause_indices;
+  std::vector<std::vector<Literal>> clauses;
+  for (int c = 0; c < num_constraints; ++c) {
+    ConstraintProto* ct = context_->working_model->mutable_constraints(c);
+    if (ct->constraint_case() == ConstraintProto::kAtMostOne) {
+      tmp_clique.clear();
+      for (const int ref : ct->at_most_one().literals()) {
+        tmp_clique.push_back(convert(ref));
+      }
+      ++num_amos;
+      if (!graph->AddAtMostOne(tmp_clique)) {
+        return (void)context_->NotifyThatModelIsUnsat();
+      }
+    } else if (ct->constraint_case() == ConstraintProto::kBoolAnd) {
+      if (ct->enforcement_literal().size() != 1) continue;
+      const Literal enforcement = convert(ct->enforcement_literal(0));
+      for (const int ref : ct->bool_and().literals()) {
+        if (ref == ct->enforcement_literal(0)) continue;
+        ++num_amos;
+        if (!graph->AddAtMostOne({enforcement, convert(ref).Negated()})) {
+          return (void)context_->NotifyThatModelIsUnsat();
+        }
+      }
+    } else if (ct->constraint_case() == ConstraintProto::kBoolOr) {
+      if (!ct->enforcement_literal().empty()) continue;
+      clause_indices.push_back(c);
+      std::vector<Literal> clause;
+      clause.reserve(ct->bool_or().literals().size());
+      for (const int ref : ct->bool_or().literals()) {
+        clause.push_back(convert(ref));
+      }
+      clauses.push_back(std::move(clause));
+    }
   }
 
-  const LinearArgumentProto& lin_max = ct->lin_max();
-  if (lin_max.exprs(0).offset() != -lin_max.exprs(1).offset()) return false;
-  if (PositiveRef(lin_max.exprs(0).vars(0)) !=
-      PositiveRef(lin_max.exprs(1).vars(0))) {
-    return false;
+  if (!graph->DetectEquivalences()) {
+    return (void)context_->NotifyThatModelIsUnsat();
   }
 
-  const int64_t left_coeff = RefIsPositive(lin_max.exprs(0).vars(0))
-                                 ? lin_max.exprs(0).coeffs(0)
-                                 : -lin_max.exprs(0).coeffs(0);
-  const int64_t right_coeff = RefIsPositive(lin_max.exprs(1).vars(0))
-                                  ? lin_max.exprs(1).coeffs(0)
-                                  : -lin_max.exprs(1).coeffs(0);
-  return left_coeff == -right_coeff;
+  // Add the Boolean variable equivalence detected by DetectEquivalences().
+  // Those are needed because TransformIntoMaxCliques() will replace all
+  // variable by its representative.
+  for (int var = 0; var < num_variables; ++var) {
+    const Literal l = Literal(BooleanVariable(var), true);
+    if (graph->RepresentativeOf(l) != l) {
+      const Literal r = graph->RepresentativeOf(l);
+      if (!context_->StoreBooleanEqualityRelation(
+              var, r.IsPositive() ? r.Variable().value()
+                                  : NegatedRef(r.Variable().value()))) {
+        return;
+      }
+    }
+  }
+
+  auto signature = [](absl::Span<const Literal> literals) {
+    uint64_t result = 0;
+    for (const Literal l : literals) {
+      result |= (l.Index().value()) & 63;
+    }
+    return result;
+  };
+  auto implied_signature = [](absl::Span<const Literal> literals) {
+    uint64_t result = literals[0].Index().value() & 63;
+    for (const Literal l : literals.subspan(1)) {
+      result |= (l.NegatedIndex().value()) & 63;
+    }
+    return result;
+  };
+
+  // Probe variables (using only amo graph) and filter clauses.
+  //
+  // TODO(user): be faster. with one "probing" we can look at all the clauses
+  // containing that literal and filter them.
+  int num_transformed = 0;
+  int num_checked = 0;
+  util_intops::StrongVector<LiteralIndex, int> count(2 * num_variables, 0);
+  util_intops::StrongVector<LiteralIndex, int> signatures(2 * num_variables, 0);
+  for (int i = 0; i < clauses.size(); ++i) {
+    ++num_checked;
+    bool is_exo = true;
+    const int clause_size = clauses[i].size();
+
+    // First heuristic scan.
+    timer.TrackSimpleLoop(clause_size);
+    const uint64_t clause_signature = signature(clauses[i]);
+    for (const Literal l : clauses[i]) {
+      if (count[l] == 0) continue;
+      if (count[l] < clause_size || (clause_signature & ~signatures[l])) {
+        is_exo = false;
+        break;
+      }
+    }
+    if (!is_exo) continue;
+
+    timer.TrackSimpleLoop(clause_size);
+    for (const Literal l : clauses[i]) {
+      graph->ResetWorkDone();
+      absl::Span<const Literal> implied = graph->GetAllImpliedLiterals(l);
+      CHECK_GT(implied.size(), 0);  // Always contain l.
+      count[l] = implied.size();
+      signatures[l] = implied_signature(implied);
+      timer.AddToWork(graph->WorkDone() * 1e-9);
+      if (implied.size() < clause_size || (clause_signature & ~signatures[l])) {
+        is_exo = false;
+        break;
+      }
+      timer.TrackSimpleLoop(clause_size);
+      for (const Literal o : clauses[i]) {
+        if (o == l) continue;
+        if (!graph->LiteralIsImplied(o.Negated())) {
+          is_exo = false;
+          break;
+        }
+      }
+      if (!is_exo) break;
+    }
+    if (is_exo) {
+      ++num_transformed;
+      context_->UpdateRuleStats("clauses: transformed into exactly one");
+      google::protobuf::RepeatedField<int32_t> tmp =
+          context_->working_model->constraints(clause_indices[i])
+              .bool_or()
+              .literals();
+      *(context_->working_model->mutable_constraints(clause_indices[i])
+            ->mutable_exactly_one()
+            ->mutable_literals()) = tmp;
+    }
+    if (timer.WorkLimitIsReached()) break;
+  }
+
+  timer.AddCounter("num_amos", num_amos);
+  timer.AddCounter("num_clauses", clauses.size());
+  timer.AddCounter("num_transformed", num_transformed);
+  timer.AddCounter("num_checked", num_checked);
 }
-
-}  // namespace
 
 bool CpModelPresolver::PresolveOneConstraint(int c) {
   if (context_->ModelIsUnsat()) return false;
@@ -5627,56 +9732,42 @@ bool CpModelPresolver::PresolveOneConstraint(int c) {
 
   // Call the presolve function for this constraint if any.
   switch (ct->constraint_case()) {
-    case ConstraintProto::ConstraintCase::kBoolOr:
+    case ConstraintProto::kBoolOr:
       return PresolveBoolOr(ct);
-    case ConstraintProto::ConstraintCase::kBoolAnd:
+    case ConstraintProto::kBoolAnd:
       return PresolveBoolAnd(ct);
-    case ConstraintProto::ConstraintCase::kAtMostOne:
+    case ConstraintProto::kAtMostOne:
       return PresolveAtMostOne(ct);
-    case ConstraintProto::ConstraintCase::kExactlyOne:
+    case ConstraintProto::kExactlyOne:
       return PresolveExactlyOne(ct);
-    case ConstraintProto::ConstraintCase::kBoolXor:
+    case ConstraintProto::kBoolXor:
       return PresolveBoolXor(ct);
-    case ConstraintProto::ConstraintCase::kLinMax:
+    case ConstraintProto::kLinMax:
       if (CanonicalizeLinearArgument(*ct, ct->mutable_lin_max())) {
         context_->UpdateConstraintVariableUsage(c);
       }
-      if (IsAffineIntAbs(ct)) {
-        return PresolveIntAbs(ct);
-      } else {
-        return PresolveLinMax(ct);
-      }
-    case ConstraintProto::ConstraintCase::kIntProd:
+      return PresolveLinMax(c, ct);
+    case ConstraintProto::kIntProd:
       if (CanonicalizeLinearArgument(*ct, ct->mutable_int_prod())) {
         context_->UpdateConstraintVariableUsage(c);
       }
       return PresolveIntProd(ct);
-    case ConstraintProto::ConstraintCase::kIntDiv:
+    case ConstraintProto::kIntDiv:
       if (CanonicalizeLinearArgument(*ct, ct->mutable_int_div())) {
         context_->UpdateConstraintVariableUsage(c);
       }
-      return PresolveIntDiv(ct);
-    case ConstraintProto::ConstraintCase::kIntMod:
+      return PresolveIntDiv(c, ct);
+    case ConstraintProto::kIntMod:
       if (CanonicalizeLinearArgument(*ct, ct->mutable_int_mod())) {
         context_->UpdateConstraintVariableUsage(c);
       }
-      return PresolveIntMod(ct);
-    case ConstraintProto::ConstraintCase::kLinear: {
-      // In the presence of affine relation, it is possible that the sign of a
-      // variable change during canonicalization, and a variable that could
-      // freely move in one direction can no longer do so. So we make sure we
-      // always remove c from all the maps before re-inserting it in
-      // PropagateDomainsInLinear().
-      //
-      // TODO(user): The move in only one direction code is redundant with the
-      // dual bound strengthening code. So maybe we don't need both.
-      for (const int ref : ct->linear().vars()) {
-        const int var = PositiveRef(ref);
-        context_->var_to_lb_only_constraints[var].erase(c);
-        context_->var_to_ub_only_constraints[var].erase(c);
+      return PresolveIntMod(c, ct);
+    case ConstraintProto::kLinear: {
+      bool changed = false;
+      if (!CanonicalizeLinear(ct, &changed)) {
+        return true;
       }
-
-      if (CanonicalizeLinear(ct)) {
+      if (changed) {
         context_->UpdateConstraintVariableUsage(c);
       }
       if (PropagateDomainsInLinear(c, ct)) {
@@ -5704,225 +9795,314 @@ bool CpModelPresolver::PresolveOneConstraint(int c) {
       if (PresolveLinearOnBooleans(ct)) {
         context_->UpdateConstraintVariableUsage(c);
       }
-      if (ct->constraint_case() == ConstraintProto::kLinear) {
-        const int old_num_enforcement_literals = ct->enforcement_literal_size();
-        ExtractEnforcementLiteralFromLinearConstraint(c, ct);
-        if (ct->constraint_case() ==
-            ConstraintProto::ConstraintCase::CONSTRAINT_NOT_SET) {
+
+      // If we extracted some enforcement, we redo some presolve.
+      const int old_num_enforcement_literals = ct->enforcement_literal_size();
+      ExtractEnforcementLiteralFromLinearConstraint(c, ct);
+      if (context_->ModelIsUnsat()) return false;
+      if (ct->enforcement_literal_size() > old_num_enforcement_literals) {
+        if (DivideLinearByGcd(ct)) {
           context_->UpdateConstraintVariableUsage(c);
-          return true;
         }
-        if (ct->enforcement_literal_size() > old_num_enforcement_literals &&
-            PresolveSmallLinear(ct)) {
+        if (PresolveSmallLinear(ct)) {
           context_->UpdateConstraintVariableUsage(c);
         }
       }
 
-      // Note that it is important for this to be last, so that if a constraint
-      // is marked as being in one direction, no other presolve is applied until
-      // it is processed again and unmarked at the beginning of this case.
-      if (ct->constraint_case() == ConstraintProto::kLinear &&
-          DetectAndProcessOneSidedLinearConstraint(c, ct)) {
+      if (PresolveDiophantine(ct)) {
         context_->UpdateConstraintVariableUsage(c);
       }
+
+      TryToReduceCoefficientsOfLinearConstraint(c, ct);
       return false;
     }
-    case ConstraintProto::ConstraintCase::kInterval:
+    case ConstraintProto::kInterval:
       return PresolveInterval(c, ct);
-    case ConstraintProto::ConstraintCase::kInverse:
+    case ConstraintProto::kInverse:
       return PresolveInverse(ct);
-    case ConstraintProto::ConstraintCase::kElement:
-      return PresolveElement(ct);
-    case ConstraintProto::ConstraintCase::kTable:
+    case ConstraintProto::kElement:
+      return PresolveElement(c, ct);
+    case ConstraintProto::kTable:
       return PresolveTable(ct);
-    case ConstraintProto::ConstraintCase::kAllDiff:
+    case ConstraintProto::kAllDiff:
       return PresolveAllDiff(ct);
-    case ConstraintProto::ConstraintCase::kNoOverlap:
+    case ConstraintProto::kNoOverlap:
+      DetectDuplicateIntervals(c,
+                               ct->mutable_no_overlap()->mutable_intervals());
       return PresolveNoOverlap(ct);
-    case ConstraintProto::ConstraintCase::kNoOverlap2D:
-      return PresolveNoOverlap2D(c, ct);
-    case ConstraintProto::ConstraintCase::kCumulative:
+    case ConstraintProto::kNoOverlap2D: {
+      const bool changed = PresolveNoOverlap2D(c, ct);
+      if (ct->constraint_case() == ConstraintProto::kNoOverlap2D) {
+        // For 2D, we don't exploit index duplication between x/y so it is not
+        // important to do it beforehand. Moreover in some situation
+        // PresolveNoOverlap2D() remove a lot of interval, so better to do it
+        // afterwards.
+        DetectDuplicateIntervals(
+            c, ct->mutable_no_overlap_2d()->mutable_x_intervals());
+        DetectDuplicateIntervals(
+            c, ct->mutable_no_overlap_2d()->mutable_y_intervals());
+      }
+      return changed;
+    }
+    case ConstraintProto::kCumulative:
+      DetectDuplicateIntervals(c,
+                               ct->mutable_cumulative()->mutable_intervals());
       return PresolveCumulative(ct);
-    case ConstraintProto::ConstraintCase::kCircuit:
+    case ConstraintProto::kCircuit:
       return PresolveCircuit(ct);
-    case ConstraintProto::ConstraintCase::kRoutes:
+    case ConstraintProto::kRoutes:
       return PresolveRoutes(ct);
-    case ConstraintProto::ConstraintCase::kAutomaton:
+    case ConstraintProto::kAutomaton:
       return PresolveAutomaton(ct);
-    case ConstraintProto::ConstraintCase::kReservoir:
+    case ConstraintProto::kReservoir:
       return PresolveReservoir(ct);
     default:
       return false;
   }
 }
 
-// This is called with constraint c1 whose literals are included in the literals
-// of c2.
-//
 // Returns false iff the model is UNSAT.
-bool CpModelPresolver::ProcessSetPPCSubset(
-    int c1, int c2, const std::vector<int>& c2_minus_c1,
-    const std::vector<int>& original_constraint_index,
-    std::vector<bool>* marked_for_removal) {
-  if (context_->ModelIsUnsat()) return false;
+bool CpModelPresolver::ProcessSetPPCSubset(int subset_c, int superset_c,
+                                           absl::flat_hash_set<int>* tmp_set,
+                                           bool* remove_subset,
+                                           bool* remove_superset,
+                                           bool* stop_processing_superset) {
+  ConstraintProto* subset_ct =
+      context_->working_model->mutable_constraints(subset_c);
+  ConstraintProto* superset_ct =
+      context_->working_model->mutable_constraints(superset_c);
 
-  CHECK(!(*marked_for_removal)[c1]);
-  CHECK(!(*marked_for_removal)[c2]);
+  if ((subset_ct->constraint_case() == ConstraintProto::kBoolOr ||
+       subset_ct->constraint_case() == ConstraintProto::kExactlyOne) &&
+      (superset_ct->constraint_case() == ConstraintProto::kAtMostOne ||
+       superset_ct->constraint_case() == ConstraintProto::kExactlyOne)) {
+    context_->UpdateRuleStats("setppc: bool_or in at_most_one");
 
-  ConstraintProto* ct1 = context_->working_model->mutable_constraints(
-      original_constraint_index[c1]);
-  ConstraintProto* ct2 = context_->working_model->mutable_constraints(
-      original_constraint_index[c2]);
+    tmp_set->clear();
+    if (subset_ct->constraint_case() == ConstraintProto::kBoolOr) {
+      tmp_set->insert(subset_ct->bool_or().literals().begin(),
+                      subset_ct->bool_or().literals().end());
+    } else {
+      tmp_set->insert(subset_ct->exactly_one().literals().begin(),
+                      subset_ct->exactly_one().literals().end());
+    }
 
-  if ((ct1->constraint_case() == ConstraintProto::kBoolOr ||
-       ct1->constraint_case() == ConstraintProto::kExactlyOne) &&
-      (ct2->constraint_case() == ConstraintProto::kAtMostOne ||
-       ct2->constraint_case() == ConstraintProto::kExactlyOne)) {
-    context_->UpdateRuleStats("setppc: bool_or in at_most_one.");
-
-    // Fix extras in c2 to 0, note that these will be removed from the
+    // Fix extras in superset_c to 0, note that these will be removed from the
     // constraint later.
-    for (const int literal : c2_minus_c1) {
+    for (const int literal :
+         superset_ct->constraint_case() == ConstraintProto::kAtMostOne
+             ? superset_ct->at_most_one().literals()
+             : superset_ct->exactly_one().literals()) {
+      if (tmp_set->contains(literal)) continue;
       if (!context_->SetLiteralToFalse(literal)) return false;
       context_->UpdateRuleStats("setppc: fixed variables");
     }
 
-    // Change c2 to exactly_one if not already.
-    if (ct2->constraint_case() != ConstraintProto::kExactlyOne) {
-      ConstraintProto copy = *ct2;
-      (*ct2->mutable_exactly_one()->mutable_literals()) =
+    // Change superset_c to exactly_one if not already.
+    if (superset_ct->constraint_case() != ConstraintProto::kExactlyOne) {
+      ConstraintProto copy = *superset_ct;
+      (*superset_ct->mutable_exactly_one()->mutable_literals()) =
           copy.at_most_one().literals();
     }
 
-    // Remove c1.
-    (*marked_for_removal)[c1] = true;
-    ct1->Clear();
-    context_->UpdateConstraintVariableUsage(original_constraint_index[c1]);
+    *remove_subset = true;
     return true;
   }
 
-  if ((ct1->constraint_case() == ConstraintProto::kBoolOr ||
-       ct1->constraint_case() == ConstraintProto::kExactlyOne) &&
-      ct2->constraint_case() == ConstraintProto::kBoolOr) {
+  if ((subset_ct->constraint_case() == ConstraintProto::kBoolOr ||
+       subset_ct->constraint_case() == ConstraintProto::kExactlyOne) &&
+      superset_ct->constraint_case() == ConstraintProto::kBoolOr) {
     context_->UpdateRuleStats("setppc: removed dominated constraints");
-
-    (*marked_for_removal)[c2] = true;
-    ct2->Clear();
-    context_->UpdateConstraintVariableUsage(original_constraint_index[c2]);
+    *remove_superset = true;
     return true;
   }
 
-  if (ct1->constraint_case() == ConstraintProto::kAtMostOne &&
-      (ct2->constraint_case() == ConstraintProto::kAtMostOne ||
-       ct2->constraint_case() == ConstraintProto::kExactlyOne)) {
+  if (subset_ct->constraint_case() == ConstraintProto::kAtMostOne &&
+      (superset_ct->constraint_case() == ConstraintProto::kAtMostOne ||
+       superset_ct->constraint_case() == ConstraintProto::kExactlyOne)) {
     context_->UpdateRuleStats("setppc: removed dominated constraints");
-    (*marked_for_removal)[c1] = true;
-    ct1->Clear();
-    context_->UpdateConstraintVariableUsage(original_constraint_index[c1]);
+    *remove_subset = true;
     return true;
   }
 
-  if (ct1->constraint_case() == ConstraintProto::kExactlyOne &&
-      ct2->constraint_case() == ConstraintProto::kLinear) {
-    // If we have an exactly one in a linear, we can shift the coefficients of
-    // all these variables by any constant value. For now, since we only deal
-    // with positive coefficient, we shift by the min.
-    //
-    // TODO(user): It might be more interesting to maximize the number of terms
-    // that are shifted to zero to reduce the constraint size.
-    absl::flat_hash_set<int> literals(ct1->exactly_one().literals().begin(),
-                                      ct1->exactly_one().literals().end());
-    int64_t min_coeff = std::numeric_limits<int64_t>::max();
+  // Note(user): Only the exactly one should really be needed, the intersection
+  // is taken care of by ProcessAtMostOneAndLinear() in a better way.
+  if (subset_ct->constraint_case() == ConstraintProto::kExactlyOne &&
+      superset_ct->constraint_case() == ConstraintProto::kLinear) {
+    tmp_set->clear();
+    int64_t min_sum = std::numeric_limits<int64_t>::max();
+    int64_t max_sum = std::numeric_limits<int64_t>::min();
+    tmp_set->insert(subset_ct->exactly_one().literals().begin(),
+                    subset_ct->exactly_one().literals().end());
+
+    // Compute the min/max on the subset of the sum that correspond the exo.
     int num_matches = 0;
-    for (int i = 0; i < ct2->linear().vars().size(); ++i) {
-      const int var = ct2->linear().vars(i);
-      if (literals.contains(var)) {
+    temp_ct_.Clear();
+    Domain reachable(0);
+    std::vector<std::pair<int64_t, int>> coeff_counts;
+    for (int i = 0; i < superset_ct->linear().vars().size(); ++i) {
+      const int var = superset_ct->linear().vars(i);
+      const int64_t coeff = superset_ct->linear().coeffs(i);
+      if (tmp_set->contains(var)) {
         ++num_matches;
-        min_coeff = std::min(min_coeff, std::abs(ct2->linear().coeffs(i)));
+        min_sum = std::min(min_sum, coeff);
+        max_sum = std::max(max_sum, coeff);
+        coeff_counts.push_back({superset_ct->linear().coeffs(i), 1});
+      } else {
+        reachable =
+            reachable
+                .AdditionWith(
+                    context_->DomainOf(var).ContinuousMultiplicationBy(coeff))
+                .RelaxIfTooComplex();
+        temp_ct_.mutable_linear()->add_vars(var);
+        temp_ct_.mutable_linear()->add_coeffs(coeff);
       }
     }
 
-    // If a linear constraint contains more than one at most one, after
-    // processing one, we might no longer have an inclusion.
-    if (num_matches != literals.size()) return true;
+    // If a linear constraint contains more than one at_most_one or exactly_one,
+    // after processing one, we might no longer have an inclusion.
+    //
+    // TODO(user): If we have multiple disjoint inclusion, we can propagate
+    // more. For instance on neos-1593097.mps we basically have a
+    // weighted_sum_over_at_most_one1 >= weighted_sum_over_at_most_one2.
+    if (num_matches != tmp_set->size()) return true;
+    if (subset_ct->constraint_case() == ConstraintProto::kExactlyOne) {
+      context_->UpdateRuleStats("setppc: exactly_one included in linear");
+    } else {
+      context_->UpdateRuleStats("setppc: at_most_one included in linear");
+    }
 
-    // TODO(user): It would be cool to propagate other variable domains with
-    // the knowledge that the partial sum in is [min_coeff, max_coeff]. I am
-    // a bit relunctant to duplicate the code for that here.
+    reachable = reachable.AdditionWith(Domain(min_sum, max_sum));
+    const Domain superset_rhs = ReadDomainFromProto(superset_ct->linear());
+    if (reachable.IsIncludedIn(superset_rhs)) {
+      // The constraint is trivial !
+      context_->UpdateRuleStats("setppc: removed trivial linear constraint");
+      *remove_superset = true;
+      return true;
+    }
+    if (reachable.IntersectionWith(superset_rhs).IsEmpty()) {
+      // TODO(user): constraint might become bool_or.
+      *stop_processing_superset = true;
+      return MarkConstraintAsFalse(
+          superset_ct, "setppc: removed infeasible linear constraint");
+    }
+
+    // We reuse the normal linear constraint code to propagate domains of
+    // the other variable using the inclusion information.
+    if (superset_ct->enforcement_literal().empty()) {
+      CHECK_GT(num_matches, 0);
+      FillDomainInProto(ReadDomainFromProto(superset_ct->linear())
+                            .AdditionWith(Domain(-max_sum, -min_sum)),
+                        temp_ct_.mutable_linear());
+      PropagateDomainsInLinear(/*ct_index=*/-1, &temp_ct_);
+    }
+
+    // If we have an exactly one in a linear, we can shift the coefficients of
+    // all these variables by any constant value. We select a value that reduces
+    // the number of terms the most.
+    std::sort(coeff_counts.begin(), coeff_counts.end());
     int new_size = 0;
-    for (int i = 0; i < ct2->linear().vars().size(); ++i) {
-      const int var = ct2->linear().vars(i);
-      int64_t coeff = ct2->linear().coeffs(i);
-      if (literals.contains(var)) {
-        CHECK_GE(coeff, 0);
-        if (coeff == min_coeff) continue;  // delete term.
-        coeff -= min_coeff;
+    for (int i = 0; i < coeff_counts.size(); ++i) {
+      if (new_size > 0 &&
+          coeff_counts[i].first == coeff_counts[new_size - 1].first) {
+        coeff_counts[new_size - 1].second++;
+        continue;
       }
-      ct2->mutable_linear()->set_vars(new_size, var);
-      ct2->mutable_linear()->set_coeffs(new_size, coeff);
-      ++new_size;
+      coeff_counts[new_size++] = coeff_counts[i];
+    }
+    coeff_counts.resize(new_size);
+    int64_t best = 0;
+    int64_t best_count = 0;
+    for (const auto [coeff, count] : coeff_counts) {
+      if (count > best_count) {
+        best = coeff;
+        best_count = count;
+      }
+    }
+    if (best != 0) {
+      LinearConstraintProto new_ct = superset_ct->linear();
+      int new_size = 0;
+      for (int i = 0; i < new_ct.vars().size(); ++i) {
+        const int var = new_ct.vars(i);
+        int64_t coeff = new_ct.coeffs(i);
+        if (tmp_set->contains(var)) {
+          if (coeff == best) continue;  // delete term.
+          coeff -= best;
+        }
+        new_ct.set_vars(new_size, var);
+        new_ct.set_coeffs(new_size, coeff);
+        ++new_size;
+      }
+
+      new_ct.mutable_vars()->Truncate(new_size);
+      new_ct.mutable_coeffs()->Truncate(new_size);
+      FillDomainInProto(ReadDomainFromProto(new_ct).AdditionWith(Domain(-best)),
+                        &new_ct);
+      if (!PossibleIntegerOverflow(*context_->working_model, new_ct.vars(),
+                                   new_ct.coeffs())) {
+        *superset_ct->mutable_linear() = std::move(new_ct);
+        context_->UpdateConstraintVariableUsage(superset_c);
+        context_->UpdateRuleStats("setppc: reduced linear coefficients");
+      }
     }
 
-    ct2->mutable_linear()->mutable_vars()->Truncate(new_size);
-    ct2->mutable_linear()->mutable_coeffs()->Truncate(new_size);
-    FillDomainInProto(
-        ReadDomainFromProto(ct2->linear()).AdditionWith(Domain(-min_coeff)),
-        ct2->mutable_linear());
-    context_->UpdateConstraintVariableUsage(original_constraint_index[c2]);
-    context_->UpdateRuleStats("setppc: reduced linear coefficients.");
+    return true;
   }
 
-  // We can't deduce anything in the last remaining case:
-  // ct1->constraint_case() == ConstraintProto::kAtMostOne &&
-  // ct2->constraint_case() == ConstraintProto::kBoolOr
-
+  // We can't deduce anything in the last remaining cases, like an at most one
+  // in an at least one.
   return true;
 }
 
 // TODO(user): TransformIntoMaxCliques() convert the bool_and to
 // at_most_one, but maybe also duplicating them into bool_or would allow this
 // function to do more presolving.
-bool CpModelPresolver::ProcessSetPPC() {
-  const int num_constraints = context_->working_model->constraints_size();
+//
+// TODO(user): If an exactly_one of size n and a clause/amo share n - 1 terms,
+// then we can simplify the clause by using the last term of the exactly_one
+// inside it instead.
+void CpModelPresolver::ProcessSetPPC() {
+  if (time_limit_->LimitReached()) return;
+  if (context_->ModelIsUnsat()) return;
+  if (context_->params().presolve_inclusion_work_limit() == 0) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
 
-  // Signatures of all the constraints. In the signature the bit i is 1 if it
-  // contains a literal l such that l%64 = i.
-  std::vector<uint64_t> signatures;
+  // TODO(user): compute on the fly instead of temporary storing variables?
+  CompactVectorVector<int> storage;
+  InclusionDetector detector(storage, time_limit_);
+  detector.SetWorkLimit(context_->params().presolve_inclusion_work_limit());
 
-  // Graph of constraints to literals. constraint_literals[c] contains all the
-  // literals in constraint indexed by 'c' in sorted order.
-  std::vector<std::vector<int>> constraint_literals;
-
-  // Graph of literals to constraints. literals_to_constraints[l] contains the
-  // vector of constraint indices in which literal 'l' or 'neg(l)' appears.
-  std::vector<std::vector<int>> literals_to_constraints;
-
-  // vector of booleans indicating if the constraint was already removed.
-  std::vector<bool> removed;
-
-  // The containers above use the local indices for setppc constraints. We store
-  // the original constraint indices corresponding to those local indices here.
-  std::vector<int> original_constraint_index;
-
-  // Fill the initial constraint <-> literal graph, compute signatures and
-  // initialize other containers defined above.
-  int num_setppc_constraints = 0;
+  // We use an encoding of literal that allows to index arrays.
   std::vector<int> temp_literals;
-  if (context_->ModelIsUnsat()) return false;
+  const int num_constraints = context_->working_model->constraints_size();
+  std::vector<int> relevant_constraints;
   for (int c = 0; c < num_constraints; ++c) {
     ConstraintProto* ct = context_->working_model->mutable_constraints(c);
-    if (ct->constraint_case() == ConstraintProto::kBoolOr ||
-        ct->constraint_case() == ConstraintProto::kAtMostOne ||
-        ct->constraint_case() == ConstraintProto::kExactlyOne) {
+    const auto type = ct->constraint_case();
+    if (type == ConstraintProto::kBoolOr ||
+        type == ConstraintProto::kAtMostOne ||
+        type == ConstraintProto::kExactlyOne) {
       // Because TransformIntoMaxCliques() can detect literal equivalence
       // relation, we make sure the constraints are presolved before being
       // inspected.
       if (PresolveOneConstraint(c)) {
         context_->UpdateConstraintVariableUsage(c);
       }
-      if (context_->ModelIsUnsat()) return false;
-      constraint_literals.push_back(GetLiteralsFromSetPPCConstraint(*ct));
-    } else if (ct->constraint_case() == ConstraintProto::kLinear) {
+      if (context_->ModelIsUnsat()) return;
+
+      temp_literals.clear();
+      for (const int ref :
+           type == ConstraintProto::kAtMostOne ? ct->at_most_one().literals()
+           : type == ConstraintProto::kBoolOr  ? ct->bool_or().literals()
+                                               : ct->exactly_one().literals()) {
+        temp_literals.push_back(
+            Literal(BooleanVariable(PositiveRef(ref)), RefIsPositive(ref))
+                .Index()
+                .value());
+      }
+      relevant_constraints.push_back(c);
+      detector.AddPotentialSet(storage.Add(temp_literals));
+    } else if (type == ConstraintProto::kLinear) {
       // We also want to test inclusion with the pseudo-Boolean part of
       // linear constraints of size at least 3. Exactly one of size two are
       // equivalent literals, and we already deal with this case.
@@ -5935,102 +10115,174 @@ bool CpModelPresolver::ProcessSetPPC() {
       const int size = ct->linear().vars().size();
       if (size <= 2) continue;
 
-      // TODO(user): We only deal with every literal having a positive coeff
-      // here. We should probably do the same with all negative. We can also
-      // consider NegatedRef(var).
+      // TODO(user): We only deal with positive var here. Ideally we should
+      // match the VARIABLES of the at_most_one/exactly_one with the VARIABLES
+      // of the linear, and complement all variable to have a literal inclusion.
       temp_literals.clear();
       for (int i = 0; i < size; ++i) {
         const int var = ct->linear().vars(i);
-        const int64_t coeff = ct->linear().coeffs(i);
         if (!context_->CanBeUsedAsLiteral(var)) continue;
         if (!RefIsPositive(var)) continue;
-        if (coeff < 0) continue;
-        temp_literals.push_back(var);
+        temp_literals.push_back(
+            Literal(BooleanVariable(var), true).Index().value());
       }
-      if (temp_literals.size() <= 2) continue;
-      constraint_literals.push_back(temp_literals);
+      if (temp_literals.size() > 2) {
+        // Note that we only care about the linear being the superset.
+        relevant_constraints.push_back(c);
+        detector.AddPotentialSuperset(storage.Add(temp_literals));
+      }
+    }
+  }
+
+  absl::flat_hash_set<int> tmp_set;
+  int64_t num_inclusions = 0;
+  detector.DetectInclusions([&](int subset, int superset) {
+    ++num_inclusions;
+    bool remove_subset = false;
+    bool remove_superset = false;
+    bool stop_processing_superset = false;
+    const int subset_c = relevant_constraints[subset];
+    const int superset_c = relevant_constraints[superset];
+    detector.IncreaseWorkDone(storage[subset].size());
+    detector.IncreaseWorkDone(storage[superset].size());
+    if (!ProcessSetPPCSubset(subset_c, superset_c, &tmp_set, &remove_subset,
+                             &remove_superset, &stop_processing_superset)) {
+      detector.Stop();
+      return;
+    }
+    if (remove_subset) {
+      context_->working_model->mutable_constraints(subset_c)->Clear();
+      context_->UpdateConstraintVariableUsage(subset_c);
+      detector.StopProcessingCurrentSubset();
+    }
+    if (remove_superset) {
+      context_->working_model->mutable_constraints(superset_c)->Clear();
+      context_->UpdateConstraintVariableUsage(superset_c);
+      detector.StopProcessingCurrentSuperset();
+    }
+    if (stop_processing_superset) {
+      context_->UpdateConstraintVariableUsage(superset_c);
+      detector.StopProcessingCurrentSuperset();
+    }
+  });
+
+  timer.AddToWork(detector.work_done() * 1e-9);
+  timer.AddCounter("relevant_constraints", relevant_constraints.size());
+  timer.AddCounter("num_inclusions", num_inclusions);
+}
+
+void CpModelPresolver::DetectIncludedEnforcement() {
+  if (time_limit_->LimitReached()) return;
+  if (context_->ModelIsUnsat()) return;
+  if (context_->params().presolve_inclusion_work_limit() == 0) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
+
+  // TODO(user): compute on the fly instead of temporary storing variables?
+  std::vector<int> relevant_constraints;
+  CompactVectorVector<int> storage;
+  InclusionDetector detector(storage, time_limit_);
+  detector.SetWorkLimit(context_->params().presolve_inclusion_work_limit());
+
+  std::vector<int> temp_literals;
+  const int num_constraints = context_->working_model->constraints_size();
+  for (int c = 0; c < num_constraints; ++c) {
+    ConstraintProto* ct = context_->working_model->mutable_constraints(c);
+    if (ct->enforcement_literal().size() <= 1) continue;
+
+    // Make sure there is no x => x.
+    if (ct->constraint_case() == ConstraintProto::kBoolAnd) {
+      if (PresolveOneConstraint(c)) {
+        context_->UpdateConstraintVariableUsage(c);
+      }
+      if (context_->ModelIsUnsat()) return;
+    }
+
+    // We use an encoding of literal that allows to index arrays.
+    temp_literals.clear();
+    for (const int ref : ct->enforcement_literal()) {
+      temp_literals.push_back(
+          Literal(BooleanVariable(PositiveRef(ref)), RefIsPositive(ref))
+              .Index()
+              .value());
+    }
+    relevant_constraints.push_back(c);
+
+    // We only deal with bool_and included in other. Not the other way around,
+    // Altough linear enforcement included in bool_and does happen.
+    if (ct->constraint_case() == ConstraintProto::kBoolAnd) {
+      detector.AddPotentialSet(storage.Add(temp_literals));
     } else {
-      continue;
-    }
-
-    uint64_t signature = 0;
-    for (const int literal : constraint_literals.back()) {
-      const int positive_literal = PositiveRef(literal);
-      signature |= (int64_t{1} << (positive_literal % 64));
-      DCHECK_GE(positive_literal, 0);
-      if (positive_literal >= literals_to_constraints.size()) {
-        literals_to_constraints.resize(positive_literal + 1);
-      }
-      literals_to_constraints[positive_literal].push_back(
-          num_setppc_constraints);
-    }
-    signatures.push_back(signature);
-    removed.push_back(false);
-    original_constraint_index.push_back(c);
-    num_setppc_constraints++;
-  }
-  VLOG(1) << "#setppc constraints: " << num_setppc_constraints;
-
-  // Set of constraint pairs which are already compared.
-  absl::flat_hash_set<std::pair<int, int>> compared_constraints;
-  for (const std::vector<int>& literal_to_constraints :
-       literals_to_constraints) {
-    for (int index1 = 0; index1 < literal_to_constraints.size(); ++index1) {
-      if (context_->time_limit()->LimitReached()) return true;
-
-      const int c1 = literal_to_constraints[index1];
-      if (removed[c1]) continue;
-      const std::vector<int>& c1_literals = constraint_literals[c1];
-
-      for (int index2 = index1 + 1; index2 < literal_to_constraints.size();
-           ++index2) {
-        const int c2 = literal_to_constraints[index2];
-        if (removed[c2]) continue;
-        if (removed[c1]) break;
-
-        // TODO(user): This should not happen. Investigate.
-        if (c1 == c2) continue;
-
-        CHECK_LT(c1, c2);
-        if (compared_constraints.contains(std::pair<int, int>(c1, c2))) {
-          continue;
-        }
-        compared_constraints.insert({c1, c2});
-
-        // Hard limit on number of comparisons to avoid spending too much time
-        // here.
-        if (compared_constraints.size() >= 50000) return true;
-
-        const bool smaller = (signatures[c1] & ~signatures[c2]) == 0;
-        const bool larger = (signatures[c2] & ~signatures[c1]) == 0;
-        if (!(smaller || larger)) continue;
-
-        // Check if literals in c1 is subset of literals in c2 or vice versa.
-        const std::vector<int>& c2_literals = constraint_literals[c2];
-
-        // TODO(user): Try avoiding computation of set differences if
-        // possible.
-        std::vector<int> c1_minus_c2;
-        gtl::STLSetDifference(c1_literals, c2_literals, &c1_minus_c2);
-        std::vector<int> c2_minus_c1;
-        gtl::STLSetDifference(c2_literals, c1_literals, &c2_minus_c1);
-
-        if (c1_minus_c2.empty()) {  // c1 included in c2.
-          if (!ProcessSetPPCSubset(c1, c2, c2_minus_c1,
-                                   original_constraint_index, &removed)) {
-            return false;
-          }
-        } else if (c2_minus_c1.empty()) {  // c2 included in c1.
-          if (!ProcessSetPPCSubset(c2, c1, c1_minus_c2,
-                                   original_constraint_index, &removed)) {
-            return false;
-          }
-        }
-      }
+      detector.AddPotentialSuperset(storage.Add(temp_literals));
     }
   }
 
-  return true;
+  int64_t num_inclusions = 0;
+  detector.DetectInclusions([&](int subset, int superset) {
+    ++num_inclusions;
+    const int subset_c = relevant_constraints[subset];
+    const int superset_c = relevant_constraints[superset];
+    ConstraintProto* subset_ct =
+        context_->working_model->mutable_constraints(subset_c);
+    ConstraintProto* superset_ct =
+        context_->working_model->mutable_constraints(superset_c);
+    if (subset_ct->constraint_case() != ConstraintProto::kBoolAnd) return;
+
+    context_->tmp_literal_set.clear();
+    for (const int ref : subset_ct->bool_and().literals()) {
+      context_->tmp_literal_set.insert(ref);
+    }
+
+    // Filter superset enforcement.
+    {
+      int new_size = 0;
+      for (const int ref : superset_ct->enforcement_literal()) {
+        if (context_->tmp_literal_set.contains(ref)) {
+          context_->UpdateRuleStats("bool_and: filtered enforcement");
+        } else if (context_->tmp_literal_set.contains(NegatedRef(ref))) {
+          context_->UpdateRuleStats("bool_and: never enforced");
+          superset_ct->Clear();
+          context_->UpdateConstraintVariableUsage(superset_c);
+          detector.StopProcessingCurrentSuperset();
+          return;
+        } else {
+          superset_ct->set_enforcement_literal(new_size++, ref);
+        }
+      }
+      if (new_size < superset_ct->bool_and().literals().size()) {
+        context_->UpdateConstraintVariableUsage(superset_c);
+        superset_ct->mutable_enforcement_literal()->Truncate(new_size);
+      }
+    }
+
+    if (superset_ct->constraint_case() == ConstraintProto::kBoolAnd) {
+      int new_size = 0;
+      for (const int ref : superset_ct->bool_and().literals()) {
+        if (context_->tmp_literal_set.contains(ref)) {
+          context_->UpdateRuleStats("bool_and: filtered literal");
+        } else if (context_->tmp_literal_set.contains(NegatedRef(ref))) {
+          if (!MarkConstraintAsFalse(superset_ct, "bool_and: must be false"))
+            return;
+          context_->UpdateConstraintVariableUsage(superset_c);
+          detector.StopProcessingCurrentSuperset();
+          return;
+        } else {
+          superset_ct->mutable_bool_and()->set_literals(new_size++, ref);
+        }
+      }
+      if (new_size < superset_ct->bool_and().literals().size()) {
+        context_->UpdateConstraintVariableUsage(superset_c);
+        superset_ct->mutable_bool_and()->mutable_literals()->Truncate(new_size);
+      }
+    }
+
+    if (superset_ct->constraint_case() == ConstraintProto::kLinear) {
+      context_->UpdateRuleStats("TODO bool_and enforcement in linear enf");
+    }
+  });
+
+  timer.AddToWork(1e-9 * static_cast<double>(detector.work_done()));
+  timer.AddCounter("relevant_constraints", relevant_constraints.size());
+  timer.AddCounter("num_inclusions", num_inclusions);
 }
 
 // Note that because we remove the linear constraint, this will not be called
@@ -6054,6 +10306,8 @@ bool CpModelPresolver::ProcessEncodingFromLinear(
       var_to_ref[PositiveRef(ref)] = ref;
     }
   } else {
+    CHECK_EQ(at_most_or_exactly_one.constraint_case(),
+             ConstraintProto::kExactlyOne);
     in_exactly_one = true;
     for (const int ref : at_most_or_exactly_one.exactly_one().literals()) {
       CHECK(!var_to_ref.contains(PositiveRef(ref)));
@@ -6074,7 +10328,7 @@ bool CpModelPresolver::ProcessEncodingFromLinear(
     const auto it = var_to_ref.find(PositiveRef(ref));
 
     if (it == var_to_ref.end()) {
-      CHECK_EQ(target_ref, std::numeric_limits<int>::min()) << "Uniqueness ";
+      CHECK_EQ(target_ref, std::numeric_limits<int>::min()) << "Uniqueness";
       CHECK_EQ(std::abs(coeff), 1);
       target_ref = coeff == 1 ? ref : NegatedRef(ref);
       continue;
@@ -6096,13 +10350,13 @@ bool CpModelPresolver::ProcessEncodingFromLinear(
     // We didn't find the unique integer variable. This might have happenned
     // because by processing other encoding we might end up with a fully boolean
     // constraint. Just abort, it will be presolved later.
-    context_->UpdateRuleStats("encoding: candidate linear is all Boolean now.");
+    context_->UpdateRuleStats("encoding: candidate linear is all boolean now");
     return true;
   }
 
   // Extract the encoding.
   std::vector<int64_t> all_values;
-  std::map<int64_t, std::vector<int>> value_to_refs;
+  absl::btree_map<int64_t, std::vector<int>> value_to_refs;
   for (const auto& [ref, coeff] : ref_to_coeffs) {
     const int64_t value = rhs - coeff;
     all_values.push_back(value);
@@ -6132,16 +10386,23 @@ bool CpModelPresolver::ProcessEncodingFromLinear(
 
   if (context_->CanBeUsedAsLiteral(target_ref)) {
     // If target is now a literal, lets not process it here.
-    context_->UpdateRuleStats("encoding: candidate linear is all Boolean now.");
+    context_->UpdateRuleStats("encoding: candidate linear is all boolean now");
     return true;
   }
 
   // Encode the encoding.
   absl::flat_hash_set<int64_t> value_set;
-  for (const int64_t v : context_->DomainOf(target_ref).Values()) {
+  const Domain target_domain =
+      RefIsPositive(target_ref)
+          ? context_->DomainOf(target_ref)
+          : context_->DomainOf(NegatedRef(target_ref)).Negation();
+  for (const int64_t v : target_domain.Values()) {
     value_set.insert(v);
   }
-  for (const auto& [value, literals] : value_to_refs) {
+  for (auto& [value, literals] : value_to_refs) {
+    // For determinism.
+    absl::c_sort(literals);
+
     // If the value is not in the domain, just set all literal to false.
     if (!value_set.contains(value)) {
       for (const int lit : literals) {
@@ -6168,7 +10429,7 @@ bool CpModelPresolver::ProcessEncodingFromLinear(
       // All false means associated_lit is false too.
       // But not for the rhs case if we are not in exactly one.
       if (in_exactly_one || value != rhs) {
-        // TODO(user): Insted of bool_or + implications, we could add an
+        // TODO(user): Instead of bool_or + implications, we could add an
         // exactly one! Experiment with this. In particular it might capture
         // more structure for later heuristic to add the exactly one instead.
         // This also applies to automata/table/element expansion.
@@ -6188,69 +10449,2262 @@ bool CpModelPresolver::ProcessEncodingFromLinear(
   return true;
 }
 
+struct ColumnHashForDuplicateDetection {
+  explicit ColumnHashForDuplicateDetection(
+      CompactVectorVector<int, std::pair<int, int64_t>>* _column)
+      : column(_column) {}
+  std::size_t operator()(int c) const { return absl::HashOf((*column)[c]); }
+
+  CompactVectorVector<int, std::pair<int, int64_t>>* column;
+};
+
+struct ColumnEqForDuplicateDetection {
+  explicit ColumnEqForDuplicateDetection(
+      CompactVectorVector<int, std::pair<int, int64_t>>* _column)
+      : column(_column) {}
+  bool operator()(int a, int b) const {
+    if (a == b) return true;
+
+    // We use absl::span<> comparison.
+    return (*column)[a] == (*column)[b];
+  }
+
+  CompactVectorVector<int, std::pair<int, int64_t>>* column;
+};
+
+// Note that our symmetry-detector will also identify full permutation group
+// for these columns, but it is better to handle that even before. We can
+// also detect variable with different domains but with indentical columns.
+void CpModelPresolver::DetectDuplicateColumns() {
+  if (time_limit_->LimitReached()) return;
+  if (context_->ModelIsUnsat()) return;
+  if (context_->params().keep_all_feasible_solutions_in_presolve()) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
+
+  const int num_vars = context_->working_model->variables().size();
+  const int num_constraints = context_->working_model->constraints().size();
+
+  // Our current implementation require almost a full copy.
+  // First construct a transpose var to columns (constraint_index, coeff).
+  std::vector<int> flat_vars;
+  std::vector<std::pair<int, int64_t>> flat_terms;
+  CompactVectorVector<int, std::pair<int, int64_t>> var_to_columns;
+
+  // We will only support columns that include:
+  // - objective
+  // - linear (non-enforced part)
+  // - at_most_one/exactly_one/clauses (but with positive variable only).
+  //
+  // TODO(user): deal with enforcement_literal, especially bool_and. It is a bit
+  // annoying to have to deal with all kind of constraints. Maybe convert
+  // bool_and to at_most_one first? We already do that in other places. Note
+  // however that an at most one of size 2 means at most 2 columns can be
+  // identical. If we have a bool and with many term on the left, all column
+  // could be indentical, but we have to linearize the constraint first.
+  std::vector<bool> appear_in_amo(num_vars, false);
+  std::vector<bool> appear_in_bool_constraint(num_vars, false);
+  for (int c = 0; c < num_constraints; ++c) {
+    const ConstraintProto& ct = context_->working_model->constraints(c);
+    absl::Span<const int> literals;
+
+    bool is_amo = false;
+    if (ct.constraint_case() == ConstraintProto::kAtMostOne) {
+      is_amo = true;
+      literals = ct.at_most_one().literals();
+    } else if (ct.constraint_case() == ConstraintProto::kExactlyOne) {
+      is_amo = true;  // That works here.
+      literals = ct.exactly_one().literals();
+    } else if (ct.constraint_case() == ConstraintProto::kBoolOr) {
+      literals = ct.bool_or().literals();
+    }
+
+    if (!literals.empty()) {
+      for (const int lit : literals) {
+        // It is okay to ignore terms (the columns will not be full).
+        if (!RefIsPositive(lit)) continue;
+        if (is_amo) appear_in_amo[lit] = true;
+        appear_in_bool_constraint[lit] = true;
+        flat_vars.push_back(lit);
+        flat_terms.push_back({c, 1});
+      }
+      continue;
+    }
+
+    if (ct.constraint_case() == ConstraintProto::kLinear) {
+      const int num_terms = ct.linear().vars().size();
+      for (int i = 0; i < num_terms; ++i) {
+        const int var = ct.linear().vars(i);
+        const int64_t coeff = ct.linear().coeffs(i);
+        flat_vars.push_back(var);
+        flat_terms.push_back({c, coeff});
+      }
+      continue;
+    }
+  }
+
+  // Use kObjectiveConstraint (-1) for the objective.
+  //
+  // TODO(user): deal with equivalent column with different objective value.
+  // It might not be easy to presolve, but we can at least have a single
+  // variable = sum of var appearing only in objective. And we can transfer the
+  // min cost.
+  if (context_->working_model->has_objective()) {
+    context_->WriteObjectiveToProto();
+    const int num_terms = context_->working_model->objective().vars().size();
+    for (int i = 0; i < num_terms; ++i) {
+      const int var = context_->working_model->objective().vars(i);
+      const int64_t coeff = context_->working_model->objective().coeffs(i);
+      flat_vars.push_back(var);
+      flat_terms.push_back({kObjectiveConstraint, coeff});
+    }
+  }
+
+  // Now construct the graph.
+  var_to_columns.ResetFromFlatMapping(flat_vars, flat_terms);
+
+  // Find duplicate columns using an hash map.
+  // We only consider "full" columns.
+  // var -> var_representative using columns hash/comparison.
+  absl::flat_hash_map<int, int, ColumnHashForDuplicateDetection,
+                      ColumnEqForDuplicateDetection>
+      duplicates(
+          /*capacity=*/num_vars,
+          ColumnHashForDuplicateDetection(&var_to_columns),
+          ColumnEqForDuplicateDetection(&var_to_columns));
+  std::vector<int> flat_duplicates;
+  std::vector<int> flat_representatives;
+  for (int var = 0; var < var_to_columns.size(); ++var) {
+    const int size_seen = var_to_columns[var].size();
+    if (size_seen == 0) continue;
+    if (size_seen != context_->VarToConstraints(var).size()) continue;
+
+    // TODO(user): If we have duplicate columns appearing in Boolean constraint
+    // we can only easily substitute if the sum of columns is a Boolean (i.e. if
+    // it appear in an at most one or exactly one). Otherwise we will need to
+    // transform such constraint to linear, do that?
+    if (appear_in_bool_constraint[var] && !appear_in_amo[var]) {
+      context_->UpdateRuleStats(
+          "TODO duplicate: duplicate columns in Boolean constraints");
+      continue;
+    }
+
+    const auto [it, inserted] = duplicates.insert({var, var});
+    if (!inserted) {
+      flat_duplicates.push_back(var);
+      flat_representatives.push_back(it->second);
+    }
+  }
+
+  // Process duplicates.
+  int num_equivalent_classes = 0;
+  CompactVectorVector<int, int> rep_to_dups;
+  rep_to_dups.ResetFromFlatMapping(flat_representatives, flat_duplicates);
+  std::vector<std::pair<int, int64_t>> definition;
+  std::vector<int> var_to_remove;
+  std::vector<int> var_to_rep(num_vars, -1);
+  for (int var = 0; var < rep_to_dups.size(); ++var) {
+    if (rep_to_dups[var].empty()) continue;
+
+    // Since columns are the same, we can introduce a new variable = sum all
+    // columns. Note that the linear expression will not overflow, but the
+    // overflow check also requires that max_sum < int_max/2, which might
+    // happen.
+    //
+    // In the corner case where there is a lot of holes in the domain, and the
+    // sum domain is too complex, we skip. Hopefully this should be rare.
+    definition.clear();
+    definition.push_back({var, 1});
+    Domain domain = context_->DomainOf(var);
+    for (const int other_var : rep_to_dups[var]) {
+      definition.push_back({other_var, 1});
+      domain = domain.AdditionWith(context_->DomainOf(other_var));
+      if (domain.NumIntervals() > 100) break;
+    }
+    if (domain.NumIntervals() > 100) {
+      context_->UpdateRuleStats(
+          "TODO duplicate: domain of the sum is too complex");
+      continue;
+    }
+    if (appear_in_amo[var]) {
+      domain = domain.IntersectionWith(Domain(0, 1));
+    }
+    const int new_var = context_->NewIntVarWithDefinition(
+        domain, definition, /*append_constraint_to_mapping_model=*/true);
+    if (new_var == -1) {
+      context_->UpdateRuleStats("TODO duplicate: possible overflow");
+      continue;
+    }
+
+    var_to_remove.push_back(var);
+    CHECK_EQ(var_to_rep[var], -1);
+    var_to_rep[var] = new_var;
+    for (const int other_var : rep_to_dups[var]) {
+      var_to_remove.push_back(other_var);
+      CHECK_EQ(var_to_rep[other_var], -1);
+      var_to_rep[other_var] = new_var;
+    }
+
+    // Deal with objective right away.
+    const int64_t obj_coeff = context_->ObjectiveCoeff(var);
+    if (obj_coeff != 0) {
+      context_->RemoveVariableFromObjective(var);
+      for (const int other_var : rep_to_dups[var]) {
+        CHECK_EQ(context_->ObjectiveCoeff(other_var), obj_coeff);
+        context_->RemoveVariableFromObjective(other_var);
+      }
+      context_->AddToObjective(new_var, obj_coeff);
+    }
+
+    num_equivalent_classes++;
+  }
+
+  // Lets rescan the model, and remove all variables, replacing them by
+  // the sum. We do that in one O(model size) pass.
+  if (!var_to_remove.empty()) {
+    absl::flat_hash_set<int> seen;
+    std::vector<std::pair<int, int64_t>> new_terms;
+    for (int c = 0; c < num_constraints; ++c) {
+      ConstraintProto* mutable_ct =
+          context_->working_model->mutable_constraints(c);
+
+      seen.clear();
+      new_terms.clear();
+
+      // Deal with bool case.
+      // TODO(user): maybe converting to linear + single code is better?
+      BoolArgumentProto* mutable_arg = nullptr;
+      if (mutable_ct->constraint_case() == ConstraintProto::kAtMostOne) {
+        mutable_arg = mutable_ct->mutable_at_most_one();
+      } else if (mutable_ct->constraint_case() ==
+                 ConstraintProto::kExactlyOne) {
+        mutable_arg = mutable_ct->mutable_exactly_one();
+      } else if (mutable_ct->constraint_case() == ConstraintProto::kBoolOr) {
+        mutable_arg = mutable_ct->mutable_bool_or();
+      }
+      if (mutable_arg != nullptr) {
+        int new_size = 0;
+        const int num_terms = mutable_arg->literals().size();
+        for (int i = 0; i < num_terms; ++i) {
+          const int lit = mutable_arg->literals(i);
+          const int rep = var_to_rep[PositiveRef(lit)];
+          if (rep != -1) {
+            CHECK(RefIsPositive(lit));
+            const auto [_, inserted] = seen.insert(rep);
+            if (inserted) new_terms.push_back({rep, 1});
+            continue;
+          }
+          mutable_arg->set_literals(new_size, lit);
+          ++new_size;
+        }
+        if (new_size == num_terms) continue;  // skip.
+
+        // TODO(user): clear amo/exo of size 1.
+        mutable_arg->mutable_literals()->Truncate(new_size);
+        for (const auto [var, coeff] : new_terms) {
+          mutable_arg->add_literals(var);
+        }
+        context_->UpdateConstraintVariableUsage(c);
+        continue;
+      }
+
+      // Deal with linear case.
+      if (mutable_ct->constraint_case() == ConstraintProto::kLinear) {
+        int new_size = 0;
+        LinearConstraintProto* mutable_linear = mutable_ct->mutable_linear();
+        const int num_terms = mutable_linear->vars().size();
+        for (int i = 0; i < num_terms; ++i) {
+          const int var = mutable_linear->vars(i);
+          const int64_t coeff = mutable_linear->coeffs(i);
+          const int rep = var_to_rep[var];
+          if (rep != -1) {
+            const auto [_, inserted] = seen.insert(rep);
+            if (inserted) new_terms.push_back({rep, coeff});
+            continue;
+          }
+          mutable_linear->set_vars(new_size, var);
+          mutable_linear->set_coeffs(new_size, coeff);
+          ++new_size;
+        }
+        if (new_size == num_terms) continue;  // skip.
+
+        mutable_linear->mutable_vars()->Truncate(new_size);
+        mutable_linear->mutable_coeffs()->Truncate(new_size);
+        for (const auto [var, coeff] : new_terms) {
+          mutable_linear->add_vars(var);
+          mutable_linear->add_coeffs(coeff);
+        }
+        context_->UpdateConstraintVariableUsage(c);
+        continue;
+      }
+    }
+  }
+
+  // We removed all occurrence of "var_to_remove" so we can remove them now.
+  // Note that since we introduce a new variable per equivalence class, we
+  // remove one less for each equivalent class.
+  const int num_var_reduction = var_to_remove.size() - num_equivalent_classes;
+  for (const int var : var_to_remove) {
+    CHECK(context_->VarToConstraints(var).empty());
+    context_->MarkVariableAsRemoved(var);
+  }
+  if (num_var_reduction > 0) {
+    context_->UpdateRuleStats("duplicate: removed duplicated column",
+                              num_var_reduction);
+  }
+
+  timer.AddCounter("num_equiv_classes", num_equivalent_classes);
+  timer.AddCounter("num_removed_vars", num_var_reduction);
+}
+
+void CpModelPresolver::DetectDuplicateConstraints() {
+  if (time_limit_->LimitReached()) return;
+  if (context_->ModelIsUnsat()) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
+
+  // We need the objective written for this.
+  if (context_->working_model->has_objective()) {
+    if (!context_->CanonicalizeObjective()) return;
+    context_->WriteObjectiveToProto();
+  }
+
+  // If we detect duplicate intervals, we will remap constraints using them.
+  std::vector<int> interval_mapping;
+
+  // Remove duplicate constraints.
+  // Note that at this point the objective in the proto should be up to date.
+  //
+  // TODO(user): We might want to do that earlier so that our count of variable
+  // usage is not biased by duplicate constraints.
+  const std::vector<std::pair<int, int>> duplicates =
+      FindDuplicateConstraints(*context_->working_model);
+  timer.AddCounter("duplicates", duplicates.size());
+  for (const auto& [dup, rep] : duplicates) {
+    // Note that it is important to look at the type of the representative in
+    // case the constraint became empty.
+    DCHECK_LT(kObjectiveConstraint, 0);
+    const int type =
+        rep == kObjectiveConstraint
+            ? kObjectiveConstraint
+            : context_->working_model->constraints(rep).constraint_case();
+
+    if (type == ConstraintProto::kInterval) {
+      interval_mapping.resize(context_->working_model->constraints().size(),
+                              -1);
+      CHECK_EQ(interval_mapping[rep], -1);
+      interval_mapping[dup] = rep;
+    }
+
+    // For linear constraint, we merge their rhs since it was ignored in the
+    // FindDuplicateConstraints() call.
+    if (type == ConstraintProto::kLinear) {
+      const Domain rep_domain = ReadDomainFromProto(
+          context_->working_model->constraints(rep).linear());
+      const Domain d = ReadDomainFromProto(
+          context_->working_model->constraints(dup).linear());
+      if (rep_domain != d) {
+        context_->UpdateRuleStats("duplicate: merged rhs of linear constraint");
+        const Domain rhs = rep_domain.IntersectionWith(d);
+        if (rhs.IsEmpty()) {
+          if (!MarkConstraintAsFalse(
+                  context_->working_model->mutable_constraints(rep),
+                  "duplicate: false after merging")) {
+            return;
+          }
+
+          // The representative constraint is no longer a linear constraint,
+          // so we will not enter this type case again and will just remove
+          // all subsequent duplicate linear constraints.
+          context_->UpdateConstraintVariableUsage(rep);
+          continue;
+        }
+        FillDomainInProto(rhs, context_->working_model->mutable_constraints(rep)
+                                   ->mutable_linear());
+      }
+    }
+
+    if (type == kObjectiveConstraint) {
+      context_->UpdateRuleStats(
+          "duplicate: linear constraint parallel to objective");
+      const Domain objective_domain =
+          ReadDomainFromProto(context_->working_model->objective());
+      const Domain d = ReadDomainFromProto(
+          context_->working_model->constraints(dup).linear());
+      if (objective_domain != d) {
+        context_->UpdateRuleStats("duplicate: updated objective domain");
+        const Domain new_domain = objective_domain.IntersectionWith(d);
+        if (new_domain.IsEmpty()) {
+          return (void)context_->NotifyThatModelIsUnsat(
+              "Constraint parallel to the objective makes the objective domain "
+              "empty");
+        }
+        FillDomainInProto(new_domain,
+                          context_->working_model->mutable_objective());
+
+        // TODO(user): this write/read is a bit unclean, but needed.
+        context_->ReadObjectiveFromProto();
+      }
+    }
+
+    // Remove the duplicate constraint.
+    context_->working_model->mutable_constraints(dup)->Clear();
+    context_->UpdateConstraintVariableUsage(dup);
+    context_->UpdateRuleStats("duplicate: removed constraint");
+  }
+
+  if (!interval_mapping.empty()) {
+    context_->UpdateRuleStats("duplicate: remapped duplicate intervals");
+    const int num_constraints = context_->working_model->constraints().size();
+    for (int c = 0; c < num_constraints; ++c) {
+      bool changed = false;
+      ApplyToAllIntervalIndices(
+          [&interval_mapping, &changed](int* ref) {
+            const int new_ref = interval_mapping[*ref];
+            if (new_ref != -1) {
+              changed = true;
+              *ref = new_ref;
+            }
+          },
+          context_->working_model->mutable_constraints(c));
+      if (changed) context_->UpdateConstraintVariableUsage(c);
+    }
+  }
+}
+
+void CpModelPresolver::DetectDuplicateConstraintsWithDifferentEnforcements(
+    const CpModelMapping* mapping, BinaryImplicationGraph* implication_graph,
+    Trail* trail) {
+  if (time_limit_->LimitReached()) return;
+  if (context_->ModelIsUnsat()) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
+
+  // We need the objective written for this.
+  if (context_->working_model->has_objective()) {
+    if (!context_->CanonicalizeObjective()) return;
+    context_->WriteObjectiveToProto();
+  }
+
+  absl::flat_hash_set<Literal> enforcement_vars;
+  std::vector<std::pair<Literal, Literal>> implications_used;
+  // TODO(user): We can also do similar stuff to linear constraint that just
+  // differ at a singleton variable. Or that are equalities. Like if expr + X =
+  // cte and expr + Y = other_cte, we can see that X is in affine relation with
+  // Y.
+  const std::vector<std::pair<int, int>> duplicates_without_enforcement =
+      FindDuplicateConstraints(*context_->working_model, true);
+  timer.AddCounter("without_enforcements",
+                   duplicates_without_enforcement.size());
+  for (const auto& [dup, rep] : duplicates_without_enforcement) {
+    auto* dup_ct = context_->working_model->mutable_constraints(dup);
+    auto* rep_ct = context_->working_model->mutable_constraints(rep);
+
+    if (dup_ct->constraint_case() == ConstraintProto::kInterval) {
+      context_->UpdateRuleStats(
+          "TODO interval: same interval with different enforcement?");
+      continue;
+    }
+
+    // Make sure our enforcement list are up to date: nothing fixed and that
+    // its uses the literal representatives.
+    if (PresolveEnforcementLiteral(dup_ct)) {
+      context_->UpdateConstraintVariableUsage(dup);
+    }
+    if (PresolveEnforcementLiteral(rep_ct)) {
+      context_->UpdateConstraintVariableUsage(rep);
+    }
+
+    // Skip this pair if one of the constraint was simplified
+    if (rep_ct->constraint_case() == ConstraintProto::CONSTRAINT_NOT_SET ||
+        dup_ct->constraint_case() == ConstraintProto::CONSTRAINT_NOT_SET) {
+      continue;
+    }
+
+    // If one of them has no enforcement, then the other can be ignored.
+    // We always keep rep, but clear its enforcement if any.
+    if (dup_ct->enforcement_literal().empty() ||
+        rep_ct->enforcement_literal().empty()) {
+      context_->UpdateRuleStats("duplicate: removed enforced constraint");
+      rep_ct->mutable_enforcement_literal()->Clear();
+      context_->UpdateConstraintVariableUsage(rep);
+      dup_ct->Clear();
+      context_->UpdateConstraintVariableUsage(dup);
+      continue;
+    }
+
+    const int a = rep_ct->enforcement_literal(0);
+    const int b = dup_ct->enforcement_literal(0);
+
+    if (a == NegatedRef(b) && rep_ct->enforcement_literal().size() == 1 &&
+        dup_ct->enforcement_literal().size() == 1) {
+      context_->UpdateRuleStats(
+          "duplicate: both with enforcement and its negation");
+      rep_ct->mutable_enforcement_literal()->Clear();
+      context_->UpdateConstraintVariableUsage(rep);
+      dup_ct->Clear();
+      context_->UpdateConstraintVariableUsage(dup);
+      continue;
+    }
+
+    // Special case. This looks specific but users might reify with a cost
+    // a duplicate constraint. In this case, no need to have two variables,
+    // we can make them equal by duality argument.
+    //
+    // TODO(user): Deal with more general situation? Note that we already
+    // do something similar in dual_bound_strengthening.Strengthen() were we
+    // are more general as we just require an unique blocking constraint rather
+    // than a singleton variable.
+    //
+    // But we could detect that "a <=> constraint" and "b <=> constraint", then
+    // we can also add the equality. Alternatively, we can just introduce a new
+    // variable and merge all duplicate constraint into 1 + bunch of boolean
+    // constraints liking enforcements.
+    if (context_->VariableWithCostIsUniqueAndRemovable(a) &&
+        context_->VariableWithCostIsUniqueAndRemovable(b)) {
+      // Both these case should be presolved before, but it is easy to deal with
+      // if we encounter them here in some corner cases. And the code after
+      // 'continue' uses this, in particular to update the hint.
+      bool skip = false;
+      if (RefIsPositive(a) == context_->ObjectiveCoeff(PositiveRef(a)) > 0) {
+        context_->UpdateRuleStats("duplicate: dual fixing enforcement");
+        if (!context_->SetLiteralToFalse(a)) return;
+        skip = true;
+      }
+      if (RefIsPositive(b) == context_->ObjectiveCoeff(PositiveRef(b)) > 0) {
+        context_->UpdateRuleStats("duplicate: dual fixing enforcement");
+        if (!context_->SetLiteralToFalse(b)) return;
+        skip = true;
+      }
+      if (skip) continue;
+
+      // If there are more than one enforcement literal, then the Booleans
+      // are not necessarily equivalent: if a constraint is disabled by other
+      // literal, we don't want to put a or b at 1 and pay an extra cost.
+      //
+      // TODO(user): If a is alone, then b==1 can implies a == 1.
+      // We can also replace [(b, others) => constraint] with (b, others) <=> a.
+      //
+      // TODO(user): If the other enforcements are the same, we can also add
+      // the equivalence and remove the duplicate constraint.
+      if (rep_ct->enforcement_literal().size() > 1 ||
+          dup_ct->enforcement_literal().size() > 1) {
+        context_->UpdateRuleStats(
+            "TODO duplicate: identical constraint with unique enforcement "
+            "cost");
+        continue;
+      }
+
+      // Sign is correct, i.e. ignoring the constraint is expensive.
+      // The two enforcement can be made equivalent.
+      context_->UpdateRuleStats("duplicate: dual equivalence of enforcement");
+      // If `a` and `b` hints are different then the whole hint satisfies
+      // the enforced constraint. We can thus change them to true (this cannot
+      // increase the objective value thanks to the `skip` test above -- the
+      // objective domain is non-constraining, but this only guarantees that
+      // singleton variables can freely *decrease* the objective).
+      solution_crush_.UpdateLiteralsToFalseIfDifferent(NegatedRef(a),
+                                                       NegatedRef(b));
+      if (!context_->StoreBooleanEqualityRelation(a, b)) return;
+
+      // We can also remove duplicate constraint now. It will be done later but
+      // it seems more efficient to just do it now.
+      if (dup_ct->enforcement_literal().size() == 1 &&
+          rep_ct->enforcement_literal().size() == 1) {
+        dup_ct->Clear();
+        context_->UpdateConstraintVariableUsage(dup);
+        continue;
+      }
+    }
+
+    // Check if the enforcement of one constraint implies the ones of the other.
+    if (implication_graph != nullptr && mapping != nullptr &&
+        trail != nullptr) {
+      for (int i = 0; i < 2; i++) {
+        // When A and B only differ on their enforcement literals and the
+        // enforcements of constraint A implies the enforcements of constraint
+        // B, then constraint A is redundant and we can remove it.
+        const int c_a = i == 0 ? dup : rep;
+        const int c_b = i == 0 ? rep : dup;
+        const auto& ct_a = context_->working_model->constraints(c_a);
+        const auto& ct_b = context_->working_model->constraints(c_b);
+
+        enforcement_vars.clear();
+        implications_used.clear();
+        for (const int proto_lit : ct_b.enforcement_literal()) {
+          const Literal lit = mapping->Literal(proto_lit);
+          DCHECK(!trail->Assignment().LiteralIsAssigned(lit));
+          enforcement_vars.insert(lit);
+        }
+        for (const int proto_lit : ct_a.enforcement_literal()) {
+          const Literal lit = mapping->Literal(proto_lit);
+          DCHECK(!trail->Assignment().LiteralIsAssigned(lit));
+          for (const Literal implication_lit :
+               implication_graph->DirectImplications(lit)) {
+            auto extracted = enforcement_vars.extract(implication_lit);
+            if (!extracted.empty() && lit != implication_lit) {
+              implications_used.push_back({lit, implication_lit});
+            }
+          }
+        }
+        if (enforcement_vars.empty()) {
+          // Tricky: Because we keep track of literal <=> var == value, we
+          // cannot easily simplify linear1 here. This is because a scenario
+          // like this can happen:
+          //
+          // We have registered the fact that a <=> X=1 because we saw two
+          // constraints a => X=1 and not(a) => X!= 1
+          //
+          // Now, we are here and we have:
+          // a => X=1, b => X=1, a => b
+          // So we rewrite this as
+          // a => b, b => X=1
+          //
+          // But later, the PresolveLinearOfSizeOne() see
+          // b => X=1 and just rewrite this as b => a since (a <=> X=1).
+          // This is wrong because the constraint "b => X=1" is needed for the
+          // equivalence (a <=> X=1), but we lost that fact.
+          //
+          // Note(user): In the scenario above we can see that a <=> b, and if
+          // we know that fact, then the transformation is correctly handled.
+          // The bug was triggered when the Probing finished early due to time
+          // limit and we never detected that equivalence.
+          //
+          // TODO(user): Try to find a cleaner way to handle this. We could
+          // query our HasVarValueEncoding() directly here and directly detect a
+          // <=> b. However we also need to figure the case of
+          // half-implications.
+          {
+            if (ct_a.constraint_case() == ConstraintProto::kLinear &&
+                ct_a.linear().vars().size() == 1 &&
+                ct_a.enforcement_literal().size() == 1) {
+              const int var = ct_a.linear().vars(0);
+              const Domain var_domain = context_->DomainOf(var);
+              const Domain rhs =
+                  ReadDomainFromProto(ct_a.linear())
+                      .InverseMultiplicationBy(ct_a.linear().coeffs(0))
+                      .IntersectionWith(var_domain);
+
+              // IsFixed() do not work on empty domain.
+              if (rhs.IsEmpty()) {
+                if (!MarkConstraintAsFalse(rep_ct,
+                                           "duplicate: linear1 infeasible"))
+                  return;
+                if (!MarkConstraintAsFalse(dup_ct,
+                                           "duplicate: linear1 infeasible"))
+                  return;
+                context_->UpdateConstraintVariableUsage(rep);
+                context_->UpdateConstraintVariableUsage(dup);
+                continue;
+              }
+              if (rhs == var_domain) {
+                context_->UpdateRuleStats("duplicate: linear1 always true");
+                rep_ct->Clear();
+                dup_ct->Clear();
+                context_->UpdateConstraintVariableUsage(rep);
+                context_->UpdateConstraintVariableUsage(dup);
+                continue;
+              }
+
+              // We skip if it is a var == value or var != value constraint.
+              if (rhs.IsFixed() ||
+                  rhs.Complement().IntersectionWith(var_domain).IsFixed()) {
+                context_->UpdateRuleStats(
+                    "TODO duplicate: skipped identical encoding constraints");
+                continue;
+              }
+            }
+          }
+
+          context_->UpdateRuleStats(
+              "duplicate: identical constraint with implied enforcements");
+          if (c_a == rep) {
+            // We don't want to remove the representative element of the
+            // duplicates detection, so swap the constraints.
+            rep_ct->Swap(dup_ct);
+            context_->UpdateConstraintVariableUsage(rep);
+          }
+          dup_ct->Clear();
+          context_->UpdateConstraintVariableUsage(dup);
+          // Subtle point: we need to add the implications we used back to the
+          // graph. This is because in some case the implications are only true
+          // in the presence of the "duplicated" constraints.
+          for (const auto& [a, b] : implications_used) {
+            const int proto_lit_a = mapping->GetProtoLiteralFromLiteral(a);
+            const int proto_lit_b = mapping->GetProtoLiteralFromLiteral(b);
+            context_->AddImplication(proto_lit_a, proto_lit_b);
+          }
+          context_->UpdateNewConstraintsVariableUsage();
+          break;
+        }
+      }
+    }
+  }
+}
+
+void CpModelPresolver::DetectDifferentVariables() {
+  if (time_limit_->LimitReached()) return;
+  if (context_->ModelIsUnsat()) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
+
+  // List the variable that are pairwise different, also store in offset[x, y]
+  // the offsets such that x >= y + offset.second OR y >= x + offset.first.
+  std::vector<std::pair<int, int>> different_vars;
+  absl::flat_hash_map<std::pair<int, int>, std::pair<int64_t, int64_t>> offsets;
+
+  // Process the fact "v1 - v2 \in Domain".
+  const auto process_difference = [&different_vars, &offsets](int v1, int v2,
+                                                              Domain d) {
+    Domain exclusion = d.Complement().PartAroundZero();
+    if (exclusion.IsEmpty()) return;
+    if (v1 == v2) return;
+    std::pair<int, int> key = {v1, v2};
+    if (v1 > v2) {
+      std::swap(key.first, key.second);
+      exclusion = exclusion.Negation();
+    }
+
+    // We have x - y not in exclusion,
+    // so x - y > exclusion.Max() --> x > y + exclusion.Max();
+    // OR x - y < exclusion.Min() --> y > x - exclusion.Min();
+    different_vars.push_back(key);
+    offsets[key] = {exclusion.Min() == std::numeric_limits<int64_t>::min()
+                        ? std::numeric_limits<int64_t>::max()
+                        : CapAdd(-exclusion.Min(), 1),
+                    CapAdd(exclusion.Max(), 1)};
+  };
+
+  // Try to find identical linear constraint with incompatible domains.
+  // This works really well on neos16.mps.gz where we have
+  // a <=> x <= y
+  // b <=> x >= y
+  // and a => not(b),
+  // Because of this presolve, we detect that not(a) => b and thus that a and
+  // not(b) are equivalent. We can thus simplify the problem to just
+  // a => x < y
+  // not(a) => x > y
+  //
+  // TODO(user): On that same problem, we could actually just have x != y and
+  // remove the enforcement literal that is just used for that. But then we
+  // will just re-create it, since we don't have a native way to handle x != y.
+  //
+  // TODO(user): Again on neos16.mps, we actually have cliques of x != y so we
+  // end up with a bunch of groups of 7 variables in [0, 6] that are all
+  // different. If we can detect that, then we close the problem quickly instead
+  // of not closing it.
+  bool has_all_diff = false;
+  bool has_no_overlap = false;
+  std::vector<std::pair<uint64_t, int>> hashes;
+  const int num_constraints = context_->working_model->constraints_size();
+  for (int c = 0; c < num_constraints; ++c) {
+    const ConstraintProto& ct = context_->working_model->constraints(c);
+    if (ct.constraint_case() == ConstraintProto::kAllDiff) {
+      has_all_diff = true;
+      continue;
+    }
+    if (ct.constraint_case() == ConstraintProto::kNoOverlap) {
+      has_no_overlap = true;
+      continue;
+    }
+    if (ct.constraint_case() != ConstraintProto::kLinear) continue;
+    if (ct.linear().vars().size() == 1) continue;
+
+    // Detect direct encoding of x != y. Note that we also see that from x > y
+    // and related.
+    if (ct.linear().vars().size() == 2 && ct.enforcement_literal().empty() &&
+        ct.linear().coeffs(0) == -ct.linear().coeffs(1)) {
+      // We assume the constraint was already divided by its gcd.
+      if (ct.linear().coeffs(0) == 1) {
+        process_difference(ct.linear().vars(0), ct.linear().vars(1),
+                           ReadDomainFromProto(ct.linear()));
+      } else if (ct.linear().coeffs(0) == -1) {
+        process_difference(ct.linear().vars(0), ct.linear().vars(1),
+                           ReadDomainFromProto(ct.linear()).Negation());
+      }
+    }
+
+    // TODO(user): Handle this case?
+    if (ct.enforcement_literal().size() > 1) continue;
+
+    uint64_t hash = kDefaultFingerprintSeed;
+    hash = FingerprintRepeatedField(ct.linear().vars(), hash);
+    hash = FingerprintRepeatedField(ct.linear().coeffs(), hash);
+    hashes.push_back({hash, c});
+  }
+  std::sort(hashes.begin(), hashes.end());
+  for (int next, start = 0; start < hashes.size(); start = next) {
+    next = start + 1;
+    while (next < hashes.size() && hashes[next].first == hashes[start].first) {
+      ++next;
+    }
+    absl::Span<const std::pair<uint64_t, int>> range(&hashes[start],
+                                                     next - start);
+    if (range.size() <= 1) continue;
+    if (range.size() > 10) continue;
+
+    for (int i = 0; i < range.size(); ++i) {
+      const ConstraintProto& ct1 =
+          context_->working_model->constraints(range[i].second);
+      const int num_terms = ct1.linear().vars().size();
+      for (int j = i + 1; j < range.size(); ++j) {
+        const ConstraintProto& ct2 =
+            context_->working_model->constraints(range[j].second);
+        if (ct2.linear().vars().size() != num_terms) continue;
+        if (!ReadDomainFromProto(ct1.linear())
+                 .IntersectionWith(ReadDomainFromProto(ct2.linear()))
+                 .IsEmpty()) {
+          continue;
+        }
+        if (absl::MakeSpan(ct1.linear().vars().data(), num_terms) !=
+            absl::MakeSpan(ct2.linear().vars().data(), num_terms)) {
+          continue;
+        }
+        if (absl::MakeSpan(ct1.linear().coeffs().data(), num_terms) !=
+            absl::MakeSpan(ct2.linear().coeffs().data(), num_terms)) {
+          continue;
+        }
+
+        if (ct1.enforcement_literal().empty() &&
+            ct2.enforcement_literal().empty()) {
+          (void)context_->NotifyThatModelIsUnsat(
+              "two incompatible linear constraint");
+          return;
+        }
+        if (ct1.enforcement_literal().empty()) {
+          context_->UpdateRuleStats(
+              "incompatible linear: set enforcement to false");
+          if (!context_->SetLiteralToFalse(ct2.enforcement_literal(0))) {
+            return;
+          }
+          continue;
+        }
+        if (ct2.enforcement_literal().empty()) {
+          context_->UpdateRuleStats(
+              "incompatible linear: set enforcement to false");
+          if (!context_->SetLiteralToFalse(ct1.enforcement_literal(0))) {
+            return;
+          }
+          continue;
+        }
+
+        const int lit1 = ct1.enforcement_literal(0);
+        const int lit2 = ct2.enforcement_literal(0);
+
+        // Detect x != y via lit => x > y && not(lit) => x < y.
+        if (ct1.linear().vars().size() == 2 &&
+            ct1.linear().coeffs(0) == -ct1.linear().coeffs(1) &&
+            lit1 == NegatedRef(lit2)) {
+          // We have x - y in domain1 or in domain2, so it must be in the union.
+          Domain union_of_domain =
+              ReadDomainFromProto(ct1.linear())
+                  .UnionWith(ReadDomainFromProto(ct2.linear()));
+
+          // We assume the constraint was already divided by its gcd.
+          if (ct1.linear().coeffs(0) == 1) {
+            process_difference(ct1.linear().vars(0), ct1.linear().vars(1),
+                               std::move(union_of_domain));
+          } else if (ct1.linear().coeffs(0) == -1) {
+            process_difference(ct1.linear().vars(0), ct1.linear().vars(1),
+                               union_of_domain.Negation());
+          }
+        }
+
+        if (lit1 != NegatedRef(lit2)) {
+          context_->UpdateRuleStats("incompatible linear: add implication");
+          context_->AddImplication(lit1, NegatedRef(lit2));
+        }
+      }
+    }
+  }
+
+  // Detect all_different cliques.
+  // We reuse the max-clique code from sat.
+  //
+  // TODO(user): To avoid doing that more than once, we only run it if there
+  // is no all-diff in the model already. This is not perfect.
+  //
+  // Note(user): The all diff added here will not be expanded since we run this
+  // after expansion. This is fragile though. Not even sure this is what we
+  // want.
+  //
+  // TODO(user): Start with the existing all diff and expand them rather than
+  // not running this if there are all_diff present.
+  //
+  // TODO(user): Only add them at the end of the presolve! it hurt our presolve
+  // (like probing is slower) and only serve for linear relaxation.
+  if (context_->params().infer_all_diffs() && !has_all_diff &&
+      !has_no_overlap && different_vars.size() > 2) {
+    WallTimer local_time;
+    local_time.Start();
+
+    std::vector<std::vector<Literal>> cliques;
+    absl::flat_hash_set<int> used_var;
+
+    Model local_model;
+    const int num_variables = context_->working_model->variables().size();
+    local_model.GetOrCreate<Trail>()->Resize(num_variables);
+    auto* graph = local_model.GetOrCreate<BinaryImplicationGraph>();
+    graph->Resize(num_variables);
+    for (const auto [var1, var2] : different_vars) {
+      if (!RefIsPositive(var1)) continue;
+      if (!RefIsPositive(var2)) continue;
+      if (var1 == var2) {
+        (void)context_->NotifyThatModelIsUnsat("x != y with x == y");
+        return;
+      }
+      // All variables at false is always a valid solution of the local model,
+      // so this should never return UNSAT.
+      CHECK(graph->AddAtMostOne({Literal(BooleanVariable(var1), true),
+                                 Literal(BooleanVariable(var2), true)}));
+      if (!used_var.contains(var1)) {
+        used_var.insert(var1);
+        cliques.push_back({Literal(BooleanVariable(var1), true),
+                           Literal(BooleanVariable(var2), true)});
+      }
+      if (!used_var.contains(var2)) {
+        used_var.insert(var2);
+        cliques.push_back({Literal(BooleanVariable(var1), true),
+                           Literal(BooleanVariable(var2), true)});
+      }
+    }
+    CHECK(graph->DetectEquivalences());
+    graph->TransformIntoMaxCliques(&cliques, 1e8);
+
+    int num_cliques = 0;
+    int64_t cumulative_size = 0;
+    for (std::vector<Literal>& clique : cliques) {
+      if (clique.size() <= 2) continue;
+
+      ++num_cliques;
+      cumulative_size += clique.size();
+      std::sort(clique.begin(), clique.end());
+
+      // We have an all-diff, but inspect the offsets to see if we have a
+      // disjunctive ! Note that this is quadratic, but no more complex than the
+      // scan of the model we just did above, since we had one linear constraint
+      // per entry.
+      const int num_terms = clique.size();
+      std::vector<int64_t> sizes(num_terms,
+                                 std::numeric_limits<int64_t>::max());
+      for (int i = 0; i < num_terms; ++i) {
+        const int v1 = clique[i].Variable().value();
+        for (int j = i + 1; j < num_terms; ++j) {
+          const int v2 = clique[j].Variable().value();
+          const auto [o1, o2] = offsets.at({v1, v2});
+          sizes[i] = std::min(sizes[i], o1);
+          sizes[j] = std::min(sizes[j], o2);
+        }
+      }
+
+      int num_greater_than_one = 0;
+      int64_t issue = 0;
+      for (int i = 0; i < num_terms; ++i) {
+        CHECK_GE(sizes[i], 1);
+        if (sizes[i] > 1) ++num_greater_than_one;
+
+        // When this happens, it means this interval can never be before
+        // any other. We should probably handle this case better, but for now we
+        // abort.
+        issue = CapAdd(issue, sizes[i]);
+        if (issue == std::numeric_limits<int64_t>::max()) {
+          context_->UpdateRuleStats("TODO no_overlap: with task always last");
+          num_greater_than_one = 0;
+          break;
+        }
+      }
+
+      if (num_greater_than_one > 0) {
+        // We have one size greater than 1, lets add a no_overlap!
+        //
+        // TODO(user): try to remove all the quadratic boolean and their
+        // corresponding linear2 ? Any Boolean not used elsewhere could be
+        // removed.
+        context_->UpdateRuleStats(
+            "no_overlap: inferred from x != y constraints");
+
+        std::vector<int> intervals;
+        for (int i = 0; i < num_terms; ++i) {
+          intervals.push_back(context_->working_model->constraints().size());
+          auto* new_interval =
+              context_->working_model->add_constraints()->mutable_interval();
+          new_interval->mutable_start()->set_offset(0);
+          new_interval->mutable_start()->add_coeffs(1);
+          new_interval->mutable_start()->add_vars(clique[i].Variable().value());
+
+          new_interval->mutable_size()->set_offset(sizes[i]);
+
+          new_interval->mutable_end()->set_offset(sizes[i]);
+          new_interval->mutable_end()->add_coeffs(1);
+          new_interval->mutable_end()->add_vars(clique[i].Variable().value());
+        }
+        auto* new_ct =
+            context_->working_model->add_constraints()->mutable_no_overlap();
+        for (const int interval : intervals) {
+          new_ct->add_intervals(interval);
+        }
+      } else {
+        context_->UpdateRuleStats("all_diff: inferred from x != y constraints");
+        auto* new_ct =
+            context_->working_model->add_constraints()->mutable_all_diff();
+        for (const Literal l : clique) {
+          auto* expr = new_ct->add_exprs();
+          expr->add_vars(l.Variable().value());
+          expr->add_coeffs(1);
+        }
+      }
+    }
+
+    timer.AddCounter("different", different_vars.size());
+    timer.AddCounter("cliques", num_cliques);
+    timer.AddCounter("size", cumulative_size);
+  }
+
+  context_->UpdateNewConstraintsVariableUsage();
+}
+
 namespace {
 
-// We want something that is order invariant and is compatible with inclusion.
-uint64_t ComputeSignature(const std::vector<int>& integers) {
-  uint64_t signature = 0;
-  for (const int i : integers) signature |= (int64_t{1} << (i & 63));
-  return signature;
+// Add factor * subset_ct to the given superset_ct.
+void Substitute(int64_t factor,
+                const absl::flat_hash_map<int, int64_t>& subset_coeff_map,
+                const Domain& subset_rhs, const Domain& superset_rhs,
+                LinearConstraintProto* mutable_linear) {
+  int new_size = 0;
+  const int old_size = mutable_linear->vars().size();
+  for (int i = 0; i < old_size; ++i) {
+    const int var = mutable_linear->vars(i);
+    int64_t coeff = mutable_linear->coeffs(i);
+    const auto it = subset_coeff_map.find(var);
+    if (it != subset_coeff_map.end()) {
+      coeff += factor * it->second;
+      if (coeff == 0) continue;
+    }
+
+    mutable_linear->set_vars(new_size, var);
+    mutable_linear->set_coeffs(new_size, coeff);
+    ++new_size;
+  }
+  mutable_linear->mutable_vars()->Truncate(new_size);
+  mutable_linear->mutable_coeffs()->Truncate(new_size);
+  FillDomainInProto(
+      superset_rhs.AdditionWith(subset_rhs.MultiplicationBy(factor)),
+      mutable_linear);
 }
 
 }  // namespace
 
-void CpModelPresolver::ExtractEncodingFromLinear() {
-  if (context_->time_limit()->LimitReached()) return;
+void CpModelPresolver::DetectDominatedLinearConstraints() {
+  if (time_limit_->LimitReached()) return;
+  if (context_->ModelIsUnsat()) return;
+  if (context_->params().presolve_inclusion_work_limit() == 0) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
+
+  // Because we only deal with linear constraint and we want to ignore the
+  // enforcement part, we reuse the variable list in the inclusion detector.
+  // Note that we ignore "unclean" constraint, so we only have positive
+  // reference there.
+  class Storage {
+   public:
+    explicit Storage(CpModelProto* proto) : proto_(*proto) {}
+    int size() const { return static_cast<int>(proto_.constraints().size()); }
+    absl::Span<const int> operator[](int c) const {
+      return absl::MakeSpan(proto_.constraints(c).linear().vars());
+    }
+
+   private:
+    const CpModelProto& proto_;
+  };
+  Storage storage(context_->working_model);
+  InclusionDetector detector(storage, time_limit_);
+  detector.SetWorkLimit(context_->params().presolve_inclusion_work_limit());
+
+  // Because we use the constraint <-> variable graph, we cannot modify it
+  // during DetectInclusions(). So we delay the update of the graph.
+  std::vector<int> constraint_indices_to_clean;
+
+  // Cache the linear expression domain.
+  // TODO(user): maybe we should store this instead of recomputing it.
+  absl::flat_hash_map<int, Domain> cached_expr_domain;
+
+  const int num_constraints = context_->working_model->constraints().size();
+  for (int c = 0; c < num_constraints; ++c) {
+    const ConstraintProto& ct = context_->working_model->constraints(c);
+    if (ct.constraint_case() != ConstraintProto::kLinear) continue;
+
+    // We only look at long enforced constraint to avoid all the linear of size
+    // one or two which can be numerous.
+    if (!ct.enforcement_literal().empty()) {
+      if (ct.linear().vars().size() < 3) continue;
+    }
+
+    if (!LinearConstraintIsClean(ct.linear())) {
+      // This shouldn't happen except in potential corner cases were the
+      // constraints were not canonicalized before this point. We just skip
+      // such constraint.
+      continue;
+    }
+
+    detector.AddPotentialSet(c);
+
+    const auto [min_activity, max_activity] =
+        context_->ComputeMinMaxActivity(ct.linear());
+    cached_expr_domain[c] = Domain(min_activity, max_activity);
+  }
+
+  int64_t num_inclusions = 0;
+  absl::flat_hash_map<int, int64_t> coeff_map;
+  detector.DetectInclusions([&](int subset_c, int superset_c) {
+    ++num_inclusions;
+
+    // Store the coeff of the subset linear constraint in a map.
+    const ConstraintProto& subset_ct =
+        context_->working_model->constraints(subset_c);
+    const LinearConstraintProto& subset_lin = subset_ct.linear();
+    coeff_map.clear();
+    detector.IncreaseWorkDone(subset_lin.vars().size());
+    for (int i = 0; i < subset_lin.vars().size(); ++i) {
+      coeff_map[subset_lin.vars(i)] = subset_lin.coeffs(i);
+    }
+
+    // We have a perfect match if 'factor_a * subset == factor_b * superset' on
+    // the common positions. Note that assuming subset has been gcd reduced,
+    // there is not point considering factor_b != 1.
+    bool perfect_match = true;
+
+    // Find interesting factor of the subset that cancels terms of the superset.
+    int64_t factor = 0;
+    int64_t min_pos_factor = std::numeric_limits<int64_t>::max();
+    int64_t max_neg_factor = std::numeric_limits<int64_t>::min();
+
+    // Lets compute the implied domain of the linear expression
+    // "superset - subset". Note that we actually do not need exact inclusion
+    // for this algorithm to work, but it is an heuristic to not try it with
+    // all pair of constraints.
+    const ConstraintProto& superset_ct =
+        context_->working_model->constraints(superset_c);
+    const LinearConstraintProto& superset_lin = superset_ct.linear();
+    int64_t diff_min_activity = 0;
+    int64_t diff_max_activity = 0;
+    detector.IncreaseWorkDone(superset_lin.vars().size());
+    for (int i = 0; i < superset_lin.vars().size(); ++i) {
+      const int var = superset_lin.vars(i);
+      int64_t coeff = superset_lin.coeffs(i);
+      const auto it = coeff_map.find(var);
+
+      if (it != coeff_map.end()) {
+        const int64_t subset_coeff = it->second;
+
+        const int64_t div = coeff / subset_coeff;
+        if (div > 0) {
+          min_pos_factor = std::min(div, min_pos_factor);
+        } else {
+          max_neg_factor = std::max(div, max_neg_factor);
+        }
+
+        if (perfect_match) {
+          if (coeff % subset_coeff == 0) {
+            if (factor == 0) {
+              // Note that factor can be negative.
+              factor = div;
+            } else if (factor != div) {
+              perfect_match = false;
+            }
+          } else {
+            perfect_match = false;
+          }
+        }
+
+        // TODO(user): compute the factor first in case it is != 1 ?
+        coeff -= subset_coeff;
+      }
+      if (coeff == 0) continue;
+      context_->CappedUpdateMinMaxActivity(var, coeff, &diff_min_activity,
+                                           &diff_max_activity);
+    }
+
+    const Domain diff_domain(diff_min_activity, diff_max_activity);
+    const Domain subset_rhs = ReadDomainFromProto(subset_lin);
+    const Domain superset_rhs = ReadDomainFromProto(superset_lin);
+
+    // Case 1: superset is redundant.
+    // We process this one first as it let us remove the longest constraint.
+    //
+    // Important: because of how we computed the inclusion, the diff_domain is
+    // only valid if none of the enforcement appear in the subset.
+    //
+    // TODO(user): Compute the correct infered domain in this case.
+    if (subset_ct.enforcement_literal().empty()) {
+      const Domain implied_superset_domain =
+          subset_rhs.AdditionWith(diff_domain)
+              .IntersectionWith(cached_expr_domain[superset_c]);
+      if (implied_superset_domain.IsIncludedIn(superset_rhs)) {
+        context_->UpdateRuleStats(
+            "linear inclusion: redundant containing constraint");
+        context_->working_model->mutable_constraints(superset_c)->Clear();
+        constraint_indices_to_clean.push_back(superset_c);
+        detector.StopProcessingCurrentSuperset();
+        return;
+      }
+    }
+
+    // Case 2: subset is redundant.
+    if (superset_ct.enforcement_literal().empty()) {
+      const Domain implied_subset_domain =
+          superset_rhs.AdditionWith(diff_domain.Negation())
+              .IntersectionWith(cached_expr_domain[subset_c]);
+      if (implied_subset_domain.IsIncludedIn(subset_rhs)) {
+        context_->UpdateRuleStats(
+            "linear inclusion: redundant included constraint");
+        context_->working_model->mutable_constraints(subset_c)->Clear();
+        constraint_indices_to_clean.push_back(subset_c);
+        detector.StopProcessingCurrentSubset();
+        return;
+      }
+    }
+
+    // If the subset is an equality, and we can add a factor of it to the
+    // superset so that the activity range is guaranteed to be tighter, we
+    // always do it. This should both sparsify the problem but also lead to
+    // tighter propagation.
+    if (subset_rhs.IsFixed() && subset_ct.enforcement_literal().empty()) {
+      const int64_t best_factor =
+          max_neg_factor > -min_pos_factor ? max_neg_factor : min_pos_factor;
+
+      // Compute the activity range before and after. Because our pos/neg factor
+      // are the smallest possible, if one is undefined then we are guaranteed
+      // to be tighter, and do not need to compute this.
+      //
+      // TODO(user): can we compute the best factor that make this as tight as
+      // possible instead? that looks doable.
+      bool is_tigher = true;
+      if (min_pos_factor != std::numeric_limits<int64_t>::max() &&
+          max_neg_factor != std::numeric_limits<int64_t>::min()) {
+        int64_t min_before = 0;
+        int64_t max_before = 0;
+        int64_t min_after = CapProd(best_factor, subset_rhs.FixedValue());
+        int64_t max_after = min_after;
+        for (int i = 0; i < superset_lin.vars().size(); ++i) {
+          const int var = superset_lin.vars(i);
+          const auto it = coeff_map.find(var);
+          if (it == coeff_map.end()) continue;
+
+          const int64_t coeff_before = superset_lin.coeffs(i);
+          const int64_t coeff_after = coeff_before - best_factor * it->second;
+          context_->CappedUpdateMinMaxActivity(var, coeff_before, &min_before,
+                                               &max_before);
+          context_->CappedUpdateMinMaxActivity(var, coeff_after, &min_after,
+                                               &max_after);
+        }
+        is_tigher = min_after >= min_before && max_after <= max_before;
+      }
+      if (is_tigher) {
+        context_->UpdateRuleStats("linear inclusion: sparsify superset");
+        Substitute(-best_factor, coeff_map, subset_rhs, superset_rhs,
+                   context_->working_model->mutable_constraints(superset_c)
+                       ->mutable_linear());
+        constraint_indices_to_clean.push_back(superset_c);
+        detector.StopProcessingCurrentSuperset();
+        return;
+      }
+    }
+
+    // We do a bit more if we have an exact match and factor * subset is exactly
+    // a subpart of the superset constraint.
+    if (perfect_match && subset_ct.enforcement_literal().empty() &&
+        superset_ct.enforcement_literal().empty()) {
+      CHECK_NE(factor, 0);
+
+      // Propagate domain on the superset - subset variables.
+      // TODO(user): We can probably still do that if the inclusion is not
+      // perfect.
+      temp_ct_.Clear();
+      auto* mutable_linear = temp_ct_.mutable_linear();
+      for (int i = 0; i < superset_lin.vars().size(); ++i) {
+        const int var = superset_lin.vars(i);
+        const int64_t coeff = superset_lin.coeffs(i);
+        const auto it = coeff_map.find(var);
+        if (it != coeff_map.end()) continue;
+        mutable_linear->add_vars(var);
+        mutable_linear->add_coeffs(coeff);
+      }
+      FillDomainInProto(
+          superset_rhs.AdditionWith(subset_rhs.MultiplicationBy(-factor)),
+          mutable_linear);
+      PropagateDomainsInLinear(/*ct_index=*/-1, &temp_ct_);
+      if (context_->ModelIsUnsat()) detector.Stop();
+
+      if (superset_rhs.IsFixed()) {
+        if (subset_lin.vars().size() + 1 == superset_lin.vars().size()) {
+          // Because we propagated the equation on the singleton variable above,
+          // and we have an equality, the subset is redundant!
+          context_->UpdateRuleStats(
+              "linear inclusion: subset + singleton is equality");
+          context_->working_model->mutable_constraints(subset_c)->Clear();
+          constraint_indices_to_clean.push_back(subset_c);
+          detector.StopProcessingCurrentSubset();
+          return;
+        }
+
+        // This one could make sense if subset is large vs superset.
+        context_->UpdateRuleStats(
+            "TODO linear inclusion: superset is equality");
+      }
+    }
+  });
+
+  for (const int c : constraint_indices_to_clean) {
+    context_->UpdateConstraintVariableUsage(c);
+  }
+
+  timer.AddToWork(1e-9 * static_cast<double>(detector.work_done()));
+  timer.AddCounter("relevant_constraints", detector.num_potential_supersets());
+  timer.AddCounter("num_inclusions", num_inclusions);
+  timer.AddCounter("num_redundant", constraint_indices_to_clean.size());
+}
+
+// TODO(user): Also substitute if this appear in the objective?
+// TODO(user): In some case we only need common_part <= new_var.
+bool CpModelPresolver::RemoveCommonPart(
+    const absl::flat_hash_map<int, int64_t>& common_var_coeff_map,
+    absl::Span<const std::pair<int, int64_t>> block,
+    ActivityBoundHelper* helper) {
+  int new_var;
+  int64_t gcd = 0;
+  int64_t offset = 0;
+
+  // If the common part is expressable via one of the constraint in the block as
+  // == gcd * X + offset, we can just use this variable instead of creating a
+  // new variable.
+  int definiting_equation = -1;
+  for (const auto [c, multiple] : block) {
+    const ConstraintProto& ct = context_->working_model->constraints(c);
+    if (std::abs(multiple) != 1) continue;
+    if (!IsLinearEqualityConstraint(ct)) continue;
+    if (ct.linear().vars().size() != common_var_coeff_map.size() + 1) continue;
+
+    context_->UpdateRuleStats(
+        "linear matrix: defining equation for common rectangle");
+    definiting_equation = c;
+
+    // Find the missing term and its coefficient.
+    int64_t coeff = 0;
+    const int num_terms = ct.linear().vars().size();
+    for (int k = 0; k < num_terms; ++k) {
+      if (common_var_coeff_map.contains(ct.linear().vars(k))) continue;
+      new_var = ct.linear().vars(k);
+      coeff = ct.linear().coeffs(k);
+      break;
+    }
+    CHECK_NE(coeff, 0);
+
+    // We have multiple * common + coeff * X = constant.
+    // So common = multiple^-1 * constant - multiple^-1 * coeff * X;
+    gcd = -multiple * coeff;
+    offset = multiple * ct.linear().domain(0);
+    break;
+  }
+
+  // We need a new variable and defining equation.
+  if (definiting_equation == -1) {
+    offset = 0;
+    int64_t min_activity = 0;
+    int64_t max_activity = 0;
+    tmp_terms_.clear();
+    std::vector<std::pair<int, int64_t>> common_part;
+    for (const auto [var, coeff] : common_var_coeff_map) {
+      common_part.push_back({var, coeff});
+      gcd = std::gcd(gcd, std::abs(coeff));
+      if (context_->CanBeUsedAsLiteral(var) && !context_->IsFixed(var)) {
+        tmp_terms_.push_back({var, coeff});
+        continue;
+      }
+      if (coeff > 0) {
+        min_activity += coeff * context_->MinOf(var);
+        max_activity += coeff * context_->MaxOf(var);
+      } else {
+        min_activity += coeff * context_->MaxOf(var);
+        max_activity += coeff * context_->MinOf(var);
+      }
+    }
+
+    // We isolated the Boolean in tmp_terms_, use the helper to get
+    // more precise activity bounds. Note that while tmp_terms_ was built from
+    // a hash map and is in an unspecified order, the Compute*Activity() helpers
+    // will still return a deterministic result.
+    if (!tmp_terms_.empty()) {
+      min_activity += helper->ComputeMinActivity(tmp_terms_);
+      max_activity += helper->ComputeMaxActivity(tmp_terms_);
+    }
+
+    if (gcd > 1) {
+      min_activity /= gcd;
+      max_activity /= gcd;
+      for (int i = 0; i < common_part.size(); ++i) {
+        common_part[i].second /= gcd;
+      }
+    }
+
+    // Create new variable.
+    std::sort(common_part.begin(), common_part.end());
+    new_var = context_->NewIntVarWithDefinition(
+        Domain(min_activity, max_activity), common_part);
+    if (new_var == -1) return false;
+  }
+
+  // Replace in each constraint the common part by gcd * multiple * new_var !
+  for (const auto [c, multiple] : block) {
+    if (c == definiting_equation) continue;
+
+    auto* mutable_linear =
+        context_->working_model->mutable_constraints(c)->mutable_linear();
+    const int num_terms = mutable_linear->vars().size();
+    int new_size = 0;
+    bool new_var_already_seen = false;
+    for (int k = 0; k < num_terms; ++k) {
+      if (common_var_coeff_map.contains(mutable_linear->vars(k))) {
+        CHECK_EQ(common_var_coeff_map.at(mutable_linear->vars(k)) * multiple,
+                 mutable_linear->coeffs(k));
+        continue;
+      }
+
+      // Tricky: the new variable can already be present in this expression!
+      int64_t new_coeff = mutable_linear->coeffs(k);
+      if (mutable_linear->vars(k) == new_var) {
+        new_var_already_seen = true;
+        new_coeff += gcd * multiple;
+        if (new_coeff == 0) continue;
+      }
+
+      mutable_linear->set_vars(new_size, mutable_linear->vars(k));
+      mutable_linear->set_coeffs(new_size, new_coeff);
+      ++new_size;
+    }
+    mutable_linear->mutable_vars()->Truncate(new_size);
+    mutable_linear->mutable_coeffs()->Truncate(new_size);
+    if (!new_var_already_seen) {
+      mutable_linear->add_vars(new_var);
+      mutable_linear->add_coeffs(gcd * multiple);
+    }
+    if (offset != 0) {
+      FillDomainInProto(ReadDomainFromProto(*mutable_linear)
+                            .AdditionWith(Domain(-offset * multiple)),
+                        mutable_linear);
+    }
+    context_->UpdateConstraintVariableUsage(c);
+  }
+  return true;
+}
+
+namespace {
+
+int64_t FindVarCoeff(int var, const ConstraintProto& ct) {
+  const int num_terms = ct.linear().vars().size();
+  for (int k = 0; k < num_terms; ++k) {
+    if (ct.linear().vars(k) == var) return ct.linear().coeffs(k);
+  }
+  return 0;
+}
+
+int64_t ComputeNonZeroReduction(size_t block_size, size_t common_part_size) {
+  // We replace the block by a column of new variable.
+  // But we also need to define this new variable.
+  return static_cast<int64_t>(block_size * (common_part_size - 1) -
+                              common_part_size - 1);
+}
+
+}  // namespace
+
+// The idea is to find a set of literal in AMO relationship that appear in
+// many linear constraints. If this is the case, we can create a new variable to
+// make an exactly one constraint, and replace it in the linear.
+void CpModelPresolver::FindBigAtMostOneAndLinearOverlap(
+    ActivityBoundHelper* helper) {
+  if (time_limit_->LimitReached()) return;
+  if (context_->ModelIsUnsat()) return;
+  if (context_->params().presolve_inclusion_work_limit() == 0) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
+
+  int64_t num_blocks = 0;
+  int64_t nz_reduction = 0;
+  std::vector<int> amo_cts;
+  std::vector<int> amo_literals;
+
+  std::vector<int> common_part;
+  std::vector<int> best_common_part;
+
+  std::vector<bool> common_part_sign;
+  std::vector<bool> best_common_part_sign;
+
+  // We store for each var if the literal was positive or not.
+  absl::flat_hash_map<int, bool> var_in_amo;
+
+  for (int x = 0; x < context_->working_model->variables().size(); ++x) {
+    // We pick a variable x that appear in some AMO.
+    if (helper->NumAmoForVariable(x) == 0) continue;
+    if (time_limit_->LimitReached()) break;
+    if (timer.WorkLimitIsReached()) break;
+
+    amo_cts.clear();
+    timer.TrackSimpleLoop(context_->VarToConstraints(x).size());
+    for (const int c : context_->VarToConstraints(x)) {
+      if (c < 0) continue;
+      const ConstraintProto& ct = context_->working_model->constraints(c);
+      if (ct.constraint_case() == ConstraintProto::kAtMostOne) {
+        amo_cts.push_back(c);
+      } else if (ct.constraint_case() == ConstraintProto::kExactlyOne) {
+        amo_cts.push_back(c);
+      }
+    }
+    if (amo_cts.empty()) continue;
+
+    // Pick a random AMO containing x.
+    //
+    // TODO(user): better algo!
+    //
+    // Note that we don't care about the polarity, for each linear constraint,
+    // if the coeff magnitude are the same, we will just have two values
+    // controlled by whether the AMO (or EXO subset) is at one or zero.
+    var_in_amo.clear();
+    amo_literals.clear();
+    common_part.clear();
+    common_part_sign.clear();
+    int base_ct_index;
+    {
+      // For determinism.
+      std::sort(amo_cts.begin(), amo_cts.end());
+      const int random_c =
+          absl::Uniform<int>(*context_->random(), 0, amo_cts.size());
+      base_ct_index = amo_cts[random_c];
+      const ConstraintProto& ct =
+          context_->working_model->constraints(base_ct_index);
+      const auto& literals = ct.constraint_case() == ConstraintProto::kAtMostOne
+                                 ? ct.at_most_one().literals()
+                                 : ct.exactly_one().literals();
+      timer.TrackSimpleLoop(5 * literals.size());  // hash insert are slow.
+      for (const int literal : literals) {
+        amo_literals.push_back(literal);
+        common_part.push_back(PositiveRef(literal));
+        common_part_sign.push_back(RefIsPositive(literal));
+        const auto [_, inserted] =
+            var_in_amo.insert({PositiveRef(literal), RefIsPositive(literal)});
+        CHECK(inserted);
+      }
+    }
+
+    const int64_t x_multiplier = var_in_amo.at(x) ? 1 : -1;
+
+    // Collect linear constraints with at least two Boolean terms in var_in_amo
+    // with the same coefficient than x.
+    std::vector<int> block_cts;
+    std::vector<int> linear_cts;
+    int max_common_part = 0;
+    timer.TrackSimpleLoop(context_->VarToConstraints(x).size());
+    for (const int c : context_->VarToConstraints(x)) {
+      if (c < 0) continue;
+      const ConstraintProto& ct = context_->working_model->constraints(c);
+      if (ct.constraint_case() != ConstraintProto::kLinear) continue;
+      const int num_terms = ct.linear().vars().size();
+      if (num_terms < 2) continue;
+
+      timer.TrackSimpleLoop(2 * num_terms);
+      const int64_t x_coeff = x_multiplier * FindVarCoeff(x, ct);
+      if (x_coeff == 0) continue;  // could be in enforcement.
+
+      int num_in_amo = 0;
+      for (int k = 0; k < num_terms; ++k) {
+        const int var = ct.linear().vars(k);
+        if (!RefIsPositive(var)) {
+          num_in_amo = 0;  // Abort.
+          break;
+        }
+        const auto it = var_in_amo.find(var);
+        if (it == var_in_amo.end()) continue;
+        int64_t coeff = ct.linear().coeffs(k);
+        if (!it->second) coeff = -coeff;
+        if (coeff != x_coeff) continue;
+        ++num_in_amo;
+      }
+      if (num_in_amo < 2) continue;
+
+      max_common_part += num_in_amo;
+      if (num_in_amo == common_part.size()) {
+        // This is a perfect match!
+        block_cts.push_back(c);
+      } else {
+        linear_cts.push_back(c);
+      }
+    }
+    if (linear_cts.empty() && block_cts.empty()) continue;
+    if (max_common_part < 100) continue;
+
+    // Remember the best block encountered in the greedy algo below.
+    // Note that we always start with the current perfect match.
+    best_common_part = common_part;
+    best_common_part_sign = common_part_sign;
+    int best_block_size = block_cts.size();
+    int best_saved_nz =
+        ComputeNonZeroReduction(block_cts.size() + 1, common_part.size());
+
+    // For determinism.
+    std::sort(block_cts.begin(), block_cts.end());
+    std::sort(linear_cts.begin(), linear_cts.end());
+
+    // We will just greedily compute a big block with a random order.
+    // TODO(user): We could sort by match with the full constraint instead.
+    std::shuffle(linear_cts.begin(), linear_cts.end(), *context_->random());
+    for (const int c : linear_cts) {
+      const ConstraintProto& ct = context_->working_model->constraints(c);
+      const int num_terms = ct.linear().vars().size();
+      timer.TrackSimpleLoop(2 * num_terms);
+      const int64_t x_coeff = x_multiplier * FindVarCoeff(x, ct);
+      CHECK_NE(x_coeff, 0);
+
+      common_part.clear();
+      common_part_sign.clear();
+      for (int k = 0; k < num_terms; ++k) {
+        const int var = ct.linear().vars(k);
+        const auto it = var_in_amo.find(var);
+        if (it == var_in_amo.end()) continue;
+        int64_t coeff = ct.linear().coeffs(k);
+        if (!it->second) coeff = -coeff;
+        if (coeff != x_coeff) continue;
+        common_part.push_back(var);
+        common_part_sign.push_back(it->second);
+      }
+      if (common_part.size() < 2) continue;
+
+      // Change var_in_amo;
+      block_cts.push_back(c);
+      if (common_part.size() < var_in_amo.size()) {
+        var_in_amo.clear();
+        for (int i = 0; i < common_part.size(); ++i) {
+          var_in_amo[common_part[i]] = common_part_sign[i];
+        }
+      }
+
+      // We have a block that can be replaced with a single new boolean +
+      // defining exo constraint. Note that we can also replace in the base
+      // constraint, hence the +1 to the block size.
+      const int64_t saved_nz =
+          ComputeNonZeroReduction(block_cts.size() + 1, common_part.size());
+      if (saved_nz > best_saved_nz) {
+        best_block_size = block_cts.size();
+        best_saved_nz = saved_nz;
+        best_common_part = common_part;
+        best_common_part_sign = common_part_sign;
+      }
+    }
+    if (best_saved_nz < 100) continue;
+
+    // Use the best rectangle.
+    // We start with the full match.
+    // TODO(user): maybe we should always just use this if it is large enough?
+    block_cts.resize(best_block_size);
+    var_in_amo.clear();
+    for (int i = 0; i < best_common_part.size(); ++i) {
+      var_in_amo[best_common_part[i]] = best_common_part_sign[i];
+    }
+
+    ++num_blocks;
+    nz_reduction += best_saved_nz;
+    context_->UpdateRuleStats("linear matrix: common amo rectangle");
+
+    // First filter the amo.
+    int new_size = 0;
+    for (const int lit : amo_literals) {
+      if (!var_in_amo.contains(PositiveRef(lit))) continue;
+      amo_literals[new_size++] = lit;
+    }
+    if (new_size == amo_literals.size()) {
+      const ConstraintProto& ct =
+          context_->working_model->constraints(base_ct_index);
+      if (ct.constraint_case() == ConstraintProto::kExactlyOne) {
+        context_->UpdateRuleStats("TODO linear matrix: constant rectangle!");
+      } else {
+        context_->UpdateRuleStats(
+            "TODO linear matrix: reuse defining constraint");
+      }
+    } else if (new_size + 1 == amo_literals.size()) {
+      const ConstraintProto& ct =
+          context_->working_model->constraints(base_ct_index);
+      if (ct.constraint_case() == ConstraintProto::kExactlyOne) {
+        context_->UpdateRuleStats("TODO linear matrix: reuse exo constraint");
+      }
+    }
+    amo_literals.resize(new_size);
+
+    // Create a new literal that is one iff one of the literal in AMO is one.
+    const int new_var = context_->NewBoolVarWithClause(amo_literals);
+    {
+      auto* new_exo =
+          context_->working_model->add_constraints()->mutable_exactly_one();
+      new_exo->mutable_literals()->Reserve(amo_literals.size() + 1);
+      for (const int lit : amo_literals) {
+        new_exo->add_literals(lit);
+      }
+      new_exo->add_literals(NegatedRef(new_var));
+      context_->UpdateNewConstraintsVariableUsage();
+    }
+
+    // Filter the base amo/exo.
+    {
+      ConstraintProto* ct =
+          context_->working_model->mutable_constraints(base_ct_index);
+      auto* mutable_literals =
+          ct->constraint_case() == ConstraintProto::kAtMostOne
+              ? ct->mutable_at_most_one()->mutable_literals()
+              : ct->mutable_exactly_one()->mutable_literals();
+      int new_size = 0;
+      for (const int lit : *mutable_literals) {
+        if (var_in_amo.contains(PositiveRef(lit))) continue;
+        (*mutable_literals)[new_size++] = lit;
+      }
+      (*mutable_literals)[new_size++] = new_var;
+      mutable_literals->Truncate(new_size);
+      context_->UpdateConstraintVariableUsage(base_ct_index);
+    }
+
+    // Use this Boolean in all the linear constraints.
+    for (const int c : block_cts) {
+      auto* mutable_linear =
+          context_->working_model->mutable_constraints(c)->mutable_linear();
+
+      // The removed expression will be (offset + coeff_x * new_bool).
+      int64_t offset = 0;
+      int64_t coeff_x = 0;
+
+      int new_size = 0;
+      const int num_terms = mutable_linear->vars().size();
+      for (int k = 0; k < num_terms; ++k) {
+        const int var = mutable_linear->vars(k);
+        CHECK(RefIsPositive(var));
+        int64_t coeff = mutable_linear->coeffs(k);
+        const auto it = var_in_amo.find(var);
+        if (it != var_in_amo.end()) {
+          if (it->second) {
+            // default is zero, amo at one means we add coeff.
+          } else {
+            // term is -coeff * (1 - var) + coeff.
+            // default is coeff, amo at 1 means we remove coeff.
+            offset += coeff;
+            coeff = -coeff;
+          }
+          if (coeff_x == 0) coeff_x = coeff;
+          CHECK_EQ(coeff, coeff_x);
+          continue;
+        }
+        mutable_linear->set_vars(new_size, mutable_linear->vars(k));
+        mutable_linear->set_coeffs(new_size, coeff);
+        ++new_size;
+      }
+
+      // Add the new term.
+      mutable_linear->set_vars(new_size, new_var);
+      mutable_linear->set_coeffs(new_size, coeff_x);
+      ++new_size;
+
+      mutable_linear->mutable_vars()->Truncate(new_size);
+      mutable_linear->mutable_coeffs()->Truncate(new_size);
+      if (offset != 0) {
+        FillDomainInProto(
+            ReadDomainFromProto(*mutable_linear).AdditionWith(Domain(-offset)),
+            mutable_linear);
+      }
+      context_->UpdateConstraintVariableUsage(c);
+    }
+  }
+
+  timer.AddCounter("blocks", num_blocks);
+  timer.AddCounter("saved_nz", nz_reduction);
+  DCHECK(context_->ConstraintVariableUsageIsConsistent());
+}
+
+// This helps on neos-5045105-creuse.pb.gz for instance.
+void CpModelPresolver::FindBigVerticalLinearOverlap(
+    ActivityBoundHelper* helper) {
+  if (time_limit_->LimitReached()) return;
+  if (context_->ModelIsUnsat()) return;
+  if (context_->params().presolve_inclusion_work_limit() == 0) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
+
+  int64_t num_blocks = 0;
+  int64_t nz_reduction = 0;
+  absl::flat_hash_map<int, int64_t> coeff_map;
+  for (int x = 0; x < context_->working_model->variables().size(); ++x) {
+    if (timer.WorkLimitIsReached()) break;
+
+    bool in_enforcement = false;
+    std::vector<int> linear_cts;
+    timer.TrackSimpleLoop(context_->VarToConstraints(x).size());
+    for (const int c : context_->VarToConstraints(x)) {
+      if (c < 0) continue;
+      const ConstraintProto& ct = context_->working_model->constraints(c);
+      if (ct.constraint_case() != ConstraintProto::kLinear) continue;
+
+      const int num_terms = ct.linear().vars().size();
+      if (num_terms < 2) continue;
+      bool is_canonical = true;
+      timer.TrackSimpleLoop(num_terms);
+      for (int k = 0; k < num_terms; ++k) {
+        if (!RefIsPositive(ct.linear().vars(k))) {
+          is_canonical = false;
+          break;
+        }
+      }
+      if (!is_canonical) continue;
+
+      // We don't care about enforcement literal, but we don't want x inside.
+      timer.TrackSimpleLoop(ct.enforcement_literal().size());
+      for (const int lit : ct.enforcement_literal()) {
+        if (PositiveRef(lit) == x) {
+          in_enforcement = true;
+          break;
+        }
+      }
+
+      // Note(user): We will actually abort right away in this case, but we
+      // want work_done to be deterministic! so we do the work anyway.
+      if (in_enforcement) continue;
+      linear_cts.push_back(c);
+    }
+
+    // If a Boolean is used in enforcement, we prefer not to combine it with
+    // others. TODO(user): more generally ignore Boolean or only replace if
+    // there is a big non-zero improvement.
+    if (in_enforcement) continue;
+    if (linear_cts.size() < 10) continue;
+
+    // For determinism.
+    std::sort(linear_cts.begin(), linear_cts.end());
+    std::shuffle(linear_cts.begin(), linear_cts.end(), *context_->random());
+
+    // Now it is almost the same algo as for FindBigHorizontalLinearOverlap().
+    // We greedely compute a "common" rectangle using the first constraint
+    // as a "base" one. Note that if a aX + bY appear in the majority of
+    // constraint, we have a good chance to find this block since we start by
+    // a random constraint.
+    coeff_map.clear();
+
+    std::vector<std::pair<int, int64_t>> block;
+    std::vector<std::pair<int, int64_t>> common_part;
+    for (const int c : linear_cts) {
+      const ConstraintProto& ct = context_->working_model->constraints(c);
+      const int num_terms = ct.linear().vars().size();
+      timer.TrackSimpleLoop(num_terms);
+
+      // Compute the coeff of x.
+      const int64_t x_coeff = FindVarCoeff(x, ct);
+      if (x_coeff == 0) continue;
+
+      if (block.empty()) {
+        // This is our base constraint.
+        coeff_map.clear();
+        for (int k = 0; k < num_terms; ++k) {
+          coeff_map[ct.linear().vars(k)] = ct.linear().coeffs(k);
+        }
+        if (coeff_map.size() < 2) continue;
+        block.push_back({c, x_coeff});
+        continue;
+      }
+
+      // We are looking for a common divisor of coeff_map and this constraint.
+      const int64_t gcd =
+          std::gcd(std::abs(coeff_map.at(x)), std::abs(x_coeff));
+      const int64_t multiple_base = coeff_map.at(x) / gcd;
+      const int64_t multiple_ct = x_coeff / gcd;
+      common_part.clear();
+      for (int k = 0; k < num_terms; ++k) {
+        const int64_t coeff = ct.linear().coeffs(k);
+        if (coeff % multiple_ct != 0) continue;
+
+        const auto it = coeff_map.find(ct.linear().vars(k));
+        if (it == coeff_map.end()) continue;
+        if (it->second % multiple_base != 0) continue;
+        if (it->second / multiple_base != coeff / multiple_ct) continue;
+
+        common_part.push_back({ct.linear().vars(k), coeff / multiple_ct});
+      }
+
+      // Skip bad constraint.
+      if (common_part.size() < 2) continue;
+
+      // Update coeff_map.
+      block.push_back({c, x_coeff});
+      coeff_map.clear();
+      for (const auto [var, coeff] : common_part) {
+        coeff_map[var] = coeff;
+      }
+    }
+
+    // We have a candidate.
+    const int64_t saved_nz =
+        ComputeNonZeroReduction(block.size(), coeff_map.size());
+    if (saved_nz < 30) continue;
+
+    // Fix multiples, currently this contain the coeff of x for each constraint.
+    const int64_t base_x = coeff_map.at(x);
+    for (auto& [c, multipier] : block) {
+      CHECK_EQ(multipier % base_x, 0);
+      multipier /= base_x;
+    }
+
+    // Introduce new_var = coeff_map and perform the substitution.
+    if (!RemoveCommonPart(coeff_map, block, helper)) continue;
+    ++num_blocks;
+    nz_reduction += saved_nz;
+    context_->UpdateRuleStats("linear matrix: common vertical rectangle");
+  }
+
+  timer.AddCounter("blocks", num_blocks);
+  timer.AddCounter("saved_nz", nz_reduction);
+  DCHECK(context_->ConstraintVariableUsageIsConsistent());
+}
+
+// Note that internally, we already split long linear into smaller chunk, so
+// it should be beneficial to identify common part between many linear
+// constraint.
+//
+// Note(user): This was made to work on var-smallemery-m6j6.pb.gz, but applies
+// to quite a few miplib problem. Try to improve the heuristics and algorithm to
+// be faster and detect larger block.
+void CpModelPresolver::FindBigHorizontalLinearOverlap(
+    ActivityBoundHelper* helper) {
+  if (time_limit_->LimitReached()) return;
+  if (context_->ModelIsUnsat()) return;
+  if (context_->params().presolve_inclusion_work_limit() == 0) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
+
+  const int num_constraints = context_->working_model->constraints_size();
+  std::vector<std::pair<int, int>> to_sort;
+  for (int c = 0; c < num_constraints; ++c) {
+    const ConstraintProto& ct = context_->working_model->constraints(c);
+    if (ct.constraint_case() != ConstraintProto::kLinear) continue;
+    const int size = ct.linear().vars().size();
+    if (size < 5) continue;
+    to_sort.push_back({-size, c});
+  }
+  std::sort(to_sort.begin(), to_sort.end());
+
+  std::vector<int> sorted_linear;
+  for (int i = 0; i < to_sort.size(); ++i) {
+    sorted_linear.push_back(to_sort[i].second);
+  }
+
+  // On large problem, using and hash_map can be slow, so we use the vector
+  // version and for now fill the map only when doing the change.
+  std::vector<int> var_to_coeff_non_zeros;
+  std::vector<int64_t> var_to_coeff(context_->working_model->variables_size(),
+                                    0);
+
+  int64_t num_blocks = 0;
+  int64_t nz_reduction = 0;
+  for (int i = 0; i < sorted_linear.size(); ++i) {
+    const int c = sorted_linear[i];
+    if (c < 0) continue;
+    if (timer.WorkLimitIsReached()) break;
+
+    for (const int var : var_to_coeff_non_zeros) {
+      var_to_coeff[var] = 0;
+    }
+    var_to_coeff_non_zeros.clear();
+    {
+      const ConstraintProto& ct = context_->working_model->constraints(c);
+      const int num_terms = ct.linear().vars().size();
+      timer.TrackSimpleLoop(num_terms);
+      for (int k = 0; k < num_terms; ++k) {
+        const int var = ct.linear().vars(k);
+        var_to_coeff[var] = ct.linear().coeffs(k);
+        var_to_coeff_non_zeros.push_back(var);
+      }
+    }
+
+    // Look for an initial overlap big enough.
+    //
+    // Note that because we construct it incrementally, we need the first two
+    // constraint to have an overlap of at least half this.
+    int saved_nz = 100;
+    std::vector<int> used_sorted_linear = {i};
+    std::vector<std::pair<int, int64_t>> block = {{c, 1}};
+    std::vector<std::pair<int, int64_t>> common_part;
+    std::vector<std::pair<int, int>> old_matches;
+
+    for (int j = 0; j < sorted_linear.size(); ++j) {
+      if (i == j) continue;
+      const int other_c = sorted_linear[j];
+      if (other_c < 0) continue;
+      const ConstraintProto& ct = context_->working_model->constraints(other_c);
+
+      // No need to continue if linear is not large enough.
+      const int num_terms = ct.linear().vars().size();
+      const int best_saved_nz =
+          ComputeNonZeroReduction(block.size() + 1, num_terms);
+      if (best_saved_nz <= saved_nz) break;
+
+      // This is the hot loop here.
+      timer.TrackSimpleLoop(num_terms);
+      common_part.clear();
+      for (int k = 0; k < num_terms; ++k) {
+        const int var = ct.linear().vars(k);
+        if (var_to_coeff[var] == ct.linear().coeffs(k)) {
+          common_part.push_back({var, ct.linear().coeffs(k)});
+        }
+      }
+
+      // We replace (new_block_size) * (common_size) by
+      // 1/ and equation of size common_size + 1
+      // 2/ new_block_size variable
+      // So new_block_size * common_size - common_size - 1 - new_block_size
+      // which is (new_block_size - 1) * (common_size - 1) - 2;
+      const int64_t new_saved_nz =
+          ComputeNonZeroReduction(block.size() + 1, common_part.size());
+      if (new_saved_nz > saved_nz) {
+        saved_nz = new_saved_nz;
+        used_sorted_linear.push_back(j);
+        block.push_back({other_c, 1});
+
+        // Rebuild the map.
+        // TODO(user): We could only clear the non-common part.
+        for (const int var : var_to_coeff_non_zeros) {
+          var_to_coeff[var] = 0;
+        }
+        var_to_coeff_non_zeros.clear();
+        for (const auto [var, coeff] : common_part) {
+          var_to_coeff[var] = coeff;
+          var_to_coeff_non_zeros.push_back(var);
+        }
+      } else {
+        if (common_part.size() > 1) {
+          old_matches.push_back({j, common_part.size()});
+        }
+      }
+    }
+
+    // Introduce a new variable = common_part.
+    // Use it in all linear constraint.
+    if (block.size() > 1) {
+      // Try to extend with exact matches that were skipped.
+      const int match_size = var_to_coeff_non_zeros.size();
+      for (const auto [index, old_match_size] : old_matches) {
+        if (old_match_size < match_size) continue;
+
+        int new_match_size = 0;
+        const int other_c = sorted_linear[index];
+        const ConstraintProto& ct =
+            context_->working_model->constraints(other_c);
+        const int num_terms = ct.linear().vars().size();
+        for (int k = 0; k < num_terms; ++k) {
+          if (var_to_coeff[ct.linear().vars(k)] == ct.linear().coeffs(k)) {
+            ++new_match_size;
+          }
+        }
+        if (new_match_size == match_size) {
+          context_->UpdateRuleStats(
+              "linear matrix: common horizontal rectangle extension");
+          used_sorted_linear.push_back(index);
+          block.push_back({other_c, 1});
+        }
+      }
+
+      // TODO(user): avoid creating the map? this is not visible in profile
+      // though since we only do it when a reduction is performed.
+      absl::flat_hash_map<int, int64_t> coeff_map;
+      for (const int var : var_to_coeff_non_zeros) {
+        coeff_map[var] = var_to_coeff[var];
+      }
+      if (!RemoveCommonPart(coeff_map, block, helper)) continue;
+
+      ++num_blocks;
+      nz_reduction += ComputeNonZeroReduction(block.size(), coeff_map.size());
+      context_->UpdateRuleStats("linear matrix: common horizontal rectangle");
+      for (const int i : used_sorted_linear) sorted_linear[i] = -1;
+    }
+  }
+
+  timer.AddCounter("blocks", num_blocks);
+  timer.AddCounter("saved_nz", nz_reduction);
+  timer.AddCounter("linears", sorted_linear.size());
+  DCHECK(context_->ConstraintVariableUsageIsConsistent());
+}
+
+// Find two linear constraints of the form:
+// - term1 + identical_terms = rhs1
+// - term2 + identical_terms = rhs2
+// This allows to infer an affine relation, and remove one constraint and one
+// variable.
+void CpModelPresolver::FindAlmostIdenticalLinearConstraints() {
+  if (time_limit_->LimitReached()) return;
   if (context_->ModelIsUnsat()) return;
 
-  WallTimer wall_timer;
-  wall_timer.Start();
+  // Work tracking is required, since in the worst case (n identical
+  // constraints), we are in O(n^3). In practice we are way faster though. And
+  // identical constraints should have already be removed when we call this.
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
 
-  struct Superset {
-    int c;  // Index of the constraint.
-    std::vector<int> vars;
-    bool is_exactly_one;
-  };
-  std::vector<Superset> potential_supersets;
+  // Only keep non-enforced linear equality of size > 2. Sort by size.
+  std::vector<std::pair<int, int>> to_sort;
+  const int num_constraints = context_->working_model->constraints_size();
+  for (int c = 0; c < num_constraints; ++c) {
+    const ConstraintProto& ct = context_->working_model->constraints(c);
+    if (!IsLinearEqualityConstraint(ct)) continue;
+    if (ct.linear().vars().size() <= 2) continue;
 
-  struct Subset {
-    int c;  // Index of the linear constraint.
-    std::vector<int> vars;
-  };
-  std::vector<Subset> potential_subsets;
+    // Our canonicalization should sort constraints, we skip non-canonical ones.
+    if (!std::is_sorted(ct.linear().vars().begin(), ct.linear().vars().end())) {
+      continue;
+    }
+
+    to_sort.push_back({ct.linear().vars().size(), c});
+  }
+  std::sort(to_sort.begin(), to_sort.end());
+
+  // One watcher data structure.
+  // This is similar to what is used by the inclusion detector.
+  std::vector<int> var_to_clear;
+  std::vector<std::vector<std::pair<int, int64_t>>> var_to_ct_coeffs_;
+  const int num_variables = context_->working_model->variables_size();
+  var_to_ct_coeffs_.resize(num_variables);
+
+  int end;
+  int num_tested_pairs = 0;
+  int num_affine_relations = 0;
+  for (int start = 0; start < to_sort.size(); start = end) {
+    // Split by identical size.
+    end = start + 1;
+    const int length = to_sort[start].first;
+    for (; end < to_sort.size(); ++end) {
+      if (to_sort[end].first != length) break;
+    }
+    const int span_size = end - start;
+    if (span_size == 1) continue;
+
+    // Watch one term of each constraint randomly.
+    for (const int var : var_to_clear) var_to_ct_coeffs_[var].clear();
+    var_to_clear.clear();
+    for (int i = start; i < end; ++i) {
+      const int c = to_sort[i].second;
+      const LinearConstraintProto& lin =
+          context_->working_model->constraints(c).linear();
+      const int index =
+          absl::Uniform<int>(*context_->random(), 0, lin.vars().size());
+      const int var = lin.vars(index);
+      if (var_to_ct_coeffs_[var].empty()) var_to_clear.push_back(var);
+      var_to_ct_coeffs_[var].push_back({c, lin.coeffs(index)});
+    }
+
+    // For each constraint, try other constraints that have at least one term in
+    // common with the same coeff. Note that for two constraint of size 3, we
+    // will miss a working pair only if we both watch the variable that is
+    // different. So only with a probability (1/3)^2. Since we call this more
+    // than once per presolve, we should be mostly good. For larger constraint,
+    // we shouldn't miss much.
+    for (int i1 = start; i1 < end; ++i1) {
+      if (timer.WorkLimitIsReached()) break;
+      const int c1 = to_sort[i1].second;
+      const LinearConstraintProto& lin1 =
+          context_->working_model->constraints(c1).linear();
+      bool skip = false;
+      for (int i = 0; !skip && i < lin1.vars().size(); ++i) {
+        for (const auto [c2, coeff2] : var_to_ct_coeffs_[lin1.vars(i)]) {
+          if (c2 == c1) continue;
+
+          // TODO(user): we could easily deal with * -1 or other multiples.
+          if (coeff2 != lin1.coeffs(i)) continue;
+          if (timer.WorkLimitIsReached()) break;
+
+          // Skip if we processed this earlier and deleted it.
+          const ConstraintProto& ct2 = context_->working_model->constraints(c2);
+          if (ct2.constraint_case() != ConstraintProto::kLinear) continue;
+          const LinearConstraintProto& lin2 =
+              context_->working_model->constraints(c2).linear();
+          if (lin2.vars().size() != length) continue;
+
+          // TODO(user): In practice LinearsDifferAtOneTerm() will abort
+          // early if the constraints differ early, so we are even faster than
+          // this.
+          timer.TrackSimpleLoop(length);
+
+          ++num_tested_pairs;
+          if (LinearsDifferAtOneTerm(lin1, lin2)) {
+            // The two equalities only differ at one term !
+            // do c1 -= c2 and presolve c1 right away.
+            // We should detect new affine relation and remove it.
+            auto* to_modify = context_->working_model->mutable_constraints(c1);
+            if (!AddLinearConstraintMultiple(
+                    -1, context_->working_model->constraints(c2), to_modify)) {
+              continue;
+            }
+
+            // Affine will be of size 2, but we might also have the same
+            // variable with different coeff in both constraint, in which case
+            // the linear will be of size 1.
+            DCHECK_LE(to_modify->linear().vars().size(), 2);
+
+            ++num_affine_relations;
+            context_->UpdateRuleStats(
+                "linear: advanced affine relation from 2 constraints");
+
+            // We should stop processing c1 since it should be empty afterward.
+            DivideLinearByGcd(to_modify);
+            PresolveSmallLinear(to_modify);
+            context_->UpdateConstraintVariableUsage(c1);
+            skip = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  timer.AddCounter("num_tested_pairs", num_tested_pairs);
+  timer.AddCounter("found", num_affine_relations);
+  DCHECK(context_->ConstraintVariableUsageIsConsistent());
+}
+
+void CpModelPresolver::ExtractEncodingFromLinear() {
+  if (time_limit_->LimitReached()) return;
+  if (context_->ModelIsUnsat()) return;
+  if (context_->params().presolve_inclusion_work_limit() == 0) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
+
+  // TODO(user): compute on the fly instead of temporary storing variables?
+  std::vector<int> relevant_constraints;
+  CompactVectorVector<int> storage;
+  InclusionDetector detector(storage, time_limit_);
+  detector.SetWorkLimit(context_->params().presolve_inclusion_work_limit());
 
   // Loop over the constraints and fill the structures above.
+  //
+  // TODO(user): Ideally we want to process exactly_one first in case a
+  // linear constraint is both included in an at_most_one and an exactly_one.
+  std::vector<int> vars;
   const int num_constraints = context_->working_model->constraints().size();
   for (int c = 0; c < num_constraints; ++c) {
     const ConstraintProto& ct = context_->working_model->constraints(c);
     switch (ct.constraint_case()) {
       case ConstraintProto::kAtMostOne: {
-        std::vector<int> vars;
+        vars.clear();
         for (const int ref : ct.at_most_one().literals()) {
           vars.push_back(PositiveRef(ref));
         }
-        potential_supersets.push_back({c, std::move(vars), false});
+        relevant_constraints.push_back(c);
+        detector.AddPotentialSuperset(storage.Add(vars));
         break;
       }
       case ConstraintProto::kExactlyOne: {
-        std::vector<int> vars;
+        vars.clear();
         for (const int ref : ct.exactly_one().literals()) {
           vars.push_back(PositiveRef(ref));
         }
-        potential_supersets.push_back({c, std::move(vars), true});
+        relevant_constraints.push_back(c);
+        detector.AddPotentialSuperset(storage.Add(vars));
         break;
       }
       case ConstraintProto::kLinear: {
         // We only consider equality with no enforcement.
-        if (!ct.enforcement_literal().empty()) continue;
-        if (ct.linear().domain().size() != 2) continue;
-        if (ct.linear().domain(0) != ct.linear().domain(1)) continue;
+        if (!IsLinearEqualityConstraint(ct)) continue;
 
         // We also want a single non-Boolean.
         // Note that this assume the constraint is canonicalized.
-        std::vector<int> vars;
         bool is_candidate = true;
         int num_integers = 0;
+        vars.clear();
         const int num_terms = ct.linear().vars().size();
         for (int i = 0; i < num_terms; ++i) {
           const int ref = ct.linear().vars(i);
@@ -6272,7 +12726,8 @@ void CpModelPresolver::ExtractEncodingFromLinear() {
         // We ignore cases with just one Boolean as this should be already dealt
         // with elsewhere.
         if (is_candidate && num_integers == 1 && vars.size() > 1) {
-          potential_subsets.push_back({c, std::move(vars)});
+          relevant_constraints.push_back(c);
+          detector.AddPotentialSubset(storage.Add(vars));
         }
         break;
       }
@@ -6281,23 +12736,6 @@ void CpModelPresolver::ExtractEncodingFromLinear() {
     }
   }
 
-  if (potential_supersets.empty()) return;
-  if (potential_subsets.empty()) return;
-
-  // Sort by size. We also want to process exactly_ones first in case a linear
-  // constraint is also included in an at_most_one of the same size.
-  std::sort(potential_supersets.begin(), potential_supersets.end(),
-            [](const Superset& a, const Superset& b) {
-              const int size_a = a.vars.size();
-              const int size_b = b.vars.size();
-              return std::tie(size_a, a.is_exactly_one) <
-                     std::tie(size_b, b.is_exactly_one);
-            });
-  std::sort(potential_subsets.begin(), potential_subsets.end(),
-            [](const Subset& a, const Subset& b) {
-              return a.vars.size() < b.vars.size();
-            });
-
   // Stats.
   int64_t num_exactly_one_encodings = 0;
   int64_t num_at_most_one_encodings = 0;
@@ -6305,111 +12743,345 @@ void CpModelPresolver::ExtractEncodingFromLinear() {
   int64_t num_unique_terms = 0;
   int64_t num_multiple_terms = 0;
 
-  // Structure for efficient inclusion detection.
-  //
-  // TODO(user): Factor this and ComputeSignature() out and merge the 3 places
-  // where we do something similar.
-  int subset_index = 0;
-  std::vector<uint64_t> signatures;
-  std::vector<std::vector<int>> one_watcher;
-  std::vector<bool> is_in_superset;
-  for (const Superset& superset : potential_supersets) {
-    // Include all the potential subset.
-    const int superset_size = superset.vars.size();
-    for (; subset_index < potential_subsets.size(); ++subset_index) {
-      const std::vector<int>& vars = potential_subsets[subset_index].vars;
-      if (vars.size() > superset_size) break;
+  detector.DetectInclusions([&](int subset, int superset) {
+    const int subset_c = relevant_constraints[subset];
+    const int superset_c = relevant_constraints[superset];
+    const ConstraintProto& superset_ct =
+        context_->working_model->constraints(superset_c);
+    if (superset_ct.constraint_case() == ConstraintProto::kAtMostOne) {
+      ++num_at_most_one_encodings;
+    } else {
+      ++num_exactly_one_encodings;
+    }
+    num_literals += storage[subset].size();
+    context_->UpdateRuleStats("encoding: extracted from linear");
 
-      // Choose to watch the one with smallest list.
-      int best_choice = -1;
-      for (const int var : vars) {
-        if (one_watcher.size() <= var) one_watcher.resize(var + 1);
-        if (best_choice == -1 ||
-            one_watcher[var].size() < one_watcher[best_choice].size()) {
-          best_choice = var;
-        }
-      }
-      one_watcher[best_choice].push_back(subset_index);
-      CHECK_EQ(signatures.size(), subset_index);
-      signatures.push_back(ComputeSignature(vars));
+    if (!ProcessEncodingFromLinear(subset_c, superset_ct, &num_unique_terms,
+                                   &num_multiple_terms)) {
+      detector.Stop();  // UNSAT.
     }
 
-    // Find any subset included in current superset.
-    DCHECK(absl::c_all_of(is_in_superset, [](bool b) { return !b; }));
-    for (const int var : superset.vars) {
-      if (var >= is_in_superset.size()) {
-        is_in_superset.resize(var + 1, false);
-      }
-      is_in_superset[var] = true;
+    detector.StopProcessingCurrentSubset();
+  });
+
+  timer.AddCounter("potential_supersets", detector.num_potential_supersets());
+  timer.AddCounter("potential_subsets", detector.num_potential_subsets());
+  timer.AddCounter("amo_encodings", num_at_most_one_encodings);
+  timer.AddCounter("exo_encodings", num_exactly_one_encodings);
+  timer.AddCounter("unique_terms", num_unique_terms);
+  timer.AddCounter("multiple_terms", num_multiple_terms);
+  timer.AddCounter("literals", num_literals);
+}
+
+// Special case: if a literal l appear in exactly two constraints:
+// - l => var in domain1
+// - not(l) => var in domain2
+// then we know that domain(var) is included in domain1 U domain2,
+// and that the literal l can be removed (and determined at postsolve).
+//
+// TODO(user): This could be generalized further to linear of size > 1 if for
+// example the terms are the same.
+//
+// We wait for the model expansion to take place in order to avoid removing
+// encoding that will later be re-created during expansion.
+void CpModelPresolver::LookAtVariableWithDegreeTwo(int var) {
+  CHECK(RefIsPositive(var));
+  CHECK(context_->ConstraintVariableGraphIsUpToDate());
+  if (context_->ModelIsUnsat()) return;
+  if (context_->params().keep_all_feasible_solutions_in_presolve()) return;
+  if (context_->IsFixed(var)) return;
+  if (!context_->ModelIsExpanded()) return;
+  if (!context_->CanBeUsedAsLiteral(var)) return;
+
+  // TODO(user): If var is in objective, we might be able to tighten domains.
+  // ex: enf => x \in [0, 1]
+  //     not(enf) => x \in [1, 2]
+  // The x can be removed from one place. Maybe just do <=> not in [0,1] with
+  // dual code?
+  if (context_->VarToConstraints(var).size() != 2) return;
+
+  bool abort = false;
+  int ct_var = -1;
+  Domain union_of_domain;
+  int num_positive = 0;
+  std::vector<int> constraint_indices_to_remove;
+  for (const int c : context_->VarToConstraints(var)) {
+    if (c < 0) {
+      abort = true;
+      break;
     }
-    {
-      const int max_size = std::max(one_watcher.size(), is_in_superset.size());
-      one_watcher.resize(max_size);
-      is_in_superset.resize(max_size, false);
+    constraint_indices_to_remove.push_back(c);
+    const ConstraintProto& ct = context_->working_model->constraints(c);
+    if (ct.enforcement_literal().size() != 1 ||
+        PositiveRef(ct.enforcement_literal(0)) != var ||
+        ct.constraint_case() != ConstraintProto::kLinear ||
+        ct.linear().vars().size() != 1) {
+      abort = true;
+      break;
     }
-
-    const uint64_t superset_signature = ComputeSignature(superset.vars);
-    for (const int superset_var : superset.vars) {
-      for (int i = 0; i < one_watcher[superset_var].size(); ++i) {
-        const int subset_index = one_watcher[superset_var][i];
-        const Subset& subset = potential_subsets[subset_index];
-        CHECK_LE(subset.vars.size(), superset_size);
-
-        // Quick check with signature.
-        if ((signatures[subset_index] & ~superset_signature) != 0) continue;
-
-        // Long check with bitset.
-        bool is_included = true;
-        for (const int subset_var : subset.vars) {
-          if (!is_in_superset[subset_var]) {
-            is_included = false;
-            break;
-          }
-        }
-        if (!is_included) continue;
-
-        if (!superset.is_exactly_one) {
-          ++num_at_most_one_encodings;
-        } else {
-          ++num_exactly_one_encodings;
-        }
-        num_literals += subset.vars.size();
-        context_->UpdateRuleStats("encoding: extracted from linear");
-
-        if (!ProcessEncodingFromLinear(
-                subset.c, context_->working_model->constraints(superset.c),
-                &num_unique_terms, &num_multiple_terms)) {
-          // UNSAT, we return right away, no cleanup needed.
-          return;
-        }
-
-        // Remove from the watcher list.
-        std::swap(one_watcher[superset_var][i],
-                  one_watcher[superset_var].back());
-        one_watcher[superset_var].pop_back();
-        --i;
-      }
+    if (ct.enforcement_literal(0) == var) ++num_positive;
+    if (ct_var != -1 && PositiveRef(ct.linear().vars(0)) != ct_var) {
+      abort = true;
+      break;
     }
+    ct_var = PositiveRef(ct.linear().vars(0));
+    union_of_domain = union_of_domain.UnionWith(
+        ReadDomainFromProto(ct.linear())
+            .InverseMultiplicationBy(RefIsPositive(ct.linear().vars(0))
+                                         ? ct.linear().coeffs(0)
+                                         : -ct.linear().coeffs(0)));
+  }
+  if (abort) return;
+  if (num_positive != 1) return;
+  if (!context_->IntersectDomainWith(ct_var, union_of_domain)) return;
 
-    // Cleanup.
-    for (const int var : superset.vars) {
-      is_in_superset[var] = false;
+  context_->UpdateRuleStats("variables: removable enforcement literal");
+  absl::c_sort(constraint_indices_to_remove);  // For determinism
+
+  // Note(user): Only one constraint should be enough given how the postsolve
+  // work. However that will not work for the case where we postsolve by solving
+  // the mapping model (debug_postsolve_with_full_solver:true).
+  for (const int c : constraint_indices_to_remove) {
+    context_->NewMappingConstraint(context_->working_model->constraints(c),
+                                   __FILE__, __LINE__);
+    context_->working_model->mutable_constraints(c)->Clear();
+    context_->UpdateConstraintVariableUsage(c);
+  }
+  context_->MarkVariableAsRemoved(var);
+}
+
+namespace {
+
+absl::Span<const int> AtMostOneOrExactlyOneLiterals(const ConstraintProto& ct) {
+  if (ct.constraint_case() == ConstraintProto::kAtMostOne) {
+    return {ct.at_most_one().literals()};
+  } else {
+    return {ct.exactly_one().literals()};
+  }
+}
+
+}  // namespace
+
+void CpModelPresolver::ProcessVariableInTwoAtMostOrExactlyOne(int var) {
+  DCHECK(RefIsPositive(var));
+  DCHECK(context_->ConstraintVariableGraphIsUpToDate());
+  if (context_->ModelIsUnsat()) return;
+  if (context_->IsFixed(var)) return;
+  if (context_->VariableWasRemoved(var)) return;
+  if (!context_->ModelIsExpanded()) return;
+  if (!context_->CanBeUsedAsLiteral(var)) return;
+
+  int64_t cost = 0;
+  if (context_->VarToConstraints(var).contains(kObjectiveConstraint)) {
+    if (context_->VarToConstraints(var).size() != 3) return;
+    cost = context_->ObjectiveMap().at(var);
+  } else {
+    if (context_->VarToConstraints(var).size() != 2) return;
+  }
+
+  // We have a variable with a cost (or without) that appear in two constraints.
+  // We want two at_most_one or exactly_one.
+  // TODO(user): Also deal with bool_and.
+  int c1 = -1;
+  int c2 = -1;
+  for (const int c : context_->VarToConstraints(var)) {
+    if (c < 0) continue;
+    const ConstraintProto& ct = context_->working_model->constraints(c);
+    if (ct.constraint_case() != ConstraintProto::kAtMostOne &&
+        ct.constraint_case() != ConstraintProto::kExactlyOne) {
+      return;
+    }
+    if (c1 == -1) {
+      c1 = c;
+    } else {
+      c2 = c;
     }
   }
 
-  SOLVER_LOG(logger_, "[ExtractEncodingFromLinear]",
-             " #potential_supersets=", potential_supersets.size(),
-             " #potential_subsets=", potential_subsets.size(),
-             " #at_most_one_encodings=", num_at_most_one_encodings,
-             " #exactly_one_encodings=", num_exactly_one_encodings,
-             " #unique_terms=", num_unique_terms,
-             " #multiple_terms=", num_multiple_terms,
-             " #literals=", num_literals, " time=", wall_timer.Get(), "s");
+  // This can happen for variable in a kAffineRelationConstraint.
+  if (c1 == -1 || c2 == -1) return;
+
+  // Tricky: We iterate on a map above, so the order is non-deterministic, we
+  // do not want that, so we re-order the constraints.
+  if (c1 > c2) std::swap(c1, c2);
+
+  // We can always sum the two constraints.
+  // If var appear in one and not(var) in the other, the two term cancel out to
+  // one, so we still have an <= 1 (or eventually a ==1 (see below).
+  //
+  // Note that if the constraint are of size one, they can just be preprocessed
+  // individually and just be removed. So we abort here as the code below
+  // is incorrect if new_ct is an empty constraint.
+  context_->tmp_literals.clear();
+  int c1_ref = std::numeric_limits<int>::min();
+  const ConstraintProto& ct1 = context_->working_model->constraints(c1);
+  if (AtMostOneOrExactlyOneLiterals(ct1).size() <= 1) return;
+  for (const int lit : AtMostOneOrExactlyOneLiterals(ct1)) {
+    if (PositiveRef(lit) == var) {
+      c1_ref = lit;
+    } else {
+      context_->tmp_literals.push_back(lit);
+    }
+  }
+  int c2_ref = std::numeric_limits<int>::min();
+  const ConstraintProto& ct2 = context_->working_model->constraints(c2);
+  if (AtMostOneOrExactlyOneLiterals(ct2).size() <= 1) return;
+  for (const int lit : AtMostOneOrExactlyOneLiterals(ct2)) {
+    if (PositiveRef(lit) == var) {
+      c2_ref = lit;
+    } else {
+      context_->tmp_literals.push_back(lit);
+    }
+  }
+  DCHECK_NE(c1_ref, std::numeric_limits<int>::min());
+  DCHECK_NE(c2_ref, std::numeric_limits<int>::min());
+  if (c1_ref != NegatedRef(c2_ref)) return;
+
+  // If the cost is non-zero, we can use an exactly one to make it zero.
+  // Use that exactly one in the postsolve to recover the value of var.
+  int64_t cost_shift = 0;
+  absl::Span<const int> literals;
+  if (ct1.constraint_case() == ConstraintProto::kExactlyOne) {
+    cost_shift = RefIsPositive(c1_ref) ? cost : -cost;
+    literals = ct1.exactly_one().literals();
+  } else if (ct2.constraint_case() == ConstraintProto::kExactlyOne) {
+    cost_shift = RefIsPositive(c2_ref) ? cost : -cost;
+    literals = ct2.exactly_one().literals();
+  } else {
+    // Dual argument. The one with a negative cost can be transformed to
+    // an exactly one.
+    // Tricky: if there is a cost, we don't want the objective to be
+    // constraining to be able to do that.
+    if (context_->params().keep_all_feasible_solutions_in_presolve()) return;
+    if (context_->params().keep_symmetry_in_presolve()) return;
+    if (cost != 0 && context_->ObjectiveDomainIsConstraining()) return;
+
+    if (RefIsPositive(c1_ref) == (cost < 0)) {
+      cost_shift = RefIsPositive(c1_ref) ? cost : -cost;
+      literals = ct1.at_most_one().literals();
+    } else {
+      cost_shift = RefIsPositive(c2_ref) ? cost : -cost;
+      literals = ct2.at_most_one().literals();
+    }
+  }
+
+  if (!context_->ShiftCostInExactlyOne(literals, cost_shift)) return;
+  DCHECK(!context_->ObjectiveMap().contains(var));
+  context_->NewMappingConstraint(__FILE__, __LINE__)
+      ->mutable_exactly_one()
+      ->mutable_literals()
+      ->Assign(literals.begin(), literals.end());
+
+  // We can now replace the two constraint by a single one, and delete var!
+  const int new_ct_index = context_->working_model->constraints().size();
+  ConstraintProto* new_ct = context_->working_model->add_constraints();
+  if (ct1.constraint_case() == ConstraintProto::kExactlyOne &&
+      ct2.constraint_case() == ConstraintProto::kExactlyOne) {
+    for (const int lit : context_->tmp_literals) {
+      new_ct->mutable_exactly_one()->add_literals(lit);
+    }
+  } else {
+    // At most one here is enough: if all zero, we can satisfy one of the
+    // two exactly one at postsolve.
+    for (const int lit : context_->tmp_literals) {
+      new_ct->mutable_at_most_one()->add_literals(lit);
+    }
+  }
+
+  context_->UpdateNewConstraintsVariableUsage();
+  context_->working_model->mutable_constraints(c1)->Clear();
+  context_->UpdateConstraintVariableUsage(c1);
+  context_->working_model->mutable_constraints(c2)->Clear();
+  context_->UpdateConstraintVariableUsage(c2);
+
+  context_->UpdateRuleStats(
+      "at_most_one: resolved two constraints with opposite literal");
+  context_->MarkVariableAsRemoved(var);
+
+  // TODO(user): If the merged list contains duplicates or literal that are
+  // negation of other, we need to deal with that right away. For some reason
+  // something is not robust to that it seems. Investigate & fix!
+  DCHECK_NE(new_ct->constraint_case(), ConstraintProto::CONSTRAINT_NOT_SET);
+  if (PresolveAtMostOrExactlyOne(new_ct)) {
+    context_->UpdateConstraintVariableUsage(new_ct_index);
+  }
+}
+
+// TODO(user): We can still remove the variable even if we want to keep
+// all feasible solutions for the cases when we have a full encoding.
+// Similarly this shouldn't break symmetry, but we do need to do it for all
+// symmetric variable at once.
+//
+// TODO(user): In fixed search, we disable this rule because we don't update
+// the search strategy, but for some strategy we could.
+//
+// TODO(user): The hint might get lost if the encoding was created during
+// the presolve.
+void CpModelPresolver::ProcessVariableOnlyUsedInEncoding(int var) {
+  if (context_->ModelIsUnsat()) return;
+  if (context_->params().keep_all_feasible_solutions_in_presolve()) return;
+  if (context_->params().keep_symmetry_in_presolve()) return;
+  if (context_->IsFixed(var)) return;
+  if (context_->VariableWasRemoved(var)) return;
+  if (context_->CanBeUsedAsLiteral(var)) return;
+  if (context_->params().search_branching() == SatParameters::FIXED_SEARCH) {
+    return;
+  }
+
+  const bool is_only_used_in_linear1 =
+      context_->VariableIsOnlyUsedInLinear1AndOneExtraConstraint(var);
+  const bool is_only_used_in_encoding =
+      context_->VariableIsOnlyUsedInEncodingAndMaybeInObjective(var);
+  if (!is_only_used_in_encoding && is_only_used_in_linear1) {
+    VariableEncodingLocalModel local_model;
+    local_model.var = var;
+    local_model.single_constraint_using_the_var_outside_the_local_model = -1;
+    local_model.var_in_more_than_one_constraint_outside_the_local_model = false;
+    for (const int c : context_->VarToConstraints(var)) {
+      if (c >= 0) {
+        const ConstraintProto& ct = context_->working_model->constraints(c);
+        if (ct.constraint_case() == ConstraintProto::kLinear &&
+            ct.linear().vars().size() == 1 && ct.linear().vars(0) == var) {
+          local_model.linear1_constraints.push_back(c);
+          continue;
+        }
+      }
+      if (c == kObjectiveConstraint) {
+        local_model.variable_coeff_in_objective =
+            context_->ObjectiveMap().at(var);
+      } else if (
+          local_model.single_constraint_using_the_var_outside_the_local_model ==
+              -1 &&
+          c >= 0) {
+        // First "other" constraint.
+        local_model.single_constraint_using_the_var_outside_the_local_model = c;
+      } else {
+        // We have a second "other" constraint.
+        local_model.single_constraint_using_the_var_outside_the_local_model =
+            -1;
+        local_model.var_in_more_than_one_constraint_outside_the_local_model =
+            true;
+      }
+    }
+
+    MaybeTransferLinear1ToAnotherVariable(local_model, context_);
+    return;
+  }
+  if (!is_only_used_in_encoding) return;
+
+  // Presolve newly created constraints.
+  const int old_size = context_->working_model->constraints_size();
+  TryToReplaceVariableByItsEncoding(var, context_, solution_crush_);
+  for (int c = old_size; c < context_->working_model->constraints_size(); ++c) {
+    if (PresolveOneConstraint(c)) {
+      context_->UpdateConstraintVariableUsage(c);
+    }
+  }
 }
 
 void CpModelPresolver::TryToSimplifyDomain(int var) {
-  CHECK(RefIsPositive(var));
-  CHECK(context_->ConstraintVariableGraphIsUpToDate());
+  DCHECK(RefIsPositive(var));
+  DCHECK(context_->ConstraintVariableGraphIsUpToDate());
   if (context_->ModelIsUnsat()) return;
   if (context_->IsFixed(var)) return;
   if (context_->VariableWasRemoved(var)) return;
@@ -6417,298 +13089,6 @@ void CpModelPresolver::TryToSimplifyDomain(int var) {
 
   const AffineRelation::Relation r = context_->GetAffineRelation(var);
   if (r.representative != var) return;
-
-  // TODO(user): We can still remove the variable even if we want to keep
-  // all feasible solutions for the cases when we have a full encoding.
-  //
-  // TODO(user): In fixed search, we disable this rule because we don't update
-  // the search strategy, but for some strategy we could.
-  //
-  // TODO(user): The hint might get lost if the encoding was created during
-  // the presolve.
-  if (context_->VariableIsRemovable(var) &&
-      !context_->CanBeUsedAsLiteral(var) &&
-      context_->VariableIsOnlyUsedInEncodingAndMaybeInObjective(var) &&
-      context_->params().search_branching() != SatParameters::FIXED_SEARCH) {
-    // We can currently only deal with the case where all encoding constraint
-    // are of the form literal => var ==/!= value.
-    // If they are more complex linear1 involved, we just abort.
-    //
-    // TODO(user): Also deal with the case all >= or <= where we can add a
-    // serie of implication between all involved literals.
-    absl::flat_hash_set<int64_t> values_set;
-    absl::flat_hash_map<int64_t, std::vector<int>> value_to_equal_literals;
-    absl::flat_hash_map<int64_t, std::vector<int>> value_to_not_equal_literals;
-    bool abort = false;
-    for (const int c : context_->VarToConstraints(var)) {
-      if (c < 0) continue;
-      const ConstraintProto& ct = context_->working_model->constraints(c);
-      CHECK_EQ(ct.constraint_case(), ConstraintProto::kLinear);
-      CHECK_EQ(ct.linear().vars().size(), 1);
-      int64_t coeff = ct.linear().coeffs(0);
-      if (std::abs(coeff) != 1 || ct.enforcement_literal().size() != 1) {
-        abort = true;
-        break;
-      }
-      if (!RefIsPositive(ct.linear().vars(0))) coeff *= 1;
-      const Domain rhs =
-          ReadDomainFromProto(ct.linear()).InverseMultiplicationBy(coeff);
-
-      if (rhs.IsFixed()) {
-        if (!context_->DomainOf(var).Contains(rhs.FixedValue())) {
-          if (!context_->SetLiteralToFalse(ct.enforcement_literal(0))) {
-            return;
-          }
-        } else {
-          values_set.insert(rhs.FixedValue());
-          value_to_equal_literals[rhs.FixedValue()].push_back(
-              ct.enforcement_literal(0));
-        }
-      } else {
-        const Domain complement =
-            context_->DomainOf(var).IntersectionWith(rhs.Complement());
-        if (complement.IsEmpty()) {
-          // TODO(user): This should be dealt with elsewhere.
-          abort = true;
-          break;
-        }
-        if (complement.IsFixed()) {
-          if (context_->DomainOf(var).Contains(complement.FixedValue())) {
-            values_set.insert(complement.FixedValue());
-            value_to_not_equal_literals[complement.FixedValue()].push_back(
-                ct.enforcement_literal(0));
-          }
-        } else {
-          abort = true;
-          break;
-        }
-      }
-    }
-    if (abort) {
-      context_->UpdateRuleStats("TODO variables: only used in linear1.");
-    } else if (value_to_not_equal_literals.empty() &&
-               value_to_equal_literals.empty()) {
-      // This is just a variable not used anywhere, it should be removed by
-      // another part of the presolve.
-    } else {
-      // For determinism, sort all the encoded values first.
-      std::vector<int64_t> encoded_values(values_set.begin(), values_set.end());
-      std::sort(encoded_values.begin(), encoded_values.end());
-      CHECK(!encoded_values.empty());
-      const bool is_fully_encoded =
-          encoded_values.size() == context_->DomainOf(var).Size();
-
-      // Link all Boolean in out linear1 to the encoding literals. Note that we
-      // should hopefully already have detected such literal before and this
-      // should add trivial implications.
-      for (const int64_t v : encoded_values) {
-        const int encoding_lit = context_->GetOrCreateVarValueEncoding(var, v);
-        const auto eq_it = value_to_equal_literals.find(v);
-        if (eq_it != value_to_equal_literals.end()) {
-          for (const int lit : eq_it->second) {
-            context_->AddImplication(lit, encoding_lit);
-          }
-        }
-        const auto neq_it = value_to_not_equal_literals.find(v);
-        if (neq_it != value_to_not_equal_literals.end()) {
-          for (const int lit : neq_it->second) {
-            context_->AddImplication(lit, NegatedRef(encoding_lit));
-          }
-        }
-      }
-      context_->UpdateNewConstraintsVariableUsage();
-
-      // This is the set of other values.
-      Domain other_values;
-      if (!is_fully_encoded) {
-        other_values = context_->DomainOf(var).IntersectionWith(
-            Domain::FromValues(encoded_values).Complement());
-      }
-
-      // Update the objective if needed. Note that this operation can fail if
-      // the new expression result in potential overflow.
-      if (context_->VarToConstraints(var).contains(kObjectiveConstraint)) {
-        int64_t min_value;
-        const int64_t obj_coeff = context_->ObjectiveMap().at(var);
-        if (is_fully_encoded) {
-          // We substract the min_value from all coefficients.
-          // This should reduce the objective size and helps with the bounds.
-          min_value =
-              obj_coeff > 0 ? encoded_values.front() : encoded_values.back();
-        } else {
-          // Tricky: If the variable is not fully encoded, then when all
-          // partial encoding literal are false, it must take the "best" value
-          // in other_values. That depend on the sign of the objective coeff.
-          //
-          // We also restrict other value so that the postsolve code below
-          // will fix the variable to the correct value when this happen.
-          other_values =
-              Domain(obj_coeff > 0 ? other_values.Min() : other_values.Max());
-          min_value = other_values.FixedValue();
-        }
-
-        // Checks for overflow before trying to substitute the variable in the
-        // objective.
-        int64_t accumulated = std::abs(min_value);
-        for (const int64_t value : encoded_values) {
-          accumulated = CapAdd(accumulated, std::abs(CapSub(value, min_value)));
-          if (accumulated == std::numeric_limits<int64_t>::max()) {
-            context_->UpdateRuleStats(
-                "TODO variables: only used in objective and in encoding");
-            return;
-          }
-        }
-
-        ConstraintProto encoding_ct;
-        LinearConstraintProto* linear = encoding_ct.mutable_linear();
-        const int64_t coeff_in_equality = -1;
-        linear->add_vars(var);
-        linear->add_coeffs(coeff_in_equality);
-
-        linear->add_domain(-min_value);
-        linear->add_domain(-min_value);
-        for (const int64_t value : encoded_values) {
-          if (value == min_value) continue;
-          const int enf = context_->GetOrCreateVarValueEncoding(var, value);
-          const int64_t coeff = value - min_value;
-          if (RefIsPositive(enf)) {
-            linear->add_vars(enf);
-            linear->add_coeffs(coeff);
-          } else {
-            // (1 - var) * coeff;
-            linear->set_domain(0, encoding_ct.linear().domain(0) - coeff);
-            linear->set_domain(1, encoding_ct.linear().domain(1) - coeff);
-            linear->add_vars(PositiveRef(enf));
-            linear->add_coeffs(-coeff);
-          }
-        }
-        if (!context_->SubstituteVariableInObjective(var, coeff_in_equality,
-                                                     encoding_ct)) {
-          context_->UpdateRuleStats(
-              "TODO variables: only used in objective and in encoding");
-          return;
-        }
-        context_->UpdateRuleStats(
-            "variables: only used in objective and in encoding");
-      } else {
-        context_->UpdateRuleStats("variables: only used in encoding");
-      }
-
-      // Clear all involved constraint.
-      auto copy = context_->VarToConstraints(var);
-      for (const int c : copy) {
-        if (c < 0) continue;
-        context_->working_model->mutable_constraints(c)->Clear();
-        context_->UpdateConstraintVariableUsage(c);
-      }
-
-      // Add enough constraints to the mapping model to recover a valid value
-      // for var when all the booleans are fixed.
-      for (const int64_t value : encoded_values) {
-        const int enf = context_->GetOrCreateVarValueEncoding(var, value);
-        ConstraintProto* ct = context_->mapping_model->add_constraints();
-        ct->add_enforcement_literal(enf);
-        ct->mutable_linear()->add_vars(var);
-        ct->mutable_linear()->add_coeffs(1);
-        ct->mutable_linear()->add_domain(value);
-        ct->mutable_linear()->add_domain(value);
-      }
-
-      // This must be done after we removed all the constraint containing var.
-      ConstraintProto* new_ct = context_->working_model->add_constraints();
-      if (is_fully_encoded) {
-        // The encoding is full: add an exactly one.
-        for (const int64_t value : encoded_values) {
-          new_ct->mutable_exactly_one()->add_literals(
-              context_->GetOrCreateVarValueEncoding(var, value));
-        }
-        PresolveExactlyOne(new_ct);
-      } else {
-        // If all literal are false, then var must take one of the other values.
-        ConstraintProto* mapping_ct =
-            context_->mapping_model->add_constraints();
-        mapping_ct->mutable_linear()->add_vars(var);
-        mapping_ct->mutable_linear()->add_coeffs(1);
-        FillDomainInProto(other_values, mapping_ct->mutable_linear());
-
-        for (const int64_t value : encoded_values) {
-          const int literal = context_->GetOrCreateVarValueEncoding(var, value);
-          mapping_ct->add_enforcement_literal(NegatedRef(literal));
-          new_ct->mutable_at_most_one()->add_literals(literal);
-        }
-        PresolveAtMostOne(new_ct);
-      }
-
-      context_->UpdateNewConstraintsVariableUsage();
-      context_->MarkVariableAsRemoved(var);
-      return;
-    }
-  }
-
-  // Special case: if a literal l appear in exactly two constraints:
-  // - l => var in domain1
-  // - not(l) => var in domain2
-  // then we know that domain(var) is included in domain1 U domain2,
-  // and that the literal l can be removed (and determined at postsolve).
-  //
-  // TODO(user): This could be generalized further to linear of size > 1 if for
-  // example the terms are the same.
-  //
-  // We wait for the model expansion to take place in order to avoid removing
-  // encoding that will later be re-created during expansion.
-  if (context_->ModelIsExpanded() && context_->CanBeUsedAsLiteral(var) &&
-      context_->VariableIsRemovable(var) &&
-      context_->VarToConstraints(var).size() == 2) {
-    bool abort = false;
-    int ct_var = -1;
-    Domain union_of_domain;
-    int num_positive = 0;
-    std::vector<int> constraint_indices_to_remove;
-    for (const int c : context_->VarToConstraints(var)) {
-      if (c < 0) {
-        abort = true;
-        continue;
-      }
-      constraint_indices_to_remove.push_back(c);
-      const ConstraintProto& ct = context_->working_model->constraints(c);
-      if (ct.enforcement_literal().size() != 1 ||
-          PositiveRef(ct.enforcement_literal(0)) != var ||
-          ct.constraint_case() != ConstraintProto::kLinear ||
-          ct.linear().vars().size() != 1) {
-        abort = true;
-        break;
-      }
-      if (ct.enforcement_literal(0) == var) ++num_positive;
-      if (ct_var != -1 && PositiveRef(ct.linear().vars(0)) != ct_var) {
-        abort = true;
-        break;
-      }
-      ct_var = PositiveRef(ct.linear().vars(0));
-      union_of_domain = union_of_domain.UnionWith(
-          ReadDomainFromProto(ct.linear())
-              .InverseMultiplicationBy(RefIsPositive(ct.linear().vars(0))
-                                           ? ct.linear().coeffs(0)
-                                           : -ct.linear().coeffs(0)));
-    }
-    if (!abort && num_positive == 1) {
-      if (!context_->IntersectDomainWith(ct_var, union_of_domain)) {
-        return;
-      }
-      context_->UpdateRuleStats("variables: removable enforcement literal");
-      for (const int c : constraint_indices_to_remove) {
-        *context_->mapping_model->add_constraints() =
-            context_->working_model->constraints(c);
-        context_->mapping_model
-            ->mutable_constraints(
-                context_->mapping_model->constraints().size() - 1)
-            ->set_name("here");
-        context_->working_model->mutable_constraints(c)->Clear();
-        context_->UpdateConstraintVariableUsage(c);
-      }
-      context_->MarkVariableAsRemoved(var);
-      return;
-    }
-  }
 
   // Only process discrete domain.
   const Domain& domain = context_->DomainOf(var);
@@ -6729,7 +13109,7 @@ void CpModelPresolver::TryToSimplifyDomain(int var) {
     const int64_t shifted_value = i.start - var_min;
     DCHECK_GT(shifted_value, 0);
 
-    gcd = MathUtil::GCD64(gcd, shifted_value);
+    gcd = std::gcd(gcd, shifted_value);
     if (gcd == 1) break;
   }
   if (gcd == 1) return;
@@ -6747,15 +13127,13 @@ void CpModelPresolver::EncodeAllAffineRelations() {
     const AffineRelation::Relation r = context_->GetAffineRelation(var);
     if (r.representative == var) continue;
 
-    if (!context_->keep_all_feasible_solutions) {
-      // TODO(user): It seems some affine relation are still removable at this
-      // stage even though they should be removed inside PresolveToFixPoint().
-      // Investigate. For now, we just remove such relations.
-      if (context_->VariableIsNotUsedAnymore(var)) continue;
-      if (!PresolveAffineRelationIfAny(var)) break;
-      if (context_->VariableIsNotUsedAnymore(var)) continue;
-      if (context_->IsFixed(var)) continue;
-    }
+    // TODO(user): It seems some affine relation are still removable at this
+    // stage even though they should be removed inside PresolveToFixPoint().
+    // Investigate. For now, we just remove such relations.
+    if (context_->VariableIsNotUsedAnymore(var)) continue;
+    if (!PresolveAffineRelationIfAny(var)) break;
+    if (context_->VariableIsNotUsedAnymore(var)) continue;
+    if (context_->IsFixed(var)) continue;
 
     ++num_added;
     ConstraintProto* ct = context_->working_model->add_constraints();
@@ -6780,8 +13158,6 @@ void CpModelPresolver::EncodeAllAffineRelations() {
 
 // Presolve a variable in relation with its representative.
 bool CpModelPresolver::PresolveAffineRelationIfAny(int var) {
-  if (context_->VariableIsNotUsedAnymore(var)) return true;
-
   const AffineRelation::Relation r = context_->GetAffineRelation(var);
   if (r.representative == var) return true;
 
@@ -6793,29 +13169,66 @@ bool CpModelPresolver::PresolveAffineRelationIfAny(int var) {
   // variable do not appear in any other constraint and is not a representative,
   // in which case it should never be added back.
   if (context_->IsFixed(var)) return true;
-  CHECK(context_->VarToConstraints(var).contains(kAffineRelationConstraint));
-  CHECK(!context_->VariableIsNotUsedAnymore(r.representative));
+  DCHECK(context_->VarToConstraints(var).contains(kAffineRelationConstraint));
+  DCHECK(!context_->VariableIsNotUsedAnymore(r.representative));
 
   // If var is no longer used, remove. Note that we can always do that since we
   // propagated the domain above and so we can find a feasible value for a for
   // any value of the representative.
-  if (context_->VariableIsUniqueAndRemovable(var)) {
-    // Add relation with current representative to the mapping model.
-    ConstraintProto* ct = context_->mapping_model->add_constraints();
-    auto* arg = ct->mutable_linear();
-    arg->add_vars(var);
-    arg->add_coeffs(1);
-    arg->add_vars(r.representative);
-    arg->add_coeffs(-r.coeff);
-    arg->add_domain(r.offset);
-    arg->add_domain(r.offset);
-    context_->RemoveVariableFromAffineRelation(var);
-  }
+  context_->RemoveNonRepresentativeAffineVariableIfUnused(var);
   return true;
 }
 
+// Re-add to the queue the constraints that touch a variable that changed.
+bool CpModelPresolver::ProcessChangedVariables(std::vector<bool>* in_queue,
+                                               std::deque<int>* queue) {
+  // TODO(user): Avoid reprocessing the constraints that changed the domain?
+  if (context_->ModelIsUnsat()) return false;
+  if (time_limit_->LimitReached()) return false;
+  in_queue->resize(context_->working_model->constraints_size(), false);
+  const auto& vector_that_can_grow_during_iter =
+      context_->modified_domains.PositionsSetAtLeastOnce();
+  for (int i = 0; i < vector_that_can_grow_during_iter.size(); ++i) {
+    const int v = vector_that_can_grow_during_iter[i];
+    context_->modified_domains.Clear(v);
+    if (context_->VariableIsNotUsedAnymore(v)) continue;
+    if (context_->ModelIsUnsat()) return false;
+    if (!PresolveAffineRelationIfAny(v)) return false;
+    if (context_->VariableIsNotUsedAnymore(v)) continue;
+
+    TryToSimplifyDomain(v);
+
+    // TODO(user): Integrate these with TryToSimplifyDomain().
+    if (context_->ModelIsUnsat()) return false;
+    context_->UpdateNewConstraintsVariableUsage();
+
+    if (!context_->CanonicalizeOneObjectiveVariable(v)) return false;
+
+    in_queue->resize(context_->working_model->constraints_size(), false);
+    const int size_before = queue->size();
+    for (const int c : context_->VarToConstraints(v)) {
+      if (c >= 0 && !(*in_queue)[c]) {
+        (*in_queue)[c] = true;
+        queue->push_back(c);
+      }
+    }
+
+    // Make sure the order is deterministic! because var_to_constraints[]
+    // order changes from one run to the next.
+    std::sort(queue->begin() + size_before, queue->end());
+  }
+  context_->modified_domains.ResetAllToFalse();
+  return !queue->empty();
+}
+
 void CpModelPresolver::PresolveToFixPoint() {
+  if (time_limit_->LimitReached()) return;
   if (context_->ModelIsUnsat()) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
+
+  // We do at most 2 tests per PresolveToFixPoint() call since this can be slow.
+  int num_dominance_tests = 0;
+  int num_dual_strengthening = 0;
 
   // Limit on number of operations.
   const int64_t max_num_operations =
@@ -6828,15 +13241,13 @@ void CpModelPresolver::PresolveToFixPoint() {
   // reason.
   absl::flat_hash_set<std::pair<int, int>> var_constraint_pair_already_called;
 
-  TimeLimit* time_limit = context_->time_limit();
-
   // The queue of "active" constraints, initialized to the non-empty ones.
   std::vector<bool> in_queue(context_->working_model->constraints_size(),
                              false);
   std::deque<int> queue;
   for (int c = 0; c < in_queue.size(); ++c) {
     if (context_->working_model->constraints(c).constraint_case() !=
-        ConstraintProto::ConstraintCase::CONSTRAINT_NOT_SET) {
+        ConstraintProto::CONSTRAINT_NOT_SET) {
       in_queue[c] = true;
       queue.push_back(c);
     }
@@ -6856,11 +13267,19 @@ void CpModelPresolver::PresolveToFixPoint() {
     });
   }
 
-  while (!queue.empty() && !context_->ModelIsUnsat()) {
-    if (time_limit->LimitReached()) break;
+  // We put a hard limit on the number of loop to prevent some corner case with
+  // propagation loops. Note that the limit is quite high so it shouldn't really
+  // be reached in most situation.
+  int num_loops = 0;
+  constexpr int kMaxNumLoops = 1000;
+  for (; num_loops < kMaxNumLoops && !queue.empty(); ++num_loops) {
+    if (time_limit_->LimitReached()) break;
+    if (context_->ModelIsUnsat()) break;
     if (context_->num_presolve_operations > max_num_operations) break;
+
+    // Empty the queue of single constraint presolve.
     while (!queue.empty() && !context_->ModelIsUnsat()) {
-      if (time_limit->LimitReached()) break;
+      if (time_limit_->LimitReached()) break;
       if (context_->num_presolve_operations > max_num_operations) break;
       const int c = queue.front();
       in_queue[c] = false;
@@ -6870,9 +13289,10 @@ void CpModelPresolver::PresolveToFixPoint() {
           context_->working_model->constraints_size();
       const bool changed = PresolveOneConstraint(c);
       if (context_->ModelIsUnsat()) {
-        SOLVER_LOG(logger_, "Unsat after presolving constraint #", c,
-                   " (warning, dump might be inconsistent): ",
-                   context_->working_model->constraints(c).ShortDebugString());
+        SOLVER_LOG(
+            logger_, "Unsat after presolving constraint #", c,
+            " (warning, dump might be inconsistent): ",
+            ProtobufShortDebugString(context_->working_model->constraints(c)));
       }
 
       // Add to the queue any newly created constraints.
@@ -6886,44 +13306,47 @@ void CpModelPresolver::PresolveToFixPoint() {
         }
       }
 
-      // TODO(user): Is seems safer to simply remove the changed Boolean.
-      // We loose a bit of performance, but the code is simpler.
+      // TODO(user): Is seems safer to remove the changed Boolean and maybe
+      // just compare the number of applied "rules" before/after.
       if (changed) {
         context_->UpdateConstraintVariableUsage(c);
       }
     }
 
-    // This is needed to remove variable with a different representative from
-    // the objective. This allows to remove them completely in the loop below.
     if (context_->ModelIsUnsat()) return;
-    if (!context_->CanonicalizeObjective()) return;
 
-    // We also make sure all affine relations are propagated and any not
-    // yet canonicalized domain is.
-    //
-    // TODO(user): maybe we can avoid iterating over all variables, but then
-    // we already do that below.
-    const int current_num_variables = context_->working_model->variables_size();
-    for (int v = 0; v < current_num_variables; ++v) {
+    in_queue.resize(context_->working_model->constraints_size(), false);
+    const auto& vector_that_can_grow_during_iter =
+        context_->var_with_reduced_small_degree.PositionsSetAtLeastOnce();
+    for (int i = 0; i < vector_that_can_grow_during_iter.size(); ++i) {
+      const int v = vector_that_can_grow_during_iter[i];
+      if (context_->VariableIsNotUsedAnymore(v)) continue;
+
+      // Remove the variable from the set to allow it to be pushed again.
+      // This is necessary since a few affine logic needs to add the same
+      // variable back to a second pass of processing.
+      context_->var_with_reduced_small_degree.Clear(v);
+
+      // Make sure all affine relations are propagated.
+      // This also remove the relation if the degree is now one.
       if (context_->ModelIsUnsat()) return;
       if (!PresolveAffineRelationIfAny(v)) return;
 
-      // Try to canonicalize the domain, note that we should have detected all
-      // affine relations before, so we don't recreate "canononical" variables
-      // if they already exist in the model.
-      TryToSimplifyDomain(v);
-      context_->UpdateNewConstraintsVariableUsage();
-    }
+      const int degree = context_->VarToConstraints(v).size();
+      if (degree == 0) continue;
+      if (degree == 2) LookAtVariableWithDegreeTwo(v);
+      if (degree == 2 || degree == 3) {
+        // Tricky: this function can add new constraint.
+        ProcessVariableInTwoAtMostOrExactlyOne(v);
+        in_queue.resize(context_->working_model->constraints_size(), false);
+        continue;
+      }
 
-    // Re-add to the queue constraints that have unique variables. Note that to
-    // not enter an infinite loop, we call each (var, constraint) pair at most
-    // once.
-    const int num_vars = context_->working_model->variables_size();
-    in_queue.resize(context_->working_model->constraints_size(), false);
-    for (int v = 0; v < num_vars; ++v) {
-      const auto& constraints = context_->VarToConstraints(v);
-      if (constraints.size() != 1) continue;
-      const int c = *constraints.begin();
+      // Re-add to the queue constraints that have unique variables. Note that
+      // to not enter an infinite loop, we call each (var, constraint) pair at
+      // most once.
+      if (degree != 1) continue;
+      const int c = *context_->VarToConstraints(v).begin();
       if (c < 0) continue;
 
       // Note that to avoid bad complexity in problem like a TSP with just one
@@ -6940,54 +13363,65 @@ void CpModelPresolver::PresolveToFixPoint() {
         queue.push_back(c);
       }
     }
+    context_->var_with_reduced_small_degree.ResetAllToFalse();
 
-    for (int i = 0; i < 2; ++i) {
-      // Re-add to the queue the constraints that touch a variable that changed.
-      //
-      // TODO(user): Avoid reprocessing the constraints that changed the
-      // variables with the use of time_exprstamp.
-      if (context_->ModelIsUnsat()) return;
-      in_queue.resize(context_->working_model->constraints_size(), false);
-      for (const int v : context_->modified_domains.PositionsSetAtLeastOnce()) {
-        if (context_->VariableIsNotUsedAnymore(v)) continue;
-        if (context_->IsFixed(v)) context_->ExploitFixedDomain(v);
-        for (const int c : context_->VarToConstraints(v)) {
-          if (c >= 0 && !in_queue[c]) {
-            in_queue[c] = true;
-            queue.push_back(c);
-          }
-        }
-      }
+    if (ProcessChangedVariables(&in_queue, &queue)) continue;
 
-      // If we reach the end of the loop, try to detect dominance relations.
-      if (!queue.empty() || i == 1) break;
+    DCHECK(!context_->HasUnusedAffineVariable());
 
-      // Detect & exploit dominance between variables, or variables that can
-      // move freely in one direction. Or variables that are just blocked by one
-      // constraint in one direction.
-      //
-      // TODO(user): We can support assumptions but we need to not cut them out
-      // of the feasible region.
-      if (!context_->keep_all_feasible_solutions &&
-          context_->working_model->assumptions().empty()) {
-        VarDomination var_dom;
-        DualBoundStrengthening dual_bound_strengthening;
-        DetectDominanceRelations(*context_, &var_dom,
-                                 &dual_bound_strengthening);
-        if (!dual_bound_strengthening.Strengthen(context_)) return;
-
-        // TODO(user): The Strengthen() function above might make some
-        // inequality tight. Currently, because we only do that for implication,
-        // this will not change who dominate who, but in general we should
-        // process the new constraint direction before calling this.
-        if (!ExploitDominanceRelations(var_dom, context_)) return;
-      }
+    // Deal with integer variable only appearing in an encoding.
+    if (!context_->CanonicalizeObjective()) return;
+    for (int v = 0; v < context_->working_model->variables().size(); ++v) {
+      ProcessVariableOnlyUsedInEncoding(v);
     }
+    if (ProcessChangedVariables(&in_queue, &queue)) continue;
 
-    // Make sure the order is deterministic! because var_to_constraints[]
-    // order changes from one run to the next.
-    std::sort(queue.begin(), queue.end());
-    context_->modified_domains.SparseClearAll();
+    // Perform dual reasoning.
+    //
+    // TODO(user): We can support assumptions but we need to not cut them out
+    // of the feasible region.
+    if (context_->params().keep_all_feasible_solutions_in_presolve()) break;
+    if (!context_->working_model->assumptions().empty()) break;
+
+    // Starts by the "faster" algo that exploit variables that can move freely
+    // in one direction. Or variables that are just blocked by one constraint in
+    // one direction.
+    for (int i = 0; i < 10; ++i) {
+      if (context_->ModelIsUnsat()) return;
+      ++num_dual_strengthening;
+      DualBoundStrengthening dual_bound_strengthening;
+      ScanModelForDualBoundStrengthening(*context_, &dual_bound_strengthening);
+
+      // TODO(user): Make sure that if we fix one variable, we fix its full
+      // symmetric orbit. There should be no reason that we don't do that
+      // though.
+      if (!dual_bound_strengthening.Strengthen(context_)) return;
+      if (ProcessChangedVariables(&in_queue, &queue)) break;
+
+      // It is possible we deleted some constraint, but the queue is empty.
+      // In this case we redo a pass of dual bound strenghtening as we might
+      // perform more reduction.
+      //
+      // TODO(user): maybe we could reach fix point directly?
+      if (dual_bound_strengthening.NumDeletedConstraints() == 0) break;
+    }
+    if (!queue.empty()) continue;
+
+    // Dominance reasoning will likely break symmetry.
+    // TODO(user): We can apply the one that do not break any though, or the
+    // operations that are safe.
+    if (context_->params().keep_symmetry_in_presolve()) break;
+
+    // Detect & exploit dominance between variables.
+    // TODO(user): This can be slow, remove from fix-pint loop?
+    if (num_dominance_tests++ < 2) {
+      if (context_->ModelIsUnsat()) return;
+      PresolveTimer timer("DetectDominanceRelations", logger_, time_limit_);
+      VarDomination var_dom;
+      ScanModelForDominanceDetection(*context_, &var_dom);
+      if (!ExploitDominanceRelations(var_dom, context_)) return;
+      if (ProcessChangedVariables(&in_queue, &queue)) continue;
+    }
   }
 
   if (context_->ModelIsUnsat()) return;
@@ -7000,359 +13434,234 @@ void CpModelPresolver::PresolveToFixPoint() {
   // TODO(user): ideally we should "wake-up" any constraint that contains an
   // absent interval in the main propagation loop above. But we currently don't
   // maintain such list.
-  const int num_constraints = context_->working_model->constraints_size();
-  for (int c = 0; c < num_constraints; ++c) {
-    ConstraintProto* ct = context_->working_model->mutable_constraints(c);
-    switch (ct->constraint_case()) {
-      case ConstraintProto::ConstraintCase::kNoOverlap:
-        // Filter out absent intervals.
-        if (PresolveNoOverlap(ct)) {
-          context_->UpdateConstraintVariableUsage(c);
-        }
-        break;
-      case ConstraintProto::ConstraintCase::kNoOverlap2D:
-        // Filter out absent intervals.
-        if (PresolveNoOverlap2D(c, ct)) {
-          context_->UpdateConstraintVariableUsage(c);
-        }
-        break;
-      case ConstraintProto::ConstraintCase::kCumulative:
-        // Filter out absent intervals.
-        if (PresolveCumulative(ct)) {
-          context_->UpdateConstraintVariableUsage(c);
-        }
-        break;
-      case ConstraintProto::ConstraintCase::kBoolOr: {
-        // Try to infer domain reductions from clauses and the saved "implies in
-        // domain" relations.
-        for (const auto& pair :
-             context_->deductions.ProcessClause(ct->bool_or().literals())) {
-          bool modified = false;
-          if (!context_->IntersectDomainWith(pair.first, pair.second,
-                                             &modified)) {
-            return;
+  if (!time_limit_->LimitReached()) {
+    const int num_constraints = context_->working_model->constraints_size();
+    TimeLimitCheckEveryNCalls bool_or_check_time_limit(100, time_limit_);
+    for (int c = 0; c < num_constraints; ++c) {
+      ConstraintProto* ct = context_->working_model->mutable_constraints(c);
+      // We don't want to check the time limit at each "small" constraint as
+      // there could be many.
+      bool check_time_limit = false;
+
+      switch (ct->constraint_case()) {
+        case ConstraintProto::kNoOverlap:
+          // Filter out absent intervals.
+          if (PresolveNoOverlap(ct)) {
+            context_->UpdateConstraintVariableUsage(c);
           }
-          if (modified) {
-            context_->UpdateRuleStats("deductions: reduced variable domain");
+          check_time_limit = true;
+          break;
+        case ConstraintProto::kNoOverlap2D:
+          // Filter out absent intervals.
+          if (PresolveNoOverlap2D(c, ct)) {
+            context_->UpdateConstraintVariableUsage(c);
           }
+          check_time_limit = true;
+          break;
+        case ConstraintProto::kCumulative:
+          // Filter out absent intervals.
+          if (PresolveCumulative(ct)) {
+            context_->UpdateConstraintVariableUsage(c);
+          }
+          check_time_limit = true;
+          break;
+        case ConstraintProto::kBoolOr: {
+          // Try to infer domain reductions from clauses and the saved "implies
+          // in domain" relations.
+          for (const auto& pair :
+               context_->deductions.ProcessClause(ct->bool_or().literals())) {
+            bool modified = false;
+            if (!context_->IntersectDomainWith(pair.first, pair.second,
+                                               &modified)) {
+              return;
+            }
+            if (modified) {
+              context_->UpdateRuleStats("deductions: reduced variable domain");
+            }
+          }
+          if (bool_or_check_time_limit.LimitReached()) check_time_limit = true;
+          break;
         }
-        break;
+        default:
+          break;
       }
-      default:
-        break;
+      if (check_time_limit && time_limit_->LimitReached()) break;
     }
   }
 
+  timer.AddCounter("num_loops", num_loops);
+  timer.AddCounter("num_dual_strengthening", num_dual_strengthening);
   context_->deductions.MarkProcessingAsDoneForNow();
 }
 
-ModelCopy::ModelCopy(PresolveContext* context) : context_(context) {}
+// TODO(user): Use better heuristic?
+//
+// TODO(user): This is similar to what Bounded variable addition (BVA) does.
+// By adding a new variable, enforcement => literals becomes
+// enforcement => x => literals, and we have one clause + #literals implication
+// instead of #literals clauses. What BVA does in addition is to use the same
+// x for other enforcement list if the rhs literals are shared.
+void CpModelPresolver::MergeClauses() {
+  if (context_->ModelIsUnsat()) return;
+  PresolveTimer timer(__FUNCTION__, logger_, time_limit_);
 
-// TODO(user): Merge with the phase 1 of the presolve code.
-bool ModelCopy::ImportAndSimplifyConstraints(
-    const CpModelProto& in_model, const std::vector<int>& ignored_constraints) {
-  const absl::flat_hash_set<int> ignored_constraints_set(
-      ignored_constraints.begin(), ignored_constraints.end());
-  context_->InitializeNewDomains();
+  // Constraint index that changed.
+  std::vector<int> to_clean;
 
-  starting_constraint_index_ = context_->working_model->constraints_size();
-  for (int c = 0; c < in_model.constraints_size(); ++c) {
-    if (ignored_constraints_set.contains(c)) continue;
+  // Keep a map from negation of enforcement_literal => bool_and ct index.
+  absl::flat_hash_map<uint64_t, int> bool_and_map;
 
-    const ConstraintProto& ct = in_model.constraints(c);
-    if (OneEnforcementLiteralIsFalse(ct) &&
-        ct.constraint_case() != ConstraintProto::kInterval) {
-      continue;
-    }
-    switch (ct.constraint_case()) {
-      case ConstraintProto::CONSTRAINT_NOT_SET: {
-        break;
-      }
-      case ConstraintProto::kBoolOr: {
-        if (!CopyBoolOr(ct)) return CreateUnsatModel();
-        break;
-      }
-      case ConstraintProto::kBoolAnd: {
-        if (!CopyBoolAnd(ct)) return CreateUnsatModel();
-        break;
-      }
-      case ConstraintProto::kLinear: {
-        if (!CopyLinear(ct)) return CreateUnsatModel();
-        break;
-      }
-      case ConstraintProto::kAtMostOne: {
-        if (!CopyAtMostOne(ct)) return CreateUnsatModel();
-        break;
-      }
-      case ConstraintProto::kExactlyOne: {
-        if (!CopyExactlyOne(ct)) return CreateUnsatModel();
-        break;
-      }
-      case ConstraintProto::kInterval: {
-        if (!CopyInterval(ct, c)) return CreateUnsatModel();
-        break;
-      }
-      default: {
-        *context_->working_model->add_constraints() = ct;
-      }
-    }
-  }
+  // First loop over the constraint:
+  // - Register already existing bool_and.
+  // - score at_most_ones literals.
+  // - Record bool_or.
+  const int num_variables = context_->working_model->variables_size();
+  std::vector<int> bool_or_indices;
+  std::vector<int64_t> literal_score(2 * num_variables, 0);
+  const auto get_index = [](int ref) {
+    return 2 * PositiveRef(ref) + (RefIsPositive(ref) ? 0 : 1);
+  };
 
-  // Re-map interval indices for new constraints.
-  // TODO(user): Support removing unperformed intervals.
-  for (int c = starting_constraint_index_;
-       c < context_->working_model->constraints_size(); ++c) {
-    ConstraintProto& ct_ref = *context_->working_model->mutable_constraints(c);
-    ApplyToAllIntervalIndices(
-        [this](int* ref) {
-          const auto& it = interval_mapping_.find(*ref);
-          if (it != interval_mapping_.end()) {
-            *ref = it->second;
+  int64_t num_collisions = 0;
+  int64_t num_merges = 0;
+  int64_t num_saved_literals = 0;
+  ClauseWithOneMissingHasher hasher(*context_->random());
+  const int num_constraints = context_->working_model->constraints_size();
+  for (int c = 0; c < num_constraints; ++c) {
+    ConstraintProto* ct = context_->working_model->mutable_constraints(c);
+    if (ct->constraint_case() == ConstraintProto::kBoolAnd) {
+      if (ct->enforcement_literal().size() > 1) {
+        // We need to sort the negated literals.
+        std::sort(ct->mutable_enforcement_literal()->begin(),
+                  ct->mutable_enforcement_literal()->end(),
+                  std::greater<int>());
+        const auto [it, inserted] = bool_and_map.insert(
+            {hasher.HashOfNegatedLiterals(ct->enforcement_literal()), c});
+        if (inserted) {
+          to_clean.push_back(c);
+        } else {
+          // See if this is a true duplicate. If yes, merge rhs.
+          ConstraintProto* other_ct =
+              context_->working_model->mutable_constraints(it->second);
+          const absl::Span<const int> s1(ct->enforcement_literal());
+          const absl::Span<const int> s2(other_ct->enforcement_literal());
+          if (s1 == s2) {
+            context_->UpdateRuleStats(
+                "bool_and: merged constraints with same enforcement");
+            other_ct->mutable_bool_and()->mutable_literals()->Add(
+                ct->bool_and().literals().begin(),
+                ct->bool_and().literals().end());
+            ct->Clear();
+            context_->UpdateConstraintVariableUsage(c);
           }
-        },
-        &ct_ref);
-  }
-
-  return true;
-}
-
-void ModelCopy::CopyEnforcementLiterals(const ConstraintProto& orig,
-                                        ConstraintProto* dest) {
-  temp_enforcement_literals_.clear();
-  for (const int lit : orig.enforcement_literal()) {
-    if (context_->LiteralIsTrue(lit)) {
-      skipped_non_zero_++;
+        }
+      }
       continue;
     }
-    temp_enforcement_literals_.push_back(lit);
-  }
-  dest->mutable_enforcement_literal()->Add(temp_enforcement_literals_.begin(),
-                                           temp_enforcement_literals_.end());
-}
-
-bool ModelCopy::OneEnforcementLiteralIsFalse(const ConstraintProto& ct) const {
-  for (const int lit : ct.enforcement_literal()) {
-    if (context_->LiteralIsFalse(lit)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool ModelCopy::CopyBoolOr(const ConstraintProto& ct) {
-  temp_literals_.clear();
-  for (const int lit : ct.enforcement_literal()) {
-    if (context_->LiteralIsTrue(lit)) continue;
-    temp_literals_.push_back(NegatedRef(lit));
-  }
-  for (const int lit : ct.bool_or().literals()) {
-    if (context_->LiteralIsTrue(lit)) {
-      return true;
-    }
-    if (context_->LiteralIsFalse(lit)) {
-      skipped_non_zero_++;
-    } else {
-      temp_literals_.push_back(lit);
-    }
-  }
-
-  context_->working_model->add_constraints()
-      ->mutable_bool_or()
-      ->mutable_literals()
-      ->Add(temp_literals_.begin(), temp_literals_.end());
-  return !temp_literals_.empty();
-}
-
-bool ModelCopy::CopyBoolAnd(const ConstraintProto& ct) {
-  bool at_least_one_false = false;
-  int num_non_fixed_literals = 0;
-  for (const int lit : ct.bool_and().literals()) {
-    if (context_->LiteralIsFalse(lit)) {
-      at_least_one_false = true;
-      break;
-    }
-    if (!context_->LiteralIsTrue(lit)) {
-      num_non_fixed_literals++;
-    }
-  }
-
-  if (at_least_one_false) {
-    ConstraintProto* new_ct = context_->working_model->add_constraints();
-    BoolArgumentProto* bool_or = new_ct->mutable_bool_or();
-
-    // One enforcement literal must be false.
-    for (const int lit : ct.enforcement_literal()) {
-      if (context_->LiteralIsTrue(lit)) {
-        skipped_non_zero_++;
-        continue;
+    if (ct->constraint_case() == ConstraintProto::kAtMostOne) {
+      const int size = ct->at_most_one().literals().size();
+      for (const int ref : ct->at_most_one().literals()) {
+        literal_score[get_index(ref)] += size;
       }
-      bool_or->add_literals(NegatedRef(lit));
-    }
-    return !bool_or->literals().empty();
-  } else if (num_non_fixed_literals > 0) {
-    ConstraintProto* new_ct = context_->working_model->add_constraints();
-    CopyEnforcementLiterals(ct, new_ct);
-    BoolArgumentProto* bool_and = new_ct->mutable_bool_and();
-    bool_and->mutable_literals()->Reserve(num_non_fixed_literals);
-    for (const int lit : ct.bool_and().literals()) {
-      if (context_->LiteralIsTrue(lit)) {
-        skipped_non_zero_++;
-        continue;
-      }
-      bool_and->add_literals(lit);
-    }
-  }
-  return true;
-}
-
-bool ModelCopy::CopyLinear(const ConstraintProto& ct) {
-  non_fixed_variables_.clear();
-  non_fixed_coefficients_.clear();
-  int64_t offset = 0;
-  for (int i = 0; i < ct.linear().vars_size(); ++i) {
-    const int ref = ct.linear().vars(i);
-    const int64_t coeff = ct.linear().coeffs(i);
-    if (context_->IsFixed(ref)) {
-      offset += coeff * context_->MinOf(ref);
-      skipped_non_zero_++;
-    } else {
-      non_fixed_variables_.push_back(ref);
-      non_fixed_coefficients_.push_back(coeff);
-    }
-  }
-
-  const Domain new_domain =
-      ReadDomainFromProto(ct.linear()).AdditionWith(Domain(-offset));
-  if (non_fixed_variables_.empty() && !new_domain.Contains(0)) {
-    if (ct.enforcement_literal().empty()) {
-      return false;
-    }
-    temp_literals_.clear();
-    for (const int literal : ct.enforcement_literal()) {
-      if (context_->LiteralIsTrue(literal)) {
-        skipped_non_zero_++;
-      } else {
-        temp_literals_.push_back(NegatedRef(literal));
-      }
-    }
-    context_->working_model->add_constraints()
-        ->mutable_bool_or()
-        ->mutable_literals()
-        ->Add(temp_literals_.begin(), temp_literals_.end());
-    return !temp_literals_.empty();
-  }
-
-  // TODO(user): Compute domain and avoid copying constraint that are always
-  // true.
-  ConstraintProto* new_ct = context_->working_model->add_constraints();
-  CopyEnforcementLiterals(ct, new_ct);
-  LinearConstraintProto* linear = new_ct->mutable_linear();
-  linear->mutable_vars()->Add(non_fixed_variables_.begin(),
-                              non_fixed_variables_.end());
-  linear->mutable_coeffs()->Add(non_fixed_coefficients_.begin(),
-                                non_fixed_coefficients_.end());
-  FillDomainInProto(new_domain, linear);
-  return true;
-}
-
-bool ModelCopy::CopyAtMostOne(const ConstraintProto& ct) {
-  int num_true = 0;
-  temp_literals_.clear();
-  for (const int lit : ct.at_most_one().literals()) {
-    if (context_->LiteralIsFalse(lit)) {
-      skipped_non_zero_++;
       continue;
     }
-    temp_literals_.push_back(lit);
-    if (context_->LiteralIsTrue(lit)) num_true++;
-  }
-
-  if (temp_literals_.size() <= 1) return true;
-  if (num_true > 1) return false;
-
-  // TODO(user): presolve if num_true == 1.
-  ConstraintProto* new_ct = context_->working_model->add_constraints();
-  CopyEnforcementLiterals(ct, new_ct);
-  new_ct->mutable_at_most_one()->mutable_literals()->Add(temp_literals_.begin(),
-                                                         temp_literals_.end());
-  return true;
-}
-
-bool ModelCopy::CopyExactlyOne(const ConstraintProto& ct) {
-  int num_true = 0;
-  temp_literals_.clear();
-  for (const int lit : ct.exactly_one().literals()) {
-    if (context_->LiteralIsFalse(lit)) {
-      skipped_non_zero_++;
+    if (ct->constraint_case() == ConstraintProto::kExactlyOne) {
+      const int size = ct->exactly_one().literals().size();
+      for (const int ref : ct->exactly_one().literals()) {
+        literal_score[get_index(ref)] += size;
+      }
       continue;
     }
-    temp_literals_.push_back(lit);
-    if (context_->LiteralIsTrue(lit)) num_true++;
+
+    if (ct->constraint_case() != ConstraintProto::kBoolOr) continue;
+
+    // Both of these test shouldn't happen, but we have them to be safe.
+    if (!ct->enforcement_literal().empty()) continue;
+    if (ct->bool_or().literals().size() <= 2) continue;
+
+    std::sort(ct->mutable_bool_or()->mutable_literals()->begin(),
+              ct->mutable_bool_or()->mutable_literals()->end());
+    hasher.RegisterClause(c, ct->bool_or().literals());
+    bool_or_indices.push_back(c);
   }
 
-  if (temp_literals_.empty() || num_true > 1) return false;
-  if (temp_literals_.size() == 1 && num_true == 1) return true;
+  for (const int c : bool_or_indices) {
+    ConstraintProto* ct = context_->working_model->mutable_constraints(c);
 
-  // TODO(user): presolve if num_true == 1 and not everything is false.
-  ConstraintProto* new_ct = context_->working_model->add_constraints();
-  CopyEnforcementLiterals(ct, new_ct);
-  new_ct->mutable_exactly_one()->mutable_literals()->Add(temp_literals_.begin(),
-                                                         temp_literals_.end());
-  return true;
-}
+    bool merged = false;
+    timer.TrackSimpleLoop(ct->bool_or().literals().size());
+    if (timer.WorkLimitIsReached()) break;
+    for (const int ref : ct->bool_or().literals()) {
+      const uint64_t hash = hasher.HashWithout(c, ref);
+      const auto it = bool_and_map.find(hash);
+      if (it != bool_and_map.end()) {
+        ++num_collisions;
+        const int base_c = it->second;
+        auto* and_ct = context_->working_model->mutable_constraints(base_c);
+        if (ClauseIsEnforcementImpliesLiteral(
+                ct->bool_or().literals(), and_ct->enforcement_literal(), ref)) {
+          ++num_merges;
+          num_saved_literals += ct->bool_or().literals().size() - 1;
+          merged = true;
+          and_ct->mutable_bool_and()->add_literals(ref);
+          ct->Clear();
+          context_->UpdateConstraintVariableUsage(c);
+          break;
+        }
+      }
+    }
 
-bool ModelCopy::CopyInterval(const ConstraintProto& ct, int c) {
-  // TODO(user): remove non performed intervals.
-  CHECK_EQ(starting_constraint_index_, 0)
-      << "Adding new interval constraints to partially filled model is not "
-         "supported.";
-  interval_mapping_[c] = context_->working_model->constraints_size();
-  *context_->working_model->add_constraints() = ct;
-  return true;
-}
+    if (!merged) {
+      // heuristic: take first literal whose negation has highest score.
+      int best_ref = ct->bool_or().literals(0);
+      int64_t best_score = literal_score[get_index(NegatedRef(best_ref))];
+      for (const int ref : ct->bool_or().literals()) {
+        const int64_t score = literal_score[get_index(NegatedRef(ref))];
+        if (score > best_score) {
+          best_ref = ref;
+          best_score = score;
+        }
+      }
 
-bool ModelCopy::CreateUnsatModel() {
-  context_->working_model->mutable_constraints()->Clear();
-  context_->working_model->add_constraints()->mutable_bool_or();
-  return false;
-}
+      const uint64_t hash = hasher.HashWithout(c, best_ref);
+      const auto [_, inserted] = bool_and_map.insert({hash, c});
+      if (inserted) {
+        to_clean.push_back(c);
+        context_->tmp_literals.clear();
+        for (const int lit : ct->bool_or().literals()) {
+          if (lit == best_ref) continue;
+          context_->tmp_literals.push_back(NegatedRef(lit));
+        }
+        ct->Clear();
+        ct->mutable_enforcement_literal()->Assign(
+            context_->tmp_literals.begin(), context_->tmp_literals.end());
+        ct->mutable_bool_and()->add_literals(best_ref);
+      }
+    }
+  }
 
-bool ImportConstraintsWithBasicPresolveIntoContext(const CpModelProto& in_model,
-                                                   PresolveContext* context) {
-  ModelCopy copier(context);
-  if (copier.ImportAndSimplifyConstraints(in_model, {})) {
-    CopyEverythingExceptVariablesAndConstraintsFieldsIntoContext(in_model,
-                                                                 context);
-    return true;
-  }
-  return context->NotifyThatModelIsUnsat();
-}
+  // Retransform to bool_or bool_and with a single rhs.
+  for (const int c : to_clean) {
+    ConstraintProto* ct = context_->working_model->mutable_constraints(c);
+    if (ct->bool_and().literals().size() > 1) {
+      context_->UpdateConstraintVariableUsage(c);
+      continue;
+    }
 
-void CopyEverythingExceptVariablesAndConstraintsFieldsIntoContext(
-    const CpModelProto& in_model, PresolveContext* context) {
-  if (!in_model.name().empty()) {
-    context->working_model->set_name(in_model.name());
+    // We have a single bool_and, lets transform it back to single bool_or.
+    context_->tmp_literals.clear();
+    context_->tmp_literals.push_back(ct->bool_and().literals(0));
+    for (const int ref : ct->enforcement_literal()) {
+      context_->tmp_literals.push_back(NegatedRef(ref));
+    }
+    ct->Clear();
+    ct->mutable_bool_or()->mutable_literals()->Assign(
+        context_->tmp_literals.begin(), context_->tmp_literals.end());
   }
-  if (in_model.has_objective()) {
-    *context->working_model->mutable_objective() = in_model.objective();
-  }
-  if (in_model.has_floating_point_objective()) {
-    *context->working_model->mutable_floating_point_objective() =
-        in_model.floating_point_objective();
-  }
-  if (!in_model.search_strategy().empty()) {
-    *context->working_model->mutable_search_strategy() =
-        in_model.search_strategy();
-  }
-  if (!in_model.assumptions().empty()) {
-    *context->working_model->mutable_assumptions() = in_model.assumptions();
-  }
-  if (in_model.has_symmetry()) {
-    *context->working_model->mutable_symmetry() = in_model.symmetry();
-  }
-  if (in_model.has_solution_hint()) {
-    *context->working_model->mutable_solution_hint() = in_model.solution_hint();
-  }
+
+  timer.AddCounter("num_collisions", num_collisions);
+  timer.AddCounter("num_merges", num_merges);
+  timer.AddCounter("num_saved_literals", num_saved_literals);
 }
 
 // =============================================================================
@@ -7369,12 +13678,136 @@ CpModelPresolver::CpModelPresolver(PresolveContext* context,
                                    std::vector<int>* postsolve_mapping)
     : postsolve_mapping_(postsolve_mapping),
       context_(context),
-      logger_(context->logger()) {}
+      solution_crush_(context->solution_crush()),
+      logger_(context->logger()),
+      time_limit_(context->time_limit()),
+      interval_representative_(context->working_model->constraints_size(),
+                               IntervalConstraintHash{context->working_model},
+                               IntervalConstraintEq{context->working_model}) {}
 
 CpSolverStatus CpModelPresolver::InfeasibleStatus() {
   if (logger_->LoggingIsEnabled()) context_->LogInfo();
   return CpSolverStatus::INFEASIBLE;
 }
+
+// At the end of presolve, the mapping model is initialized to contains all
+// the variable from the original model + the one created during presolve
+// expand. It also contains the tightened domains.
+namespace {
+void InitializeMappingModelVariables(absl::Span<const Domain> domains,
+                                     std::vector<int>* fixed_postsolve_mapping,
+                                     CpModelProto* mapping_proto) {
+  // Extend the fixed mapping to take into account all newly created variable
+  // since the time it was constructed.
+  int old_num_variables = mapping_proto->variables().size();
+  while (fixed_postsolve_mapping->size() < domains.size()) {
+    mapping_proto->add_variables();
+    fixed_postsolve_mapping->push_back(old_num_variables++);
+    DCHECK_EQ(old_num_variables, mapping_proto->variables().size());
+  }
+
+  // Overwrite the domains.
+  //
+  // Note that if the fixed_postsolve_mapping was not null, the mapping model
+  // should contains the original variable domains at the time the fixed mapping
+  // was computed.
+  for (int i = 0; i < domains.size(); ++i) {
+    FillDomainInProto(domains[i], mapping_proto->mutable_variables(
+                                      (*fixed_postsolve_mapping)[i]));
+  }
+
+  // Remap the mapping proto.
+  // We only deal with constraint here, do not touch the rest.
+  //
+  // TODO(user): Maybe we should have a real "postsolve" proto so we can
+  // interleave postsolve "constraint" and remapping phase. This would allow to
+  // do that in the middle of the presolve. But maybe this is not as impactful.
+  auto mapping_function = [fixed_postsolve_mapping](int* ref) {
+    const int image = (*fixed_postsolve_mapping)[PositiveRef(*ref)];
+    CHECK_GE(image, 0);
+    *ref = RefIsPositive(*ref) ? image : NegatedRef(image);
+  };
+  for (ConstraintProto& ct_ref : *mapping_proto->mutable_constraints()) {
+    ApplyToAllVariableIndices(mapping_function, &ct_ref);
+    ApplyToAllLiteralIndices(mapping_function, &ct_ref);
+  }
+}
+}  // namespace
+
+void CpModelPresolver::ExpandCpModelAndCanonicalizeConstraints() {
+  const int num_constraints_before_expansion =
+      context_->working_model->constraints_size();
+  ExpandCpModel(context_);
+  if (context_->ModelIsUnsat()) return;
+
+  // TODO(user): Make sure we can't have duplicate in these constraint.
+  // These are due to ExpandCpModel() were we create such constraint with
+  // duplicate. The problem is that some code assumes these are presolved
+  // before being called.
+  const int num_constraints = context_->working_model->constraints().size();
+  for (int c = num_constraints_before_expansion; c < num_constraints; ++c) {
+    ConstraintProto* ct = context_->working_model->mutable_constraints(c);
+    const auto type = ct->constraint_case();
+    if (type == ConstraintProto::kAtMostOne ||
+        type == ConstraintProto::kExactlyOne) {
+      if (PresolveOneConstraint(c)) {
+        context_->UpdateConstraintVariableUsage(c);
+      }
+      if (context_->ModelIsUnsat()) return;
+    } else if (type == ConstraintProto::kLinear) {
+      bool changed = false;
+      if (!CanonicalizeLinear(ct, &changed)) {
+        return;
+      }
+      if (changed) {
+        context_->UpdateConstraintVariableUsage(c);
+      }
+    }
+  }
+}
+
+namespace {
+
+// Updates the solution hint in the proto with the crushed solution values.
+void UpdateHintInProto(PresolveContext* context) {
+  if (context->ModelIsUnsat()) return;
+
+  SolutionCrush& crush = context->solution_crush();
+  if (!crush.SolutionIsLoaded()) return;
+  const int num_vars = context->working_model->variables().size();
+  for (int i = 0; i < num_vars; ++i) {
+    // If the initial hint is incomplete or infeasible, the crushed hint might
+    // contain values outside of their respective domains (see SolutionCrush).
+    crush.SetOrUpdateVarToDomain(i, context->DomainOf(i));
+  }
+  // If the time limit is reached, the presolved model might still contain
+  // non-representative "affine" variables.
+  for (int i = 0; i < num_vars; ++i) {
+    const auto relation = context->GetAffineRelation(i);
+    if (relation.representative != i) {
+      crush.SetVarToLinearExpression(
+          i, {{relation.representative, relation.coeff}}, relation.offset);
+    }
+  }
+  crush.StoreSolutionAsHint(*context->working_model);
+}
+
+// Canonicalizes the routes constraints node expressions. In particular,
+// replaces the variables in these expressions with their representative.
+void CanonicalizeRoutesConstraintNodeExpressions(PresolveContext* context) {
+  CpModelProto& proto = *context->working_model;
+  for (ConstraintProto& ct_ref : *proto.mutable_constraints()) {
+    if (ct_ref.constraint_case() != ConstraintProto::kRoutes) continue;
+    for (RoutesConstraintProto::NodeExpressions& node_exprs :
+         *ct_ref.mutable_routes()->mutable_dimensions()) {
+      for (LinearExpressionProto& expr : *node_exprs.mutable_exprs()) {
+        context->CanonicalizeLinearExpression({}, &expr);
+      }
+    }
+  }
+}
+
+}  // namespace
 
 // The presolve works as follow:
 //
@@ -7392,55 +13825,7 @@ CpSolverStatus CpModelPresolver::InfeasibleStatus() {
 // - Everything will be remapped so that only the variables appearing in some
 //   constraints will be kept and their index will be in [0, num_new_variables).
 CpSolverStatus CpModelPresolver::Presolve() {
-  // TODO(user): move in the context.
-  context_->keep_all_feasible_solutions =
-      context_->params().keep_all_feasible_solutions_in_presolve() ||
-      context_->params().enumerate_all_solutions() ||
-      context_->params().fill_tightened_domains_in_response() ||
-      !context_->working_model->assumptions().empty() ||
-      !context_->params().cp_model_presolve();
-
-  // We copy the search strategy to the mapping_model.
-  for (const auto& decision_strategy :
-       context_->working_model->search_strategy()) {
-    *(context_->mapping_model->add_search_strategy()) = decision_strategy;
-  }
-
-  // Initialize the initial context.working_model domains.
   context_->InitializeNewDomains();
-
-  // Before initializing the constraint <-> variable graph (which is costly), we
-  // run a bunch of simple presolve rules. Note that these function should NOT
-  // use the graph, or the part that uses it should properly check for
-  // context_->ConstraintVariableGraphIsUpToDate() before doing anything that
-  // depends on the graph.
-  if (context_->params().cp_model_presolve()) {
-    for (int c = 0; c < context_->working_model->constraints_size(); ++c) {
-      ConstraintProto* ct = context_->working_model->mutable_constraints(c);
-      PresolveEnforcementLiteral(ct);
-      switch (ct->constraint_case()) {
-        case ConstraintProto::ConstraintCase::kBoolOr:
-          PresolveBoolOr(ct);
-          break;
-        case ConstraintProto::ConstraintCase::kBoolAnd:
-          PresolveBoolAnd(ct);
-          break;
-        case ConstraintProto::ConstraintCase::kAtMostOne:
-          PresolveAtMostOne(ct);
-          break;
-        case ConstraintProto::ConstraintCase::kExactlyOne:
-          PresolveExactlyOne(ct);
-          break;
-        case ConstraintProto::ConstraintCase::kLinear:
-          CanonicalizeLinear(ct);
-          break;
-        default:
-          break;
-      }
-      if (context_->ModelIsUnsat()) break;
-    }
-  }
-  if (context_->ModelIsUnsat()) return InfeasibleStatus();
 
   // If the objective is a floating point one, we scale it.
   //
@@ -7448,7 +13833,9 @@ CpSolverStatus CpModelPresolver::Presolve() {
   // just need to isolate more the "dual" reduction that usually need to look at
   // the objective.
   if (context_->working_model->has_floating_point_objective()) {
-    if (!context_->ScaleFloatingPointObjective()) {
+    context_->WriteVariableDomainsToProto();
+    if (!ScaleFloatingPointObjective(context_->params(), logger_,
+                                     context_->working_model)) {
       SOLVER_LOG(logger_,
                  "The floating point objective cannot be scaled with enough "
                  "precision");
@@ -7463,37 +13850,107 @@ CpSolverStatus CpModelPresolver::Presolve() {
         context_->working_model->objective();
   }
 
+  // If there is a large proprotion of fixed variables, lets remap the model
+  // before we start the actual presolve. This is useful for LNS in particular.
+  //
+  // fixed_postsolve_mapping[i] will contains the original index of the variable
+  // that will be at position i after MaybeRemoveFixedVariables(). If the
+  // mapping is left empty, it will be set to the identity mapping later by
+  // InitializeMappingModelVariables().
+  std::vector<int> fixed_postsolve_mapping;
+  if (!MaybeRemoveFixedVariables(&fixed_postsolve_mapping)) {
+    return InfeasibleStatus();
+  }
+
+  // Initialize the initial context.working_model domains.
   // Initialize the objective and the constraint <-> variable graph.
+  //
+  // Note that we did some basic presolving during the first copy of the model.
+  // This is important has initializing the constraint <-> variable graph can
+  // be costly, so better to remove trivially feasible constraint for instance.
+  context_->InitializeNewDomains();
+  context_->LoadSolutionHint();
   context_->ReadObjectiveFromProto();
   if (!context_->CanonicalizeObjective()) return InfeasibleStatus();
+
   context_->UpdateNewConstraintsVariableUsage();
   context_->RegisterVariablesUsedInAssumptions();
   DCHECK(context_->ConstraintVariableUsageIsConsistent());
 
   // If presolve is false, just run expansion.
   if (!context_->params().cp_model_presolve()) {
-    ExpandCpModel(context_);
+    for (ConstraintProto& ct :
+         *context_->working_model->mutable_constraints()) {
+      if (ct.constraint_case() == ConstraintProto::kLinear) {
+        context_->CanonicalizeLinearConstraint(&ct);
+      }
+    }
+
+    if (!solution_crush_.SolutionIsLoaded()) {
+      context_->LoadSolutionHint();
+    }
+    ExpandCpModelAndCanonicalizeConstraints();
+    UpdateHintInProto(context_);
     if (context_->ModelIsUnsat()) return InfeasibleStatus();
+
+    // We still write back the canonical objective has we don't deal well
+    // with uninitialized domain or duplicate variables.
+    if (context_->working_model->has_objective()) {
+      context_->WriteObjectiveToProto();
+    }
 
     // We need to append all the variable equivalence that are still used!
     EncodeAllAffineRelations();
+
+    // Make sure we also have an initialized mapping model as we use this for
+    // filling the tightened variables. Even without presolve, we do some
+    // trivial presolving during the initial copy of the model, and expansion
+    // might do more.
+    context_->WriteVariableDomainsToProto();
+    InitializeMappingModelVariables(context_->AllDomains(),
+                                    &fixed_postsolve_mapping,
+                                    context_->mapping_model);
+
+    // We don't want to run postsolve when the presolve is disabled, but the
+    // expansion might have added some constraints to the mapping model. To
+    // restore correctness, we merge them with the working model.
+    if (!context_->mapping_model->constraints().empty()) {
+      context_->UpdateRuleStats(
+          "TODO: mapping model not empty with presolve disabled");
+      context_->working_model->mutable_constraints()->MergeFrom(
+          context_->mapping_model->constraints());
+      context_->mapping_model->clear_constraints();
+    }
+
     if (logger_->LoggingIsEnabled()) context_->LogInfo();
     return CpSolverStatus::UNKNOWN;
   }
 
+  // Presolve all variable domain once. The PresolveToFixPoint() function will
+  // only reprocess domain that changed.
+  if (context_->ModelIsUnsat()) return InfeasibleStatus();
+  for (int var = 0; var < context_->working_model->variables().size(); ++var) {
+    if (context_->VariableIsNotUsedAnymore(var)) continue;
+    if (!PresolveAffineRelationIfAny(var)) return InfeasibleStatus();
+
+    // Try to canonicalize the domain, note that we should have detected all
+    // affine relations before, so we don't recreate "canononical" variables
+    // if they already exist in the model.
+    TryToSimplifyDomain(var);
+    if (context_->ModelIsUnsat()) return InfeasibleStatus();
+    context_->UpdateNewConstraintsVariableUsage();
+  }
+  if (!context_->CanonicalizeObjective()) return InfeasibleStatus();
+
   // Main propagation loop.
   for (int iter = 0; iter < context_->params().max_presolve_iterations();
        ++iter) {
+    if (time_limit_->LimitReached()) break;
     context_->UpdateRuleStats("presolve: iteration");
-    // Save some quantities to decide if we abort early the iteration loop.
     const int64_t old_num_presolve_op = context_->num_presolve_operations;
-    int old_num_non_empty_constraints = 0;
-    for (int c = 0; c < context_->working_model->constraints_size(); ++c) {
-      const auto type =
-          context_->working_model->constraints(c).constraint_case();
-      if (type == ConstraintProto::ConstraintCase::CONSTRAINT_NOT_SET) continue;
-      old_num_non_empty_constraints++;
-    }
+
+    // Propagate the objective.
+    if (!PropagateObjective()) return InfeasibleStatus();
 
     // TODO(user): The presolve transformations we do after this is called might
     // result in even more presolve if we were to call this again! improve the
@@ -7504,15 +13961,55 @@ CpSolverStatus CpModelPresolver::Presolve() {
     // Call expansion.
     if (!context_->ModelIsExpanded()) {
       ExtractEncodingFromLinear();
-      ExpandCpModel(context_);
+      ExpandCpModelAndCanonicalizeConstraints();
+      if (context_->ModelIsUnsat()) return InfeasibleStatus();
+
+      // We need to re-evaluate the degree because some presolve rule only
+      // run after expansion.
+      const int num_vars = context_->working_model->variables().size();
+      for (int var = 0; var < num_vars; ++var) {
+        if (context_->VarToConstraints(var).size() <= 3) {
+          context_->var_with_reduced_small_degree.Set(var);
+        }
+      }
     }
     DCHECK(context_->ConstraintVariableUsageIsConsistent());
 
-    // TODO(user): do that and the pure-SAT part below more than once.
-    if (context_->params().cp_model_probing_level() > 0) {
-      if (!context_->time_limit()->LimitReached()) {
-        Probe();
-        PresolveToFixPoint();
+    // We run the symmetry before more complex presolve rules as many of them
+    // are heuristic based and might break the symmetry present in the original
+    // problems. This happens for example on the flatzinc wordpress problem.
+    //
+    // TODO(user): Decide where is the best place for this.
+    //
+    // TODO(user): try not to break symmetry in our clique extension or other
+    // more advanced presolve rule? Ideally we could even exploit them. But in
+    // this case, it is still good to compute them early.
+    if (context_->params().symmetry_level() > 0 && !context_->ModelIsUnsat() &&
+        !time_limit_->LimitReached()) {
+      // Both kind of duplications might introduce a lot of symmetries and we
+      // want to do that before we even compute them.
+      DetectDuplicateColumns();
+      DetectDuplicateConstraints();
+      if (context_->params().keep_symmetry_in_presolve()) {
+        // If the presolve always keep symmetry, we compute it once and for all.
+        if (!context_->working_model->has_symmetry()) {
+          DetectAndAddSymmetryToProto(context_->params(),
+                                      context_->working_model, logger_,
+                                      context_->time_limit());
+        }
+
+        // We distinguish an empty symmetry message meaning that symmetry were
+        // computed and there is none, and the absence of symmetry message
+        // meaning we don't know.
+        //
+        // TODO(user): Maybe this is a bit brittle. Also move this logic to
+        // DetectAndAddSymmetryToProto() ?
+        if (!context_->working_model->has_symmetry()) {
+          context_->working_model->mutable_symmetry()->Clear();
+        }
+      } else if (!context_->params()
+                      .keep_all_feasible_solutions_in_presolve()) {
+        DetectAndExploitSymmetriesInPresolve(context_);
       }
     }
 
@@ -7520,12 +14017,16 @@ CpSolverStatus CpModelPresolver::Presolve() {
     // Note that because this can only remove/fix variable not used in the other
     // part of the problem, there is no need to redo more presolve afterwards.
     if (context_->params().cp_model_use_sat_presolve()) {
-      if (!context_->time_limit()->LimitReached()) {
-        PresolvePureSatPart();
+      if (!time_limit_->LimitReached()) {
+        if (!PresolvePureSatPart()) {
+          (void)context_->NotifyThatModelIsUnsat(
+              "Proven Infeasible during SAT presolve");
+          return InfeasibleStatus();
+        }
       }
     }
 
-    // Extract redundant at most one constraint form the linear ones.
+    // Extract redundant at most one constraint from the linear ones.
     //
     // TODO(user): more generally if we do some probing, the same relation will
     // be detected (and more). Also add an option to turn this off?
@@ -7537,112 +14038,137 @@ CpSolverStatus CpModelPresolver::Presolve() {
       const int old_size = context_->working_model->constraints_size();
       for (int c = 0; c < old_size; ++c) {
         ConstraintProto* ct = context_->working_model->mutable_constraints(c);
-        if (ct->constraint_case() != ConstraintProto::ConstraintCase::kLinear) {
-          continue;
-        }
+        if (ct->constraint_case() != ConstraintProto::kLinear) continue;
         ExtractAtMostOneFromLinear(ct);
       }
       context_->UpdateNewConstraintsVariableUsage();
     }
 
-    if (iter == 0) TransformIntoMaxCliques();
-
-    // TODO(user): Decide where is the best place for this. Fow now we do it
-    // after max clique to get all the bool_and converted to at most ones.
-    if (context_->params().symmetry_level() > 0 && !context_->ModelIsUnsat() &&
-        !context_->time_limit()->LimitReached() &&
-        !context_->keep_all_feasible_solutions) {
-      DetectAndExploitSymmetriesInPresolve(context_);
+    if (context_->params().cp_model_probing_level() > 0) {
+      if (!time_limit_->LimitReached()) {
+        Probe();
+        PresolveToFixPoint();
+      }
+    } else {
+      TransformIntoMaxCliques();
     }
 
-    // Process set packing, partitioning and covering constraint.
-    if (!context_->time_limit()->LimitReached()) {
-      ProcessSetPPC();
-      ExtractBoolAnd();
+    // Deal with pair of constraints.
+    //
+    // TODO(user): revisit when different transformation appear.
+    // TODO(user): merge these code instead of doing many passes?
+    ProcessAtMostOneAndLinear();
+    DetectDuplicateConstraints();
+    DetectDuplicateConstraintsWithDifferentEnforcements();
+    DetectDominatedLinearConstraints();
+    DetectDifferentVariables();
+    ProcessSetPPC();
+    TransformClausesToExactlyOne();
 
-      // Call the main presolve to remove the fixed variables and do more
-      // deductions.
-      PresolveToFixPoint();
+    if (!time_limit_->LimitReached()) {
+      DetectEncodedComplexDomains(context_);
     }
 
-    // Exit the loop if the reduction is not so large.
-    // Hack: to facilitate experiments, if the requested number of iterations
-    // is large, we always execute all of them.
-    if (context_->params().max_presolve_iterations() >= 5) continue;
-    if (context_->num_presolve_operations - old_num_presolve_op <
-        0.8 * (context_->working_model->variables_size() +
-               old_num_non_empty_constraints)) {
-      break;
+    // These operations might break symmetry. Or at the very least, the newly
+    // created variable must be incorporated in the generators.
+    if (context_->params().find_big_linear_overlap() &&
+        !context_->params().keep_symmetry_in_presolve()) {
+      FindAlmostIdenticalLinearConstraints();
+
+      ActivityBoundHelper activity_amo_helper;
+      activity_amo_helper.AddAllAtMostOnes(*context_->working_model);
+      FindBigAtMostOneAndLinearOverlap(&activity_amo_helper);
+
+      // Heuristic: vertical introduce smaller defining constraint and appear in
+      // many constraints, so might be more constrained. We might also still
+      // make horizontal rectangle with the variable introduced.
+      FindBigVerticalLinearOverlap(&activity_amo_helper);
+      FindBigHorizontalLinearOverlap(&activity_amo_helper);
     }
+    if (context_->ModelIsUnsat()) return InfeasibleStatus();
+
+    // We do that after the duplicate, SAT and SetPPC constraints.
+    if (!time_limit_->LimitReached()) {
+      // Merge clauses that differ in just one literal.
+      // Heuristic use at_most_one to try to tighten the initial LP Relaxation.
+      MergeClauses();
+      if (/*DISABLES CODE*/ (false)) DetectIncludedEnforcement();
+    }
+
+    // The TransformIntoMaxCliques() call above transform all bool and into
+    // at most one of size 2. This does the reverse and merge them.
+    ConvertToBoolAnd();
+
+    // Call the main presolve to remove the fixed variables and do more
+    // deductions.
+    PresolveToFixPoint();
+
+    // Exit the loop if no operations were performed.
+    //
+    // TODO(user): try to be smarter and avoid looping again if little changed.
+    const int64_t num_ops =
+        context_->num_presolve_operations - old_num_presolve_op;
+    if (num_ops == 0) break;
   }
   if (context_->ModelIsUnsat()) return InfeasibleStatus();
 
-  // Regroup no-overlaps into max-cliques.
-  MergeNoOverlapConstraints();
-  if (context_->ModelIsUnsat()) return InfeasibleStatus();
+  if (!MergeNoOverlapConstraints()) return InfeasibleStatus();
+  if (!MergeNoOverlap2DConstraints()) return InfeasibleStatus();
 
   // Tries to spread the objective amongst many variables.
+  // We re-do a canonicalization with the final linear expression.
   if (context_->working_model->has_objective()) {
-    ExpandObjective();
-    if (context_->ModelIsUnsat()) return InfeasibleStatus();
+    if (!context_->params().keep_symmetry_in_presolve()) {
+      ExpandObjective();
+      if (!context_->modified_domains.PositionsSetAtLeastOnce().empty()) {
+        // If we have fixed variables or created new affine relations, there
+        // might be more things to presolve.
+        PresolveToFixPoint();
+      }
+      if (context_->ModelIsUnsat()) return InfeasibleStatus();
+      ShiftObjectiveWithExactlyOnes();
+      if (context_->ModelIsUnsat()) return InfeasibleStatus();
+    }
   }
+
+  // Now that everything that could possibly be fixed was fixed, make sure we
+  // don't leave any linear constraint with fixed variables.
+  for (int c = 0; c < context_->working_model->constraints_size(); ++c) {
+    ConstraintProto& ct = *context_->working_model->mutable_constraints(c);
+    bool need_canonicalize = false;
+    if (ct.constraint_case() == ConstraintProto::kLinear) {
+      for (const int v : ct.linear().vars()) {
+        if (context_->IsFixed(v)) {
+          need_canonicalize = true;
+          break;
+        }
+      }
+    }
+    if (need_canonicalize) {
+      bool changed = false;
+      if (!CanonicalizeLinear(&ct, &changed)) {
+        return InfeasibleStatus();
+      }
+      if (changed) {
+        context_->UpdateConstraintVariableUsage(c);
+      }
+    }
+  }
+
+  // Take care of linear constraint with a complex rhs.
+  FinalExpansionForLinearConstraint(context_);
 
   // Adds all needed affine relation to context_->working_model.
   EncodeAllAffineRelations();
   if (context_->ModelIsUnsat()) return InfeasibleStatus();
 
-  // Remove duplicate constraints.
-  //
-  // TODO(user): We might want to do that earlier so that our count of variable
-  // usage is not biased by duplicate constraints.
-  const std::vector<std::pair<int, int>> duplicates =
-      FindDuplicateConstraints(*context_->working_model);
-  for (const auto [dup, rep] : duplicates) {
-    // Note that it is important to look at the type of the representative in
-    // case the constraint became empty.
-    const int type =
-        context_->working_model->constraints(rep).constraint_case();
-
-    // TODO(user): we could delete duplicate identical interval, but we need
-    // to make sure reference to them are updated.
-    if (type == ConstraintProto::ConstraintCase::kInterval) {
-      continue;
+  // If we have symmetry information, lets filter it.
+  if (context_->working_model->has_symmetry()) {
+    if (!FilterOrbitOnUnusedOrFixedVariables(
+            context_->working_model->mutable_symmetry(), context_)) {
+      return InfeasibleStatus();
     }
-
-    // For linear constraint, we merge their rhs since it was ignored in the
-    // FindDuplicateConstraints() call.
-    if (type == ConstraintProto::kLinear) {
-      const Domain d1 = ReadDomainFromProto(
-          context_->working_model->constraints(rep).linear());
-      const Domain d2 = ReadDomainFromProto(
-          context_->working_model->constraints(dup).linear());
-      if (d1 != d2) {
-        context_->UpdateRuleStats("duplicate: merged rhs of linear constraint");
-        const Domain rhs = d1.IntersectionWith(d2);
-        if (rhs.IsEmpty()) {
-          if (!MarkConstraintAsFalse(
-                  context_->working_model->mutable_constraints(rep))) {
-            SOLVER_LOG(logger_, "Unsat after merging two linear constraints");
-            break;
-          }
-
-          // The representative constraint is no longer a linear constraint,
-          // so we will not enter this type case again and will just remove
-          // all subsequent duplicate linear constraints.
-          context_->UpdateConstraintVariableUsage(rep);
-          continue;
-        }
-        FillDomainInProto(rhs, context_->working_model->mutable_constraints(rep)
-                                   ->mutable_linear());
-      }
-    }
-
-    context_->working_model->mutable_constraints(dup)->Clear();
-    context_->UpdateConstraintVariableUsage(dup);
-    context_->UpdateRuleStats("duplicate: removed constraint");
   }
-
-  if (context_->ModelIsUnsat()) return InfeasibleStatus();
 
   // The strategy variable indices will be remapped in ApplyVariableMapping()
   // but first we use the representative of the affine relations for the
@@ -7655,61 +14181,49 @@ CpSolverStatus CpModelPresolver::Presolve() {
   absl::flat_hash_set<int> used_variables;
   for (DecisionStrategyProto& strategy :
        *context_->working_model->mutable_search_strategy()) {
-    DecisionStrategyProto copy = strategy;
-    strategy.clear_variables();
-    strategy.clear_transformations();
-    for (const int ref : copy.variables()) {
-      const int var = PositiveRef(ref);
+    CHECK(strategy.variables().empty());
+    if (strategy.exprs().empty()) continue;
 
-      // Remove fixed variables.
-      if (context_->IsFixed(var)) continue;
-
-      // There is not point having a variable appear twice, so we only keep
-      // the first occurrence in the first strategy in which it occurs.
-      if (used_variables.contains(var)) continue;
-      used_variables.insert(var);
-
-      if (context_->VarToConstraints(var).empty()) {
-        const AffineRelation::Relation r = context_->GetAffineRelation(var);
-        if (!context_->VarToConstraints(r.representative).empty()) {
-          const int rep = (r.coeff > 0) == RefIsPositive(ref)
-                              ? r.representative
-                              : NegatedRef(r.representative);
-          if (strategy.variable_selection_strategy() !=
-              DecisionStrategyProto::CHOOSE_FIRST) {
-            DecisionStrategyProto::AffineTransformation* t =
-                strategy.add_transformations();
-            t->set_index(strategy.variables_size());
-            t->set_offset(r.offset);
-            t->set_positive_coeff(std::abs(r.coeff));
-          }
-          strategy.add_variables(rep);
-        } else {
-          // TODO(user): this variable was removed entirely by the presolve (no
-          // equivalent variable present). We simply ignore it entirely which
-          // might result in a different search...
-        }
-      } else {
-        strategy.add_variables(ref);
-      }
+    // Canonicalize each expression to use affine representative.
+    ConstraintProto empy_enforcement;
+    for (LinearExpressionProto& expr : *strategy.mutable_exprs()) {
+      CanonicalizeLinearExpression(empy_enforcement, &expr);
     }
+
+    // Remove fixed expression and affine corresponding to same variables.
+    int new_size = 0;
+    for (const LinearExpressionProto& expr : strategy.exprs()) {
+      if (context_->IsFixed(expr)) continue;
+
+      const auto [_, inserted] = used_variables.insert(expr.vars(0));
+      if (!inserted) continue;
+
+      *strategy.mutable_exprs(new_size++) = expr;
+    }
+    google::protobuf::util::Truncate(strategy.mutable_exprs(), new_size);
   }
 
-  // Sync the domains.
-  for (int i = 0; i < context_->working_model->variables_size(); ++i) {
-    FillDomainInProto(context_->DomainOf(i),
-                      context_->working_model->mutable_variables(i));
-    DCHECK_GT(context_->working_model->variables(i).domain_size(), 0);
+  // Sync the domains and initialize the mapping model variables.
+  context_->WriteVariableDomainsToProto();
+
+  // Some vars may have been fixed by the affine relations. This may can impact
+  // the objective. Let's re-do the canonicalization.
+  if (context_->working_model->has_objective()) {
+    // We re-do a canonicalization with the final linear expression.
+    if (!context_->CanonicalizeObjective()) return InfeasibleStatus();
+    context_->WriteObjectiveToProto();
   }
 
-  // Set the variables of the mapping_model.
-  context_->mapping_model->mutable_variables()->CopyFrom(
-      context_->working_model->variables());
+  // Starts the postsolve mapping model.
+  InitializeMappingModelVariables(context_->AllDomains(),
+                                  &fixed_postsolve_mapping,
+                                  context_->mapping_model);
 
   // Remove all the unused variables from the presolved model.
   postsolve_mapping_->clear();
   std::vector<int> mapping(context_->working_model->variables_size(), -1);
-  int num_free_variables = 0;
+  absl::flat_hash_map<int64_t, int> constant_to_index;
+  int num_unused_variables = 0;
   for (int i = 0; i < context_->working_model->variables_size(); ++i) {
     if (mapping[i] != -1) continue;  // Already mapped.
 
@@ -7721,40 +14235,70 @@ CpSolverStatus CpModelPresolver::Presolve() {
       const int r = PositiveRef(context_->GetAffineRelation(i).representative);
       if (mapping[r] == -1 && !context_->VariableIsNotUsedAnymore(r)) {
         mapping[r] = postsolve_mapping_->size();
-        postsolve_mapping_->push_back(r);
+        postsolve_mapping_->push_back(fixed_postsolve_mapping[r]);
       }
       continue;
     }
 
+    // Deal with unused variables.
+    //
+    // If the variable is not fixed, we have multiple feasible solution for
+    // this variable, so we can't remove it if we want all of them.
     if (context_->VariableIsNotUsedAnymore(i) &&
-        !context_->keep_all_feasible_solutions) {
-      // Tricky. Variables that where not removed by a presolve rule should be
+        (!context_->params().keep_all_feasible_solutions_in_presolve() ||
+         context_->IsFixed(i))) {
+      // Tricky. Variables that were not removed by a presolve rule should be
       // fixed first during postsolve, so that more complex postsolve rules
       // can use their values. One way to do that is to fix them here.
       //
       // We prefer to fix them to zero if possible.
-      ++num_free_variables;
+      ++num_unused_variables;
       FillDomainInProto(Domain(context_->DomainOf(i).SmallestValue()),
-                        context_->mapping_model->mutable_variables(i));
+                        context_->mapping_model->mutable_variables(
+                            fixed_postsolve_mapping[i]));
       continue;
     }
 
+    // Merge identical constant. Note that the only place were constant are
+    // still left are in the circuit and route constraint for fixed arcs.
+    if (context_->IsFixed(i)) {
+      auto [it, inserted] = constant_to_index.insert(
+          {context_->FixedValue(i), postsolve_mapping_->size()});
+      if (!inserted) {
+        mapping[i] = it->second;
+        continue;
+      }
+    }
+
     mapping[i] = postsolve_mapping_->size();
-    postsolve_mapping_->push_back(i);
+    postsolve_mapping_->push_back(fixed_postsolve_mapping[i]);
   }
-  context_->UpdateRuleStats(absl::StrCat("presolve: ", num_free_variables,
+  context_->UpdateRuleStats(absl::StrCat("presolve: ", num_unused_variables,
                                          " unused variables removed."));
 
   if (context_->params().permute_variable_randomly()) {
-    std::shuffle(postsolve_mapping_->begin(), postsolve_mapping_->end(),
-                 *context_->random());
-    for (int i = 0; i < postsolve_mapping_->size(); ++i) {
-      mapping[(*postsolve_mapping_)[i]] = i;
+    // The mapping might merge variable, so we have to be careful here.
+    const int n = postsolve_mapping_->size();
+    std::vector<int> perm(n);
+    std::iota(perm.begin(), perm.end(), 0);
+    std::shuffle(perm.begin(), perm.end(), *context_->random());
+    for (int i = 0; i < context_->working_model->variables_size(); ++i) {
+      if (mapping[i] != -1) mapping[i] = perm[mapping[i]];
     }
+    std::vector<int> new_postsolve_mapping(n);
+    for (int i = 0; i < n; ++i) {
+      new_postsolve_mapping[perm[i]] = (*postsolve_mapping_)[i];
+    }
+    *postsolve_mapping_ = std::move(new_postsolve_mapping);
   }
 
   DCHECK(context_->ConstraintVariableUsageIsConsistent());
-  ApplyVariableMapping(mapping, *context_);
+  CanonicalizeRoutesConstraintNodeExpressions(context_);
+  UpdateHintInProto(context_);
+  const int old_size = postsolve_mapping_->size();
+  ApplyVariableMapping(absl::MakeSpan(mapping), context_->working_model,
+                       postsolve_mapping_);
+  CHECK_EQ(old_size, postsolve_mapping_->size());
 
   // Compact all non-empty constraint at the beginning.
   RemoveEmptyConstraints();
@@ -7772,7 +14316,8 @@ CpSolverStatus CpModelPresolver::Presolve() {
   // INVALID model. But for our no-overflow preconditions, we might run into bad
   // situation that causes the final model to be invalid.
   {
-    const std::string error = ValidateCpModel(*context_->working_model);
+    const std::string error =
+        ValidateCpModel(*context_->working_model, /*after_presolve=*/true);
     if (!error.empty()) {
       SOLVER_LOG(logger_, "Error while validating postsolved model: ", error);
       return CpSolverStatus::MODEL_INVALID;
@@ -7790,169 +14335,439 @@ CpSolverStatus CpModelPresolver::Presolve() {
   return CpSolverStatus::UNKNOWN;
 }
 
-void ApplyVariableMapping(const std::vector<int>& mapping,
-                          const PresolveContext& context) {
-  CpModelProto* proto = context.working_model;
-
+void ApplyVariableMapping(absl::Span<int> mapping, CpModelProto* cp_model,
+                          std::vector<int>* reverse_mapping) {
   // Remap all the variable/literal references in the constraints and the
   // enforcement literals in the variables.
-  auto mapping_function = [&mapping](int* ref) {
-    const int image = mapping[PositiveRef(*ref)];
-    CHECK_GE(image, 0);
+  const auto mapping_function = [&mapping, &reverse_mapping](int* ref) {
+    const int var = PositiveRef(*ref);
+    int image = mapping[var];
+    if (image < 0) {
+      // We extend the mapping if this variable is still used.
+      image = mapping[var] = reverse_mapping->size();
+      reverse_mapping->push_back(var);
+    }
     *ref = RefIsPositive(*ref) ? image : NegatedRef(image);
   };
-  for (ConstraintProto& ct_ref : *proto->mutable_constraints()) {
+  for (ConstraintProto& ct_ref : *cp_model->mutable_constraints()) {
     ApplyToAllVariableIndices(mapping_function, &ct_ref);
     ApplyToAllLiteralIndices(mapping_function, &ct_ref);
+    if (ct_ref.constraint_case() == ConstraintProto::kRoutes) {
+      for (RoutesConstraintProto::NodeExpressions& node_exprs :
+           *ct_ref.mutable_routes()->mutable_dimensions()) {
+        for (LinearExpressionProto& expr : *node_exprs.mutable_exprs()) {
+          if (expr.vars().empty()) continue;
+          CHECK_EQ(expr.vars().size(), 1);
+          CHECK(RefIsPositive(expr.vars(0)));
+          const int var = expr.vars(0);
+          const auto& definition = cp_model->variables(var);
+          const int64_t min = definition.domain(0);
+          const int64_t max = definition.domain(definition.domain().size() - 1);
+          if (min == max) {
+            expr.set_offset(expr.offset() + min * expr.coeffs(0));
+            expr.clear_vars();
+            expr.clear_coeffs();
+            continue;
+          }
+          const int image = mapping[var];
+          if (image < 0) {
+            // TODO(user): is this correct? may this lead to incorrect cuts
+            // in routing_cuts.cc in some cases?
+            expr.clear_vars();
+            expr.clear_coeffs();
+            continue;
+          }
+          expr.set_vars(0, image);
+        }
+      }
+    }
   }
 
   // Remap the objective variables.
-  if (proto->has_objective()) {
-    for (int& mutable_ref : *proto->mutable_objective()->mutable_vars()) {
+  if (cp_model->has_objective()) {
+    for (int& mutable_ref : *cp_model->mutable_objective()->mutable_vars()) {
       mapping_function(&mutable_ref);
     }
   }
 
   // Remap the assumptions.
-  for (int& mutable_ref : *proto->mutable_assumptions()) {
+  for (int& mutable_ref : *cp_model->mutable_assumptions()) {
     mapping_function(&mutable_ref);
   }
 
-  // Remap the search decision heuristic.
-  // Note that we delete any heuristic related to a removed variable.
-  for (DecisionStrategyProto& strategy : *proto->mutable_search_strategy()) {
-    const DecisionStrategyProto copy = strategy;
-    strategy.clear_variables();
-    std::vector<int> new_indices(copy.variables().size(), -1);
-    for (int i = 0; i < copy.variables().size(); ++i) {
-      const int ref = copy.variables(i);
-      const int image = mapping[PositiveRef(ref)];
-      if (image >= 0) {
-        new_indices[i] = strategy.variables_size();
-        strategy.add_variables(RefIsPositive(ref) ? image : NegatedRef(image));
+  // Remap the symmetries. Note that we should have properly dealt with fixed
+  // orbit and such in FilterOrbitOnUnusedOrFixedVariables().
+  if (cp_model->has_symmetry()) {
+    for (SparsePermutationProto& generator :
+         *cp_model->mutable_symmetry()->mutable_permutations()) {
+      for (int& var : *generator.mutable_support()) {
+        mapping_function(&var);
       }
     }
-    strategy.clear_transformations();
-    for (const auto& transform : copy.transformations()) {
-      CHECK_LT(transform.index(), new_indices.size());
-      const int new_index = new_indices[transform.index()];
-      if (new_index == -1) continue;
-      auto* new_transform = strategy.add_transformations();
-      *new_transform = transform;
-      CHECK_LT(new_index, strategy.variables().size());
-      new_transform->set_index(new_index);
-    }
+
+    // We clear the orbitope info (we don't really use it after presolve).
+    cp_model->mutable_symmetry()->clear_orbitopes();
   }
 
-  // Remap the solution hint. Note that after remapping, we may have duplicate
-  // variable, so we only keep the first occurrence.
-  if (proto->has_solution_hint()) {
-    absl::flat_hash_set<int> used_vars;
-    auto* mutable_hint = proto->mutable_solution_hint();
+  // Note: For the rest of the mapping, if mapping[i] is -1, we can just ignore
+  // the variable instead of trying to map it.
+
+  // Remap the search decision heuristic.
+  // Note that we delete any heuristic related to a removed variable.
+  for (DecisionStrategyProto& strategy : *cp_model->mutable_search_strategy()) {
     int new_size = 0;
-    for (int i = 0; i < mutable_hint->vars_size(); ++i) {
-      const int old_ref = mutable_hint->vars(i);
-      int64_t old_value = mutable_hint->values(i);
-
-      // We always move a hint within bounds.
-      // This also make sure a hint of INT_MIN or INT_MAX does not overflow.
-      if (old_value < context.MinOf(old_ref)) {
-        old_value = context.MinOf(old_ref);
-      }
-      if (old_value > context.MaxOf(old_ref)) {
-        old_value = context.MaxOf(old_ref);
-      }
-
-      // Note that if (old_value - r.offset) is not divisible by r.coeff, then
-      // the hint is clearly infeasible, but we still set it to a "close" value.
-      const AffineRelation::Relation r = context.GetAffineRelation(old_ref);
-      const int var = r.representative;
-      const int64_t value = (old_value - r.offset) / r.coeff;
-
-      const int image = mapping[var];
+    for (LinearExpressionProto expr : strategy.exprs()) {
+      DCHECK_EQ(expr.vars().size(), 1);
+      const int image = mapping[expr.vars(0)];
       if (image >= 0) {
-        if (!used_vars.insert(image).second) continue;
+        expr.set_vars(0, image);
+        *strategy.mutable_exprs(new_size++) = expr;
+      }
+    }
+    google::protobuf::util::Truncate(strategy.mutable_exprs(), new_size);
+  }
+
+  // Remove strategy with empty affine expression.
+  {
+    int new_size = 0;
+    for (const DecisionStrategyProto& strategy : cp_model->search_strategy()) {
+      if (strategy.exprs().empty()) continue;
+      *cp_model->mutable_search_strategy(new_size++) = strategy;
+    }
+    google::protobuf::util::Truncate(cp_model->mutable_search_strategy(),
+                                     new_size);
+  }
+
+  // Remap the solution hint.
+  if (cp_model->has_solution_hint()) {
+    auto* mutable_hint = cp_model->mutable_solution_hint();
+
+    // Note that after remapping, we may have duplicate variables. For instance,
+    // identical constant variables are mapped to a single one. So we make sure
+    // we don't output duplicates here and just keep the first occurrence.
+    absl::flat_hash_set<int> hinted_images;
+
+    int new_size = 0;
+    const int old_size = mutable_hint->vars().size();
+    for (int i = 0; i < old_size; ++i) {
+      const int hinted_var = mutable_hint->vars(i);
+      const int64_t hinted_value = mutable_hint->values(i);
+      const int image = mapping[hinted_var];
+      if (image >= 0) {
+        if (!hinted_images.insert(image).second) continue;
         mutable_hint->set_vars(new_size, image);
-        mutable_hint->set_values(new_size, value);
+        mutable_hint->set_values(new_size, hinted_value);
         ++new_size;
       }
     }
-    if (new_size > 0) {
-      mutable_hint->mutable_vars()->Truncate(new_size);
-      mutable_hint->mutable_values()->Truncate(new_size);
-    } else {
-      proto->clear_solution_hint();
-    }
+    mutable_hint->mutable_vars()->Truncate(new_size);
+    mutable_hint->mutable_values()->Truncate(new_size);
   }
 
   // Move the variable definitions.
-  std::vector<IntegerVariableProto> new_variables;
+  google::protobuf::RepeatedPtrField<IntegerVariableProto>
+      new_variables_storage;
+  google::protobuf::RepeatedPtrField<IntegerVariableProto>* new_variables;
+  if (cp_model->GetArena() == nullptr) {
+    new_variables = &new_variables_storage;
+  } else {
+    new_variables = google::protobuf::Arena::Create<
+        google::protobuf::RepeatedPtrField<IntegerVariableProto>>(
+        cp_model->GetArena());
+  }
   for (int i = 0; i < mapping.size(); ++i) {
     const int image = mapping[i];
     if (image < 0) continue;
-    if (image >= new_variables.size()) {
-      new_variables.resize(image + 1, IntegerVariableProto());
+    while (image >= new_variables->size()) {
+      new_variables->Add();
     }
-    new_variables[image].Swap(proto->mutable_variables(i));
+    (*new_variables)[image].Swap(cp_model->mutable_variables(i));
   }
-  proto->clear_variables();
-  for (IntegerVariableProto& proto_ref : new_variables) {
-    proto->add_variables()->Swap(&proto_ref);
-  }
+  cp_model->mutable_variables()->Swap(new_variables);
 
-  // Check that all variables are used.
-  for (const IntegerVariableProto& v : proto->variables()) {
+  // Check that all variables have a non-empty domain.
+  for (const IntegerVariableProto& v : cp_model->variables()) {
     CHECK_GT(v.domain_size(), 0);
   }
 }
 
-namespace {
-ConstraintProto CopyConstraintForDuplicateDetection(const ConstraintProto& ct) {
-  ConstraintProto copy = ct;
-  copy.clear_name();
-  if (ct.constraint_case() == ConstraintProto::kLinear) {
-    copy.mutable_linear()->clear_domain();
+bool CpModelPresolver::MaybeRemoveFixedVariables(
+    std::vector<int>* postsolve_mapping) {
+  postsolve_mapping->clear();
+  if (!context_->params().remove_fixed_variables_early()) return true;
+  if (!context_->params().cp_model_presolve()) return true;
+
+  // This is supposed to be already called, but it is a no-opt if this was the
+  // case, and it comment nicely that we do require domains to be up to date
+  // in the context.
+  context_->InitializeNewDomains();
+  if (context_->ModelIsUnsat()) return false;
+
+  // Initialize the mapping to remove all fixed variables.
+  const int num_vars = context_->working_model->variables().size();
+  std::vector<int> mapping(num_vars, -1);
+  for (int i = 0; i < num_vars; ++i) {
+    if (context_->IsFixed(i)) continue;
+    mapping[i] = postsolve_mapping->size();
+    postsolve_mapping->push_back(i);
   }
+
+  // Lets only do this if the proportion of fixed variables is large enough.
+  const int num_fixed = num_vars - postsolve_mapping->size();
+  if (num_fixed < 1000 || num_fixed * 2 <= num_vars) {
+    postsolve_mapping->clear();
+    return true;
+  }
+
+  // TODO(user): Right now the copy does not remove fixed variables from the
+  // objective, but ReadObjectiveFromProto() does it. Maybe we should just not
+  // copy them in the first place.
+  if (context_->working_model->has_objective()) {
+    context_->ReadObjectiveFromProto();
+    if (!context_->CanonicalizeObjective()) return false;
+    if (!PropagateObjective()) return false;
+    if (context_->ModelIsUnsat()) return false;
+    context_->WriteObjectiveToProto();
+  }
+
+  // Copy the current domains into the mapping model.
+  // Note that we are not sure the domain where properly written.
+  context_->WriteVariableDomainsToProto();
+  *context_->mapping_model->mutable_variables() =
+      context_->working_model->variables();
+
+  SOLVER_LOG(logger_, "Large number of fixed variables ",
+             FormatCounter(num_fixed), " / ", FormatCounter(num_vars),
+             ", doing a first remapping phase to go down to ",
+             FormatCounter(postsolve_mapping->size()), " variables.");
+
+  // Perform the actual mapping.
+  // Note that this might re-add fixed variable that are still used.
+  const int old_size = postsolve_mapping->size();
+  ApplyVariableMapping(absl::MakeSpan(mapping), context_->working_model,
+                       postsolve_mapping);
+  if (postsolve_mapping->size() > old_size) {
+    const int new_extra = postsolve_mapping->size() - old_size;
+    SOLVER_LOG(logger_, "TODO: ", new_extra,
+               " fixed variables still required in the model!");
+  }
+
+  // Reset some part of the context, the caller re-reads the new domains.
+  context_->ResetAfterCopy();
+  return true;
+}
+
+namespace {
+
+// We ignore all the fields but the linear expression.
+ConstraintProto CopyObjectiveForDuplicateDetection(
+    const CpObjectiveProto& objective) {
+  ConstraintProto copy;
+  *copy.mutable_linear()->mutable_vars() = objective.vars();
+  *copy.mutable_linear()->mutable_coeffs() = objective.coeffs();
   return copy;
 }
+
+struct ConstraintHashForDuplicateDetection {
+  const CpModelProto* working_model;
+  bool ignore_enforcement;
+  ConstraintProto objective_constraint;
+
+  ConstraintHashForDuplicateDetection(const CpModelProto* working_model,
+                                      bool ignore_enforcement)
+      : working_model(working_model),
+        ignore_enforcement(ignore_enforcement),
+        objective_constraint(
+            CopyObjectiveForDuplicateDetection(working_model->objective())) {}
+
+  // We hash our mostly frequently used constraint directly without extra memory
+  // allocation. We revert to a generic code using proto serialization for the
+  // others.
+  std::size_t operator()(int ct_idx) const {
+    const ConstraintProto& ct = ct_idx == kObjectiveConstraint
+                                    ? objective_constraint
+                                    : working_model->constraints(ct_idx);
+    const std::pair<ConstraintProto::ConstraintCase, absl::Span<const int>>
+        type_and_enforcement = {ct.constraint_case(),
+                                ignore_enforcement
+                                    ? absl::Span<const int>()
+                                    : absl::MakeSpan(ct.enforcement_literal())};
+    switch (ct.constraint_case()) {
+      case ConstraintProto::kLinear:
+        if (ignore_enforcement) {
+          return absl::HashOf(type_and_enforcement,
+                              absl::MakeSpan(ct.linear().vars()),
+                              absl::MakeSpan(ct.linear().coeffs()),
+                              absl::MakeSpan(ct.linear().domain()));
+        } else {
+          // We ignore domain for linear constraint, because if the rest of the
+          // constraint is the same we can just intersect them.
+          return absl::HashOf(type_and_enforcement,
+                              absl::MakeSpan(ct.linear().vars()),
+                              absl::MakeSpan(ct.linear().coeffs()));
+        }
+      case ConstraintProto::kBoolAnd:
+        return absl::HashOf(type_and_enforcement,
+                            absl::MakeSpan(ct.bool_and().literals()));
+      case ConstraintProto::kBoolOr:
+        return absl::HashOf(type_and_enforcement,
+                            absl::MakeSpan(ct.bool_or().literals()));
+      case ConstraintProto::kAtMostOne:
+        return absl::HashOf(type_and_enforcement,
+                            absl::MakeSpan(ct.at_most_one().literals()));
+      case ConstraintProto::kExactlyOne:
+        return absl::HashOf(type_and_enforcement,
+                            absl::MakeSpan(ct.exactly_one().literals()));
+      default:
+        ConstraintProto copy = ct;
+        copy.clear_name();
+        if (ignore_enforcement) {
+          copy.mutable_enforcement_literal()->Clear();
+        }
+        return absl::HashOf(copy.SerializeAsString());
+    }
+  }
+};
+
+struct ConstraintEqForDuplicateDetection {
+  const CpModelProto* working_model;
+  bool ignore_enforcement;
+  ConstraintProto objective_constraint;
+
+  ConstraintEqForDuplicateDetection(const CpModelProto* working_model,
+                                    bool ignore_enforcement)
+      : working_model(working_model),
+        ignore_enforcement(ignore_enforcement),
+        objective_constraint(
+            CopyObjectiveForDuplicateDetection(working_model->objective())) {}
+
+  bool operator()(int a, int b) const {
+    if (a == b) {
+      return true;
+    }
+    const ConstraintProto& ct_a = a == kObjectiveConstraint
+                                      ? objective_constraint
+                                      : working_model->constraints(a);
+    const ConstraintProto& ct_b = b == kObjectiveConstraint
+                                      ? objective_constraint
+                                      : working_model->constraints(b);
+
+    if (ct_a.constraint_case() != ct_b.constraint_case()) return false;
+    if (!ignore_enforcement) {
+      if (absl::MakeSpan(ct_a.enforcement_literal()) !=
+          absl::MakeSpan(ct_b.enforcement_literal())) {
+        return false;
+      }
+    }
+    switch (ct_a.constraint_case()) {
+      case ConstraintProto::kLinear:
+        // As above, we ignore domain for linear constraint, because if the rest
+        // of the constraint is the same we can just intersect them.
+        if (ignore_enforcement && absl::MakeSpan(ct_a.linear().domain()) !=
+                                      absl::MakeSpan(ct_b.linear().domain())) {
+          return false;
+        }
+        return absl::MakeSpan(ct_a.linear().vars()) ==
+                   absl::MakeSpan(ct_b.linear().vars()) &&
+               absl::MakeSpan(ct_a.linear().coeffs()) ==
+                   absl::MakeSpan(ct_b.linear().coeffs());
+      case ConstraintProto::kBoolAnd:
+        return absl::MakeSpan(ct_a.bool_and().literals()) ==
+               absl::MakeSpan(ct_b.bool_and().literals());
+      case ConstraintProto::kBoolOr:
+        return absl::MakeSpan(ct_a.bool_or().literals()) ==
+               absl::MakeSpan(ct_b.bool_or().literals());
+      case ConstraintProto::kAtMostOne:
+        return absl::MakeSpan(ct_a.at_most_one().literals()) ==
+               absl::MakeSpan(ct_b.at_most_one().literals());
+      case ConstraintProto::kExactlyOne:
+        return absl::MakeSpan(ct_a.exactly_one().literals()) ==
+               absl::MakeSpan(ct_b.exactly_one().literals());
+      default:
+        // Slow (hopefully comparably rare) path.
+        ConstraintProto copy_a = ct_a;
+        ConstraintProto copy_b = ct_b;
+        copy_a.clear_name();
+        copy_b.clear_name();
+        if (ignore_enforcement) {
+          copy_a.mutable_enforcement_literal()->Clear();
+          copy_b.mutable_enforcement_literal()->Clear();
+        }
+        return copy_a.SerializeAsString() == copy_b.SerializeAsString();
+    }
+  }
+};
+
 }  // namespace
 
 std::vector<std::pair<int, int>> FindDuplicateConstraints(
-    const CpModelProto& model_proto) {
+    const CpModelProto& model_proto, bool ignore_enforcement) {
   std::vector<std::pair<int, int>> result;
 
-  // We use a map hash: serialized_constraint_proto hash -> constraint index.
-  ConstraintProto copy;
-  absl::flat_hash_map<uint64_t, int> equiv_constraints;
+  // We use a map hash that uses the underlying constraint to compute the hash
+  // and the equality for the indices.
+  absl::flat_hash_map<int, int, ConstraintHashForDuplicateDetection,
+                      ConstraintEqForDuplicateDetection>
+      equiv_constraints(
+          model_proto.constraints_size(),
+          ConstraintHashForDuplicateDetection{&model_proto, ignore_enforcement},
+          ConstraintEqForDuplicateDetection{&model_proto, ignore_enforcement});
 
-  std::string s;
+  // Create a special representative for the linear objective.
+  if (model_proto.has_objective() && !ignore_enforcement) {
+    equiv_constraints[kObjectiveConstraint] = kObjectiveConstraint;
+  }
+
   const int num_constraints = model_proto.constraints().size();
   for (int c = 0; c < num_constraints; ++c) {
-    if (model_proto.constraints(c).constraint_case() ==
-        ConstraintProto::CONSTRAINT_NOT_SET) {
-      continue;
-    }
+    const auto type = model_proto.constraints(c).constraint_case();
+    if (type == ConstraintProto::CONSTRAINT_NOT_SET) continue;
 
-    // We ignore names when comparing constraints.
-    //
-    // TODO(user): This is not particularly efficient.
-    copy = CopyConstraintForDuplicateDetection(model_proto.constraints(c));
-    s = copy.SerializeAsString();
+    // Nothing we will presolve in this case.
+    if (ignore_enforcement && type == ConstraintProto::kBoolAnd) continue;
 
-    const uint64_t hash = absl::Hash<std::string>()(s);
-    const auto [it, inserted] = equiv_constraints.insert({hash, c});
-    if (!inserted) {
+    const auto [it, inserted] = equiv_constraints.insert({c, c});
+    if (it->second != c) {
       // Already present!
-      const int other_c_with_same_hash = it->second;
-      copy = CopyConstraintForDuplicateDetection(
-          model_proto.constraints(other_c_with_same_hash));
-      if (s == copy.SerializeAsString()) {
-        result.push_back({c, other_c_with_same_hash});
-      }
+      result.push_back({c, it->second});
     }
   }
 
   return result;
+}
+
+namespace {
+bool SimpleLinearExprEq(const LinearExpressionProto& a,
+                        const LinearExpressionProto& b) {
+  return absl::MakeSpan(a.vars()) == absl::MakeSpan(b.vars()) &&
+         absl::MakeSpan(a.coeffs()) == absl::MakeSpan(b.coeffs()) &&
+         a.offset() == b.offset();
+}
+
+std::size_t LinearExpressionHash(const LinearExpressionProto& expr) {
+  return absl::HashOf(absl::MakeSpan(expr.vars()),
+                      absl::MakeSpan(expr.coeffs()), expr.offset());
+}
+
+}  // namespace
+
+bool CpModelPresolver::IntervalConstraintEq::operator()(int a, int b) const {
+  const ConstraintProto& ct_a = working_model->constraints(a);
+  const ConstraintProto& ct_b = working_model->constraints(b);
+  return absl::MakeSpan(ct_a.enforcement_literal()) ==
+             absl::MakeSpan(ct_b.enforcement_literal()) &&
+         SimpleLinearExprEq(ct_a.interval().start(), ct_b.interval().start()) &&
+         SimpleLinearExprEq(ct_a.interval().size(), ct_b.interval().size()) &&
+         SimpleLinearExprEq(ct_a.interval().end(), ct_b.interval().end());
+}
+
+std::size_t CpModelPresolver::IntervalConstraintHash::operator()(
+    int ct_idx) const {
+  const ConstraintProto& ct = working_model->constraints(ct_idx);
+  return absl::HashOf(absl::MakeSpan(ct.enforcement_literal()),
+                      LinearExpressionHash(ct.interval().start()),
+                      LinearExpressionHash(ct.interval().size()),
+                      LinearExpressionHash(ct.interval().end()));
 }
 
 }  // namespace sat

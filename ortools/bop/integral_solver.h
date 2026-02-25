@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,13 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_BOP_INTEGRAL_SOLVER_H_
-#define OR_TOOLS_BOP_INTEGRAL_SOLVER_H_
+#ifndef ORTOOLS_BOP_INTEGRAL_SOLVER_H_
+#define ORTOOLS_BOP_INTEGRAL_SOLVER_H_
 
-#include "absl/base/port.h"
+#include "absl/base/attributes.h"
 #include "ortools/bop/bop_parameters.pb.h"
 #include "ortools/bop/bop_types.h"
 #include "ortools/lp_data/lp_data.h"
+#include "ortools/lp_data/lp_types.h"
 #include "ortools/util/time_limit.h"
 
 namespace operations_research {
@@ -28,7 +29,12 @@ namespace bop {
 class IntegralSolver {
  public:
   IntegralSolver();
-  ~IntegralSolver() {}
+
+  // This type is neither copyable nor movable.
+  IntegralSolver(const IntegralSolver&) = delete;
+  IntegralSolver& operator=(const IntegralSolver&) = delete;
+
+  ~IntegralSolver() = default;
 
   // Sets the solver parameters.
   // See the proto for an extensive documentation.
@@ -69,9 +75,7 @@ class IntegralSolver {
   glop::DenseRow variable_values_;
   glop::Fractional objective_value_;
   glop::Fractional best_bound_;
-
-  DISALLOW_COPY_AND_ASSIGN(IntegralSolver);
 };
 }  // namespace bop
 }  // namespace operations_research
-#endif  // OR_TOOLS_BOP_INTEGRAL_SOLVER_H_
+#endif  // ORTOOLS_BOP_INTEGRAL_SOLVER_H_

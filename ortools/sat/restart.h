@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,11 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_RESTART_H_
-#define OR_TOOLS_SAT_RESTART_H_
+#ifndef ORTOOLS_SAT_RESTART_H_
+#define ORTOOLS_SAT_RESTART_H_
 
+#include <string>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "ortools/base/logging.h"
 #include "ortools/sat/model.h"
 #include "ortools/sat/sat_decision.h"
 #include "ortools/sat/sat_parameters.pb.h"
@@ -53,6 +56,10 @@ class RestartPolicy {
 
   // Returns a string with the current restart statistics.
   std::string InfoString() const;
+
+  double LbdAverageSinceReset() const {
+    return lbd_running_average_.GlobalAverage();
+  }
 
  private:
   const SatParameters& parameters_;
@@ -98,4 +105,4 @@ inline int SUniv(int i) {
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_RESTART_H_
+#endif  // ORTOOLS_SAT_RESTART_H_

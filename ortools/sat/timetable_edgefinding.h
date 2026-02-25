@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,16 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_TIMETABLE_EDGEFINDING_H_
-#define OR_TOOLS_SAT_TIMETABLE_EDGEFINDING_H_
+#ifndef ORTOOLS_SAT_TIMETABLE_EDGEFINDING_H_
+#define ORTOOLS_SAT_TIMETABLE_EDGEFINDING_H_
 
 #include <vector>
 
-#include "ortools/base/int_type.h"
-#include "ortools/base/macros.h"
 #include "ortools/sat/integer.h"
+#include "ortools/sat/integer_base.h"
 #include "ortools/sat/intervals.h"
-#include "ortools/sat/sat_base.h"
+#include "ortools/sat/model.h"
+#include "ortools/sat/scheduling_helpers.h"
 
 namespace operations_research {
 namespace sat {
@@ -60,10 +60,13 @@ namespace sat {
 // time if this would cause an overload in one of the task intervals.
 class TimeTableEdgeFinding : public PropagatorInterface {
  public:
-  TimeTableEdgeFinding(const std::vector<AffineExpression>& demands,
-                       AffineExpression capacity,
+  TimeTableEdgeFinding(AffineExpression capacity,
                        SchedulingConstraintHelper* helper,
-                       IntegerTrail* integer_trail);
+                       SchedulingDemandHelper* demands, Model* model);
+
+  // This type is neither copyable nor movable.
+  TimeTableEdgeFinding(const TimeTableEdgeFinding&) = delete;
+  TimeTableEdgeFinding& operator=(const TimeTableEdgeFinding&) = delete;
 
   bool Propagate() final;
 
@@ -83,35 +86,27 @@ class TimeTableEdgeFinding : public PropagatorInterface {
   // update the end times by calling the SwitchToMirrorProblem method first.
   bool TimeTableEdgeFindingPass();
 
-  // Increases the start min of task_index with the proper explanation.
-  bool IncreaseStartMin(IntegerValue begin, IntegerValue end, int task_index,
-                        IntegerValue new_start);
-
-  IntegerValue DemandMin(int task_index) const {
-    return integer_trail_->LowerBound(demands_[task_index]);
-  }
+  // Fills the reason for the energy in [window_min, window_max].
+  // We exclude the given task_index mandatory energy and uses
+  // tasks_contributing_to_free_energy_.
+  void FillEnergyInWindowReason(IntegerValue window_min,
+                                IntegerValue window_max, int task_index);
 
   IntegerValue CapacityMax() const {
     return integer_trail_->UpperBound(capacity_);
   }
 
-  // Number of tasks.
   const int num_tasks_;
-
-  // IntervalVariable and IntegerVariable of each tasks that must be considered
-  // in this constraint.
-  std::vector<AffineExpression> demands_;
   const AffineExpression capacity_;
-
   SchedulingConstraintHelper* helper_;
+  SchedulingDemandHelper* demands_;
   IntegerTrail* integer_trail_;
 
   // Start (resp. end) of the compulsory parts used to build the profile.
   std::vector<TaskTime> scp_;
   std::vector<TaskTime> ecp_;
 
-  // Sizes and energy of the free parts. One is just the other times the
-  // minimum demand.
+  // Sizes and energy of the free parts.
   std::vector<IntegerValue> size_free_;
   std::vector<IntegerValue> energy_free_;
 
@@ -120,10 +115,12 @@ class TimeTableEdgeFinding : public PropagatorInterface {
   std::vector<IntegerValue> mandatory_energy_before_start_min_;
   std::vector<IntegerValue> mandatory_energy_before_end_max_;
 
-  DISALLOW_COPY_AND_ASSIGN(TimeTableEdgeFinding);
+  // List of task that should participate in the reason.
+  std::vector<int> reason_tasks_fully_included_in_window_;
+  std::vector<int> reason_tasks_partially_included_in_window_;
 };
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_TIMETABLE_EDGEFINDING_H_
+#endif  // ORTOOLS_SAT_TIMETABLE_EDGEFINDING_H_

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2010-2021 Google LLC
+# Copyright 2010-2025 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -11,14 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 # [START program]
 """Example of a simple nurse scheduling problem."""
 # [START import]
 from ortools.sat.python import cp_model
+
 # [END import]
 
 
-def main():
+def main() -> None:
     # Data.
     # [START data]
     num_nurses = 4
@@ -41,22 +43,21 @@ def main():
     for n in all_nurses:
         for d in all_days:
             for s in all_shifts:
-                shifts[(n, d,
-                        s)] = model.NewBoolVar('shift_n%id%is%i' % (n, d, s))
+                shifts[(n, d, s)] = model.new_bool_var(f"shift_n{n}_d{d}_s{s}")
     # [END variables]
 
     # Each shift is assigned to exactly one nurse in the schedule period.
     # [START exactly_one_nurse]
     for d in all_days:
         for s in all_shifts:
-            model.Add(sum(shifts[(n, d, s)] for n in all_nurses) == 1)
+            model.add_exactly_one(shifts[(n, d, s)] for n in all_nurses)
     # [END exactly_one_nurse]
 
     # Each nurse works at most one shift per day.
     # [START at_most_one_shift]
     for n in all_nurses:
         for d in all_days:
-            model.Add(sum(shifts[(n, d, s)] for s in all_shifts) <= 1)
+            model.add_at_most_one(shifts[(n, d, s)] for s in all_shifts)
     # [END at_most_one_shift]
 
     # [START assign_nurses_evenly]
@@ -70,12 +71,12 @@ def main():
     else:
         max_shifts_per_nurse = min_shifts_per_nurse + 1
     for n in all_nurses:
-        num_shifts_worked = []
+        shifts_worked = []
         for d in all_days:
             for s in all_shifts:
-                num_shifts_worked.append(shifts[(n, d, s)])
-        model.Add(min_shifts_per_nurse <= sum(num_shifts_worked))
-        model.Add(sum(num_shifts_worked) <= max_shifts_per_nurse)
+                shifts_worked.append(shifts[(n, d, s)])
+        model.add(min_shifts_per_nurse <= sum(shifts_worked))
+        model.add(sum(shifts_worked) <= max_shifts_per_nurse)
     # [END assign_nurses_evenly]
 
     # Creates the solver and solve.
@@ -84,7 +85,6 @@ def main():
     solver.parameters.linearization_level = 0
     # Enumerate all solutions.
     solver.parameters.enumerate_all_solutions = True
-
     # [END parameters]
 
     # [START solution_printer]
@@ -102,45 +102,45 @@ def main():
 
         def on_solution_callback(self):
             self._solution_count += 1
-            print('Solution %i' % self._solution_count)
+            print(f"Solution {self._solution_count}")
             for d in range(self._num_days):
-                print('Day %i' % d)
+                print(f"Day {d}")
                 for n in range(self._num_nurses):
                     is_working = False
                     for s in range(self._num_shifts):
-                        if self.Value(self._shifts[(n, d, s)]):
+                        if self.value(self._shifts[(n, d, s)]):
                             is_working = True
-                            print('  Nurse %i works shift %i' % (n, s))
+                            print(f"  Nurse {n} works shift {s}")
                     if not is_working:
-                        print('  Nurse {} does not work'.format(n))
+                        print(f"  Nurse {n} does not work")
             if self._solution_count >= self._solution_limit:
-                print('Stop search after %i solutions' % self._solution_limit)
-                self.StopSearch()
+                print(f"Stop search after {self._solution_limit} solutions")
+                self.stop_search()
 
-        def solution_count(self):
+        def solutionCount(self):
             return self._solution_count
 
     # Display the first five solutions.
     solution_limit = 5
-    solution_printer = NursesPartialSolutionPrinter(shifts, num_nurses,
-                                                    num_days, num_shifts,
-                                                    solution_limit)
+    solution_printer = NursesPartialSolutionPrinter(
+        shifts, num_nurses, num_days, num_shifts, solution_limit
+    )
     # [END solution_printer]
 
     # [START solve]
-    solver.Solve(model, solution_printer)
+    solver.solve(model, solution_printer)
     # [END solve]
 
     # Statistics.
     # [START statistics]
-    print('\nStatistics')
-    print('  - conflicts      : %i' % solver.NumConflicts())
-    print('  - branches       : %i' % solver.NumBranches())
-    print('  - wall time      : %f s' % solver.WallTime())
-    print('  - solutions found: %i' % solution_printer.solution_count())
+    print("\nStatistics")
+    print(f"  - conflicts      : {solver.num_conflicts}")
+    print(f"  - branches       : {solver.num_branches}")
+    print(f"  - wall time      : {solver.wall_time} s")
+    print(f"  - solutions found: {solution_printer.solutionCount()}")
     # [END statistics]
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 # [END program]

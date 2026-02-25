@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,14 +10,19 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 // [START program]
 // Solve a simple assignment problem.
 // [START import]
 #include <cstdint>
+#include <memory>
 #include <numeric>
 #include <vector>
 
+#include "absl/base/log_severity.h"
+#include "absl/log/globals.h"
 #include "absl/strings/str_format.h"
+#include "ortools/base/init_google.h"
 #include "ortools/base/logging.h"
 #include "ortools/linear_solver/linear_solver.h"
 // [END import]
@@ -27,16 +32,16 @@ void AssignmentTeamsMip() {
   // Data
   // [START data]
   const std::vector<std::vector<int64_t>> costs = {{
-    {{90, 76, 75, 70, 50, 74, 12, 68}},
-    {{35, 85, 55, 65, 48, 101, 70, 83}},
-    {{125, 95, 90, 105, 59, 120, 36, 73}},
-    {{45, 110, 95, 115, 104, 83, 37, 71}},
-    {{60, 105, 80, 75, 59, 62, 93, 88}},
-    {{45, 65, 110, 95, 47, 31, 81, 34}},
-    {{38, 51, 107, 41, 69, 99, 115, 48}},
-    {{47, 85, 57, 71, 92, 77, 109, 36}},
-    {{39, 63, 97, 49, 118, 56, 92, 61}},
-    {{47, 101, 71, 60, 88, 109, 52, 90}},
+      {{90, 76, 75, 70, 50, 74, 12, 68}},
+      {{35, 85, 55, 65, 48, 101, 70, 83}},
+      {{125, 95, 90, 105, 59, 120, 36, 73}},
+      {{45, 110, 95, 115, 104, 83, 37, 71}},
+      {{60, 105, 80, 75, 59, 62, 93, 88}},
+      {{45, 65, 110, 95, 47, 31, 81, 34}},
+      {{38, 51, 107, 41, 69, 99, 115, 48}},
+      {{47, 85, 57, 71, 92, 77, 109, 36}},
+      {{39, 63, 97, 49, 118, 56, 92, 61}},
+      {{47, 101, 71, 60, 88, 109, 52, 90}},
   }};
   const int num_workers = costs.size();
   std::vector<int> all_workers(num_workers);
@@ -133,7 +138,9 @@ void AssignmentTeamsMip() {
 }
 }  // namespace operations_research
 
-int main(int argc, char** argv) {
+int main(int argc, char* argv[]) {
+  InitGoogle(argv[0], &argc, &argv, true);
+  absl::SetStderrThreshold(absl::LogSeverityAtLeast::kInfo);
   operations_research::AssignmentTeamsMip();
   return EXIT_SUCCESS;
 }

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_UTIL_FUNCTIONS_SWIG_TEST_HELPERS_H_
-#define OR_TOOLS_UTIL_FUNCTIONS_SWIG_TEST_HELPERS_H_
+#ifndef ORTOOLS_UTIL_FUNCTIONS_SWIG_TEST_HELPERS_H_
+#define ORTOOLS_UTIL_FUNCTIONS_SWIG_TEST_HELPERS_H_
 
 // These are simple static methods to test std::function in the swig wrapper
 // tests.
@@ -21,11 +21,10 @@
 // simple static methods; because the Java wrapping of the latter made them hard
 // to find (whereas the class methods are easy to find).
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <utility>
-
-#include "ortools/base/integral_types.h"
 
 namespace operations_research {
 class FunctionSwigTestHelpers {
@@ -79,7 +78,7 @@ class FunctionSwigTestHelpers {
 
   static void NoOpStringToVoid(std::function<void(std::string)> fun,
                                std::string x) {
-    fun(x);
+    fun(std::move(x));
   }
 };
 
@@ -87,7 +86,7 @@ class DelayedFunctionSwigTestHelpers {
  public:
   explicit DelayedFunctionSwigTestHelpers(
       std::function<int64_t(int64_t, int64_t)> fun)
-      : fun_(fun) {}
+      : fun_(std::move(fun)) {}
 
   int64_t NoOpInt64PairToInt64(int64_t x, int64_t y) { return fun_(x, y); }
 
@@ -96,4 +95,4 @@ class DelayedFunctionSwigTestHelpers {
 };
 
 }  // namespace operations_research
-#endif  // OR_TOOLS_UTIL_FUNCTIONS_SWIG_TEST_HELPERS_H_
+#endif  // ORTOOLS_UTIL_FUNCTIONS_SWIG_TEST_HELPERS_H_

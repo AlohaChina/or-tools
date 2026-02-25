@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,9 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This .i file is only used in the open-source export of
-// util/operations_research (github or-tools)
-//
 // It exposes the linear programming and integer programming solver.
 //
 // The C# API is quite different from the C++ API; mostly because it
@@ -28,12 +25,9 @@
 // - examples/csharp/cslinearprogramming.cs
 // - examples/csharp/csintegerprogramming.cs
 
-%include "enums.swg"
-%include "stdint.i"
-%include "std_vector.i"
-
 %include "ortools/base/base.i"
-%include "ortools/util/csharp/vector.i"
+%include "enums.swg"
+%import "ortools/util/csharp/vector.i"
 
 %{
 #include "ortools/linear_solver/linear_solver.h"
@@ -41,6 +35,8 @@
 #include "ortools/linear_solver/model_exporter.h"
 %}
 
+%template(DoubleVector) std::vector<double>;
+VECTOR_AS_CSHARP_ARRAY(double, double, double, DoubleVector);
 
 // We need to forward-declare the proto here, so that the PROTO_* macros
 // involving them work correctly. The order matters very much: this declaration
@@ -58,9 +54,6 @@ class MPSolutionResponse;
 
 %typemap(csclassmodifiers) operations_research::MPVariable "public partial class"
 %typemap(csclassmodifiers) operations_research::MPSolver "public partial class"
-
-%template(DoubleVector) std::vector<double>;
-VECTOR_AS_CSHARP_ARRAY(double, double, double, DoubleVector);
 
 %define CONVERT_VECTOR(CTYPE, TYPE)
 SWIG_STD_VECTOR_ENHANCED(CTYPE*);
@@ -82,12 +75,14 @@ CONVERT_VECTOR(operations_research::MPVariable, MPVariable)
 %rename (Constraint) operations_research::MPConstraint;
 %rename (Objective) operations_research::MPObjective;
 %rename (SolverParameters) operations_research::MPSolverParameters;
+%unignore operations_research::MPSolver::SolverVersion;
 
 // Expose the MPSolver::OptimizationProblemType enum.
 %unignore operations_research::MPSolver::OptimizationProblemType;
 %unignore operations_research::MPSolver::CLP_LINEAR_PROGRAMMING;
 %unignore operations_research::MPSolver::GLOP_LINEAR_PROGRAMMING;
 %unignore operations_research::MPSolver::GLPK_LINEAR_PROGRAMMING;
+%unignore operations_research::MPSolver::PDLP_LINEAR_PROGRAMMING;
 %unignore operations_research::MPSolver::SCIP_MIXED_INTEGER_PROGRAMMING;
 %unignore operations_research::MPSolver::CBC_MIXED_INTEGER_PROGRAMMING;
 %unignore operations_research::MPSolver::GLPK_MIXED_INTEGER_PROGRAMMING;
@@ -107,6 +102,7 @@ CONVERT_VECTOR(operations_research::MPVariable, MPVariable)
 %unignore operations_research::MPSolver::INFEASIBLE;
 %unignore operations_research::MPSolver::UNBOUNDED;
 %unignore operations_research::MPSolver::ABNORMAL;
+%unignore operations_research::MPSolver::MODEL_INVALID;
 %unignore operations_research::MPSolver::NOT_SOLVED;
 
 // Expose the MPSolver's basic API, with some non-trivial renames.
@@ -148,6 +144,7 @@ CONVERT_VECTOR(operations_research::MPVariable, MPVariable)
 %unignore operations_research::MPSolver::variables;
 %unignore operations_research::MPSolver::EnableOutput;
 %unignore operations_research::MPSolver::SuppressOutput;
+%rename (IsMip) operations_research::MPSolver::IsMIP;
 %unignore operations_research::MPSolver::LookupConstraintOrNull;
 %unignore operations_research::MPSolver::LookupVariableOrNull;
 
@@ -166,6 +163,8 @@ CONVERT_VECTOR(operations_research::MPVariable, MPVariable)
 // Extend code.
 %unignore operations_research::MPSolver::ExportModelAsLpFormat(bool);
 %unignore operations_research::MPSolver::ExportModelAsMpsFormat(bool, bool);
+%unignore operations_research::MPSolver::WriteModelToMpsFile(
+  const std::string& filename, bool, bool);
 %unignore operations_research::MPSolver::SetHint(
     const std::vector<operations_research::MPVariable*>&,
     const std::vector<double>&);
@@ -185,6 +184,15 @@ CONVERT_VECTOR(operations_research::MPVariable, MPVariable)
     operations_research::MPModelProto model;
     $self->ExportModelToProto(&model);
     return ExportModelAsMpsFormat(model, options).value_or("");
+  }
+
+  bool WriteModelToMpsFile(const std::string& filename, bool fixed_format,
+                           bool obfuscated) {
+    operations_research::MPModelExportOptions options;
+    options.obfuscate = obfuscated;
+    operations_research::MPModelProto model;
+    $self->ExportModelToProto(&model);
+    return WriteModelToMpsFile(filename, model, options).ok();
   }
 
   void SetHint(const std::vector<operations_research::MPVariable*>& variables,
@@ -227,6 +235,7 @@ CONVERT_VECTOR(operations_research::MPVariable, MPVariable)
 %unignore operations_research::MPConstraint::SetBounds;
 %rename (Index) operations_research::MPConstraint::index;
 %rename (SetIsLazy) operations_research::MPConstraint::set_is_lazy;
+%unignore operations_research::MPConstraint::Clear;
 
 // MPConstraint: reader API.
 %unignore operations_research::MPConstraint::GetCoefficient;

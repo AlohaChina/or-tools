@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,28 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_BOP_BOP_LNS_H_
-#define OR_TOOLS_BOP_BOP_LNS_H_
+#ifndef ORTOOLS_BOP_BOP_LNS_H_
+#define ORTOOLS_BOP_BOP_LNS_H_
 
 #include <cstdint>
-#include <string>
+#include <memory>
 #include <vector>
 
-#include "ortools/base/basictypes.h"
-#include "ortools/base/int_type.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/base/logging.h"
-#include "ortools/base/macros.h"
+#include "absl/random/bit_gen_ref.h"
+#include "absl/strings/string_view.h"
 #include "ortools/base/strong_vector.h"
 #include "ortools/bop/bop_base.h"
 #include "ortools/bop/bop_parameters.pb.h"
-#include "ortools/bop/bop_solution.h"
 #include "ortools/bop/bop_types.h"
 #include "ortools/bop/bop_util.h"
-#include "ortools/glop/lp_solver.h"
 #include "ortools/sat/boolean_problem.pb.h"
 #include "ortools/sat/sat_solver.h"
-#include "ortools/util/stats.h"
 #include "ortools/util/time_limit.h"
 
 namespace operations_research {
@@ -40,9 +34,9 @@ namespace bop {
 
 // Uses SAT to solve the full problem under the constraint that the new solution
 // should be under a given Hamming distance of the current solution.
-class BopCompleteLNSOptimizer : public BopOptimizerBase {
+class BopCompleteLNSOptimizer final : public BopOptimizerBase {
  public:
-  BopCompleteLNSOptimizer(const std::string& name,
+  BopCompleteLNSOptimizer(absl::string_view name,
                           const BopConstraintTerms& objective_terms);
   ~BopCompleteLNSOptimizer() final;
 
@@ -69,8 +63,8 @@ class BopCompleteLNSOptimizer : public BopOptimizerBase {
 // function here and a way to select between which one to call.
 class NeighborhoodGenerator {
  public:
-  NeighborhoodGenerator() {}
-  virtual ~NeighborhoodGenerator() {}
+  NeighborhoodGenerator() = default;
+  virtual ~NeighborhoodGenerator() = default;
 
   // Interface for the neighborhood generation.
   //
@@ -99,11 +93,11 @@ class NeighborhoodGenerator {
 // A generic LNS optimizer which generates neighborhoods according to the given
 // NeighborhoodGenerator and automatically adapt the neighborhood size depending
 // on how easy it is to solve the associated problem.
-class BopAdaptiveLNSOptimizer : public BopOptimizerBase {
+class BopAdaptiveLNSOptimizer final : public BopOptimizerBase {
  public:
   // Takes ownership of the given neighborhood_generator.
   // The sat_propagator is assumed to contains the current problem.
-  BopAdaptiveLNSOptimizer(const std::string& name, bool use_lp_to_guide_sat,
+  BopAdaptiveLNSOptimizer(absl::string_view name, bool use_lp_to_guide_sat,
                           NeighborhoodGenerator* neighborhood_generator,
                           sat::SatSolver* sat_propagator);
   ~BopAdaptiveLNSOptimizer() final;
@@ -125,12 +119,12 @@ class BopAdaptiveLNSOptimizer : public BopOptimizerBase {
 
 // Generates a neighborhood by randomly fixing a subset of the objective
 // variables that are currently at their lower cost.
-class ObjectiveBasedNeighborhood : public NeighborhoodGenerator {
+class ObjectiveBasedNeighborhood final : public NeighborhoodGenerator {
  public:
   ObjectiveBasedNeighborhood(const BopConstraintTerms* objective_terms,
                              absl::BitGenRef random)
       : objective_terms_(*objective_terms), random_(random) {}
-  ~ObjectiveBasedNeighborhood() final {}
+  ~ObjectiveBasedNeighborhood() final = default;
 
  private:
   void GenerateNeighborhood(const ProblemState& problem_state,
@@ -143,12 +137,12 @@ class ObjectiveBasedNeighborhood : public NeighborhoodGenerator {
 // Generates a neighborhood by randomly selecting a subset of constraints and
 // fixing the objective variables that are currently at their lower cost and
 // not in the given subset of constraints.
-class ConstraintBasedNeighborhood : public NeighborhoodGenerator {
+class ConstraintBasedNeighborhood final : public NeighborhoodGenerator {
  public:
   ConstraintBasedNeighborhood(const BopConstraintTerms* objective_terms,
                               absl::BitGenRef random)
       : objective_terms_(*objective_terms), random_(random) {}
-  ~ConstraintBasedNeighborhood() final {}
+  ~ConstraintBasedNeighborhood() final = default;
 
  private:
   void GenerateNeighborhood(const ProblemState& problem_state,
@@ -161,11 +155,11 @@ class ConstraintBasedNeighborhood : public NeighborhoodGenerator {
 // Generates a neighborhood by taking a random local neighborhood in an
 // undirected graph where the nodes are the variables and two nodes are linked
 // if they appear in the same constraint.
-class RelationGraphBasedNeighborhood : public NeighborhoodGenerator {
+class RelationGraphBasedNeighborhood final : public NeighborhoodGenerator {
  public:
   RelationGraphBasedNeighborhood(const sat::LinearBooleanProblem& problem,
                                  absl::BitGenRef random);
-  ~RelationGraphBasedNeighborhood() final {}
+  ~RelationGraphBasedNeighborhood() final = default;
 
  private:
   void GenerateNeighborhood(const ProblemState& problem_state,
@@ -174,10 +168,11 @@ class RelationGraphBasedNeighborhood : public NeighborhoodGenerator {
 
   // TODO(user): reuse by_variable_matrix_ from the LS? Note however than we
   // don't need the coefficients here.
-  absl::StrongVector<VariableIndex, std::vector<ConstraintIndex>> columns_;
+  util_intops::StrongVector<VariableIndex, std::vector<ConstraintIndex>>
+      columns_;
   absl::BitGenRef random_;
 };
 
 }  // namespace bop
 }  // namespace operations_research
-#endif  // OR_TOOLS_BOP_BOP_LNS_H_
+#endif  // ORTOOLS_BOP_BOP_LNS_H_

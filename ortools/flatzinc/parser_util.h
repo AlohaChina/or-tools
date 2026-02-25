@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,14 +14,14 @@
 // Struct and utility functions used by the code in parser.yy
 // Included in parser.tab.hh.
 
-#ifndef OR_TOOLS_FLATZINC_PARSER_UTIL_H_
-#define OR_TOOLS_FLATZINC_PARSER_UTIL_H_
+#ifndef ORTOOLS_FLATZINC_PARSER_UTIL_H_
+#define ORTOOLS_FLATZINC_PARSER_UTIL_H_
 
-#include <cmath>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "absl/container/flat_hash_map.h"
-#include "ortools/base/map_util.h"
 #include "ortools/flatzinc/model.h"
 
 namespace operations_research {
@@ -55,6 +55,13 @@ struct VarRefOrValue {
     result.defined = true;
     return result;
   }
+  static VarRefOrValue DomainValue(Domain domain) {
+    VarRefOrValue result;
+    result.domain = domain;
+    result.is_domain = true;
+    result.defined = true;
+    return result;
+  }
   static VarRefOrValue FloatValue(double value) {
     VarRefOrValue result;
     result.float_value = value;
@@ -66,8 +73,12 @@ struct VarRefOrValue {
   Variable* variable = nullptr;
   int64_t value = 0;
   double float_value = 0.0;
+  Domain domain;
   bool defined = false;
   bool is_float = false;
+  bool is_domain = false;
+  // Indicates that the set domain is fixed.
+  bool domain_is_fixed = false;
 };
 
 // Class needed to pass information from the lexer to the parser.
@@ -92,4 +103,4 @@ struct LexerInfo {
 int64_t ConvertAsIntegerOrDie(double d);
 }  // namespace fz
 }  // namespace operations_research
-#endif  // OR_TOOLS_FLATZINC_PARSER_UTIL_H_
+#endif  // ORTOOLS_FLATZINC_PARSER_UTIL_H_

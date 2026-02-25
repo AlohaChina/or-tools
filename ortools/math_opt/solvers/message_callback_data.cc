@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,19 +14,20 @@
 #include "ortools/math_opt/solvers/message_callback_data.h"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "absl/types/optional.h"
-#include "ortools/math_opt/callback.pb.h"
 
 namespace operations_research {
 namespace math_opt {
 
-absl::optional<CallbackDataProto> MessageCallbackData::Parse(
+std::vector<std::string> MessageCallbackData::Parse(
     const absl::string_view message) {
-  CallbackDataProto data;
+  std::vector<std::string> strings;
 
   // Iterate on all complete lines (lines ending with a '\n').
   absl::string_view remainder = message;
@@ -34,41 +35,65 @@ absl::optional<CallbackDataProto> MessageCallbackData::Parse(
        remainder = remainder.substr(end + 1)) {
     const auto line = remainder.substr(0, end);
     if (!unfinished_line_.empty()) {
-      std::string& new_message = *data.add_messages();
-      new_message = std::move(unfinished_line_);
+      std::string new_message = std::move(unfinished_line_);
       unfinished_line_.clear();
-      new_message += line;
+      absl::StrAppend(&new_message, line);
+      strings.push_back(std::move(new_message));
     } else {
-      data.add_messages(std::string(line));
+      strings.emplace_back(line);
     }
   }
 
-  // At the end of the loop, the remainder may contains the last unfinished
-  // line. This could be the first line too if the entire message does not
-  // contain '\n'.
-  unfinished_line_ += remainder;
+  // At the end of the loop, the remainder may contain the last unfinished line.
+  // This could be the first line too if the entire message does not contain
+  // '\n'.
+  absl::StrAppend(&unfinished_line_, remainder);
 
-  // It is an error to call the user callback without any message.
-  if (data.messages().empty()) {
-    return absl::nullopt;
-  }
-
-  // We only need to set that if we have messages.
-  data.set_event(CALLBACK_EVENT_MESSAGE);
-
-  return data;
+  return strings;
 }
 
-absl::optional<CallbackDataProto> MessageCallbackData::Flush() {
+std::vector<std::string> MessageCallbackData::Flush() {
   if (unfinished_line_.empty()) {
-    return absl::nullopt;
+    return {};
   }
 
-  CallbackDataProto data;
-  data.set_event(CALLBACK_EVENT_MESSAGE);
-  *data.add_messages() = std::move(unfinished_line_);
+  std::vector<std::string> strings = {std::move(unfinished_line_)};
   unfinished_line_.clear();
-  return data;
+  return strings;
+}
+
+BufferedMessageCallback::BufferedMessageCallback(
+    SolverInterface::MessageCallback user_message_callback)
+    : user_message_callback_(std::move(user_message_callback)) {}
+
+void BufferedMessageCallback::OnMessage(absl::string_view message) {
+  if (!has_user_message_callback()) {
+    return;
+  }
+  std::vector<std::string> messages;
+  {
+    absl::MutexLock lock(mutex_);
+    messages = message_callback_data_.Parse(message);
+  }
+  // Do not hold lock during callback to user code.
+  if (!messages.empty()) {
+    user_message_callback_(messages);
+  }
+}
+
+void BufferedMessageCallback::Flush() {
+  if (!has_user_message_callback()) {
+    return;
+  }
+  std::vector<std::string> messages;
+  {
+    absl::MutexLock lock(mutex_);
+    messages = message_callback_data_.Flush();
+  }
+  // Do not hold lock during callback to user code.
+  if (!messages.empty()) {
+    user_message_callback_(messages);
+  }
 }
 
 }  // namespace math_opt

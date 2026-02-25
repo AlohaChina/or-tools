@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2010-2021 Google LLC
+# Copyright 2010-2025 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -11,10 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 # [START program]
 """Solve assignment problem for given group of workers."""
 # [START import]
 from ortools.linear_solver import pywraplp
+
 # [END import]
 
 
@@ -66,10 +68,12 @@ def main():
     ]
     # [END allowed_groups]
 
-    # Solver
+    # Solver.
     # [START solver]
     # Create the mip solver with the SCIP backend.
-    solver = pywraplp.Solver.CreateSolver('SCIP')
+    solver = pywraplp.Solver.CreateSolver("SCIP")
+    if not solver:
+        return
     # [END solver]
 
     # Variables
@@ -79,7 +83,7 @@ def main():
     x = {}
     for worker in range(num_workers):
         for task in range(num_tasks):
-            x[worker, task] = solver.BoolVar(f'x[{worker},{task}]')
+            x[worker, task] = solver.BoolVar(f"x[{worker},{task}]")
     # [END variables]
 
     # Constraints
@@ -97,47 +101,48 @@ def main():
     # Create variables for each worker, indicating whether they work on some task.
     work = {}
     for worker in range(num_workers):
-        work[worker] = solver.BoolVar(f'work[{worker}]')
+        work[worker] = solver.BoolVar(f"work[{worker}]")
 
     for worker in range(num_workers):
-        solver.Add(work[worker] == solver.Sum([x[worker, task] for task in
-            range(num_tasks)]))
+        solver.Add(
+            work[worker] == solver.Sum([x[worker, task] for task in range(num_tasks)])
+        )
 
     # Group1
     constraint_g1 = solver.Constraint(1, 1)
-    for i in range(len(group1)):
+    for index, _ in enumerate(group1):
         # a*b can be transformed into 0 <= a + b - 2*p <= 1 with p in [0,1]
         # p is True if a AND b, False otherwise
         constraint = solver.Constraint(0, 1)
-        constraint.SetCoefficient(work[group1[i][0]], 1)
-        constraint.SetCoefficient(work[group1[i][1]], 1)
-        p = solver.BoolVar(f'g1_p{i}')
+        constraint.SetCoefficient(work[group1[index][0]], 1)
+        constraint.SetCoefficient(work[group1[index][1]], 1)
+        p = solver.BoolVar(f"g1_p{index}")
         constraint.SetCoefficient(p, -2)
 
         constraint_g1.SetCoefficient(p, 1)
 
     # Group2
     constraint_g2 = solver.Constraint(1, 1)
-    for i in range(len(group2)):
+    for index, _ in enumerate(group2):
         # a*b can be transformed into 0 <= a + b - 2*p <= 1 with p in [0,1]
         # p is True if a AND b, False otherwise
         constraint = solver.Constraint(0, 1)
-        constraint.SetCoefficient(work[group2[i][0]], 1)
-        constraint.SetCoefficient(work[group2[i][1]], 1)
-        p = solver.BoolVar(f'g2_p{i}')
+        constraint.SetCoefficient(work[group2[index][0]], 1)
+        constraint.SetCoefficient(work[group2[index][1]], 1)
+        p = solver.BoolVar(f"g2_p{index}")
         constraint.SetCoefficient(p, -2)
 
         constraint_g2.SetCoefficient(p, 1)
 
     # Group3
     constraint_g3 = solver.Constraint(1, 1)
-    for i in range(len(group3)):
+    for index, _ in enumerate(group3):
         # a*b can be transformed into 0 <= a + b - 2*p <= 1 with p in [0,1]
         # p is True if a AND b, False otherwise
         constraint = solver.Constraint(0, 1)
-        constraint.SetCoefficient(work[group3[i][0]], 1)
-        constraint.SetCoefficient(work[group3[i][1]], 1)
-        p = solver.BoolVar(f'g3_p{i}')
+        constraint.SetCoefficient(work[group3[index][0]], 1)
+        constraint.SetCoefficient(work[group3[index][1]], 1)
+        p = solver.BoolVar(f"g3_p{index}")
         constraint.SetCoefficient(p, -2)
 
         constraint_g3.SetCoefficient(p, 1)
@@ -154,23 +159,26 @@ def main():
 
     # Solve
     # [START solve]
+    print(f"Solving with {solver.SolverVersion()}")
     status = solver.Solve()
     # [END solve]
 
     # Print solution.
     # [START print_solution]
     if status == pywraplp.Solver.OPTIMAL or status == pywraplp.Solver.FEASIBLE:
-        print(f'Total cost = {solver.Objective().Value()}\n')
+        print(f"Total cost = {solver.Objective().Value()}\n")
         for worker in range(num_workers):
             for task in range(num_tasks):
                 if x[worker, task].solution_value() > 0.5:
-                    print(f'Worker {worker} assigned to task {task}.' +
-                            f' Cost: {costs[worker][task]}')
+                    print(
+                        f"Worker {worker} assigned to task {task}."
+                        + f" Cost: {costs[worker][task]}"
+                    )
     else:
-        print('No solution found.')
+        print("No solution found.")
     # [END print_solution]
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 # [END program]

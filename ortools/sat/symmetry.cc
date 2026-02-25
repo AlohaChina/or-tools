@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,8 +13,19 @@
 
 #include "ortools/sat/symmetry.h"
 
-#include "ortools/base/int_type.h"
-#include "ortools/base/logging.h"
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+#include "absl/algorithm/container.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/types/span.h"
+#include "ortools/algorithms/sparse_permutation.h"
+#include "ortools/base/strong_vector.h"
+#include "ortools/sat/sat_base.h"
+#include "ortools/util/stats.h"
+#include "ortools/util/strong_integers.h"
 
 namespace operations_research {
 namespace sat {
@@ -74,8 +85,7 @@ bool SymmetryPropagator::PropagateNext(Trail* trail) {
       }
 
       // We have a non-symmetric literal and its image is not already assigned
-      // to
-      // true.
+      // to true.
       const AssignedLiteralInfo& non_symmetric =
           (*p_trail)[p_trail->back().first_non_symmetric_info_index_so_far];
 
@@ -88,6 +98,13 @@ bool SymmetryPropagator::PropagateNext(Trail* trail) {
           AssignmentType::kSearchDecision) {
         continue;
       }
+      const absl::Span<const Literal> initial_reason =
+          trail->Reason(non_symmetric.literal.Variable());
+      if (absl::c_any_of(initial_reason, [this](Literal literal) {
+            return literal.Index() >= num_literals_with_knonw_symmetry_;
+          })) {
+        continue;
+      }
       if (trail->Assignment().LiteralIsFalse(non_symmetric.image)) {
         // Conflict.
         ++num_conflicts_;
@@ -95,8 +112,6 @@ bool SymmetryPropagator::PropagateNext(Trail* trail) {
         // Set the conflict on the trail.
         // Note that we need to fetch a reason for this.
         std::vector<Literal>* conflict = trail->MutableConflict();
-        const absl::Span<const Literal> initial_reason =
-            trail->Reason(non_symmetric.literal.Variable());
         Permute(p_index, initial_reason, conflict);
         conflict->push_back(non_symmetric.image);
         for (Literal literal : *conflict) {
@@ -144,8 +159,8 @@ void SymmetryPropagator::Untrail(const Trail& trail, int trail_index) {
   }
 }
 
-absl::Span<const Literal> SymmetryPropagator::Reason(const Trail& trail,
-                                                     int trail_index) const {
+absl::Span<const Literal> SymmetryPropagator::Reason(
+    const Trail& trail, int trail_index, int64_t /*conflict_id*/) const {
   SCOPED_TIME_STAT(&stats_);
   const ReasonInfo& reason_info = reasons_[trail_index];
   std::vector<Literal>* reason = trail.GetEmptyVectorToStoreReason(trail_index);

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -40,35 +40,30 @@ public class AssignmentGroupsMip
 
         // Allowed groups of workers:
         // [START allowed_groups]
-        int[,] group1 = { // group of worker 0-3
-          {2, 3},
-          {1, 3},
-          {1, 2},
-          {0, 1},
-          {0, 2},
+        int[,] group1 = {
+            // group of worker 0-3
+            { 2, 3 }, { 1, 3 }, { 1, 2 }, { 0, 1 }, { 0, 2 },
         };
 
-        int[,] group2 = { // group of worker 4-7
-          {6, 7},
-          {5, 7},
-          {5, 6},
-          {4, 5},
-          {4, 7},
+        int[,] group2 = {
+            // group of worker 4-7
+            { 6, 7 }, { 5, 7 }, { 5, 6 }, { 4, 5 }, { 4, 7 },
         };
 
-        int[,] group3 = { // group of worker 8-11
-          {10, 11},
-          {9, 11},
-          {9, 10},
-          {8, 10},
-          {8, 11},
+        int[,] group3 = {
+            // group of worker 8-11
+            { 10, 11 }, { 9, 11 }, { 9, 10 }, { 8, 10 }, { 8, 11 },
         };
         // [END allowed_groups]
 
-        // Model.
-        // [START model]
+        // Solver.
+        // [START solver]
         Solver solver = Solver.CreateSolver("SCIP");
-        // [END model]
+        if (solver is null)
+        {
+            return;
+        }
+        // [END solver]
 
         // Variables.
         // [START variables]
@@ -111,57 +106,60 @@ public class AssignmentGroupsMip
         Variable[] work = new Variable[numWorkers];
         foreach (int worker in allWorkers)
         {
-          work[worker] = solver.MakeBoolVar($"work[{worker}]");
+            work[worker] = solver.MakeBoolVar($"work[{worker}]");
         }
 
         foreach (int worker in allWorkers)
         {
-          Variable[] vars = new Variable[numTasks];
-          foreach (int task in allTasks)
-          {
-            vars[task] = x[worker, task];
-          }
-          solver.Add(work[worker] == LinearExprArrayHelper.Sum(vars));
+            Variable[] vars = new Variable[numTasks];
+            foreach (int task in allTasks)
+            {
+                vars[task] = x[worker, task];
+            }
+            solver.Add(work[worker] == LinearExprArrayHelper.Sum(vars));
         }
 
         // Group1
         Constraint constraint_g1 = solver.MakeConstraint(1, 1, "");
-        for (int i=0; i < group1.GetLength(0); ++i) {
-          // a*b can be transformed into 0 <= a + b - 2*p <= 1 with p in [0,1]
-          // p is True if a AND b, False otherwise
-          Constraint constraint = solver.MakeConstraint(0, 1, "");
-          constraint.SetCoefficient(work[group1[i,0]], 1);
-          constraint.SetCoefficient(work[group1[i,1]], 1);
-          Variable p = solver.MakeBoolVar($"g1_p{i}");
-          constraint.SetCoefficient(p, -2);
+        for (int i = 0; i < group1.GetLength(0); ++i)
+        {
+            // a*b can be transformed into 0 <= a + b - 2*p <= 1 with p in [0,1]
+            // p is True if a AND b, False otherwise
+            Constraint constraint = solver.MakeConstraint(0, 1, "");
+            constraint.SetCoefficient(work[group1[i, 0]], 1);
+            constraint.SetCoefficient(work[group1[i, 1]], 1);
+            Variable p = solver.MakeBoolVar($"g1_p{i}");
+            constraint.SetCoefficient(p, -2);
 
-          constraint_g1.SetCoefficient(p, 1);
+            constraint_g1.SetCoefficient(p, 1);
         }
         // Group2
         Constraint constraint_g2 = solver.MakeConstraint(1, 1, "");
-        for (int i=0; i < group2.GetLength(0); ++i) {
-          // a*b can be transformed into 0 <= a + b - 2*p <= 1 with p in [0,1]
-          // p is True if a AND b, False otherwise
-          Constraint constraint = solver.MakeConstraint(0, 1, "");
-          constraint.SetCoefficient(work[group2[i,0]], 1);
-          constraint.SetCoefficient(work[group2[i,1]], 1);
-          Variable p = solver.MakeBoolVar($"g2_p{i}");
-          constraint.SetCoefficient(p, -2);
+        for (int i = 0; i < group2.GetLength(0); ++i)
+        {
+            // a*b can be transformed into 0 <= a + b - 2*p <= 1 with p in [0,1]
+            // p is True if a AND b, False otherwise
+            Constraint constraint = solver.MakeConstraint(0, 1, "");
+            constraint.SetCoefficient(work[group2[i, 0]], 1);
+            constraint.SetCoefficient(work[group2[i, 1]], 1);
+            Variable p = solver.MakeBoolVar($"g2_p{i}");
+            constraint.SetCoefficient(p, -2);
 
-          constraint_g2.SetCoefficient(p, 1);
+            constraint_g2.SetCoefficient(p, 1);
         }
         // Group3
         Constraint constraint_g3 = solver.MakeConstraint(1, 1, "");
-        for (int i=0; i < group3.GetLength(0); ++i) {
-          // a*b can be transformed into 0 <= a + b - 2*p <= 1 with p in [0,1]
-          // p is True if a AND b, False otherwise
-          Constraint constraint = solver.MakeConstraint(0, 1, "");
-          constraint.SetCoefficient(work[group3[i,0]], 1);
-          constraint.SetCoefficient(work[group3[i,1]], 1);
-          Variable p = solver.MakeBoolVar($"g3_p{i}");
-          constraint.SetCoefficient(p, -2);
+        for (int i = 0; i < group3.GetLength(0); ++i)
+        {
+            // a*b can be transformed into 0 <= a + b - 2*p <= 1 with p in [0,1]
+            // p is True if a AND b, False otherwise
+            Constraint constraint = solver.MakeConstraint(0, 1, "");
+            constraint.SetCoefficient(work[group3[i, 0]], 1);
+            constraint.SetCoefficient(work[group3[i, 1]], 1);
+            Variable p = solver.MakeBoolVar($"g3_p{i}");
+            constraint.SetCoefficient(p, -2);
 
-          constraint_g3.SetCoefficient(p, 1);
+            constraint_g3.SetCoefficient(p, 1);
         }
         // [END assignments]
 

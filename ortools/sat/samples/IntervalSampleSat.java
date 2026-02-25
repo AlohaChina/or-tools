@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// [START program]
 package com.google.ortools.sat.samples;
 
 import com.google.ortools.Loader;
@@ -30,7 +31,7 @@ public class IntervalSampleSat {
     IntVar startVar = model.newIntVar(0, horizon, "start");
     IntVar endVar = model.newIntVar(0, horizon, "end");
     IntervalVar intervalVar = model.newIntervalVar(
-        startVar, LinearExpr.constant(10), LinearExpr.affine(endVar, 1, 2), "interval");
+        startVar, LinearExpr.constant(10), LinearExpr.newBuilder().add(endVar).add(2), "interval");
     System.out.println(intervalVar);
 
     // If the size is fixed, a simpler version uses the start expression and the size.
@@ -43,3 +44,4 @@ public class IntervalSampleSat {
     System.out.println(fixedInterval);
   }
 }
+// [END program]

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,15 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_GLOP_VARIABLE_VALUES_H_
-#define OR_TOOLS_GLOP_VARIABLE_VALUES_H_
+#ifndef ORTOOLS_GLOP_VARIABLE_VALUES_H_
+#define ORTOOLS_GLOP_VARIABLE_VALUES_H_
 
+#include <algorithm>
+#include <string>
+#include <vector>
+
+#include "absl/types/span.h"
 #include "ortools/glop/basis_representation.h"
 #include "ortools/glop/dual_edge_norms.h"
+#include "ortools/glop/parameters.pb.h"
 #include "ortools/glop/pricing.h"
 #include "ortools/glop/variables_info.h"
 #include "ortools/lp_data/lp_types.h"
 #include "ortools/lp_data/scattered_vector.h"
+#include "ortools/lp_data/sparse.h"
 #include "ortools/util/stats.h"
 
 namespace operations_research {
@@ -49,8 +56,12 @@ class VariableValues {
                  DualEdgeNorms* dual_edge_norms,
                  DynamicMaximum<RowIndex>* dual_prices);
 
+  // This type is neither copyable nor movable.
+  VariableValues(const VariableValues&) = delete;
+  VariableValues& operator=(const VariableValues&) = delete;
+
   // Getters for the variable values.
-  const Fractional Get(ColIndex col) const { return variable_values_[col]; }
+  Fractional Get(ColIndex col) const { return variable_values_[col]; }
   const DenseRow& GetDenseRow() const { return variable_values_; }
 
   // Sets the value of a non-basic variable to the exact value implied by its
@@ -90,7 +101,7 @@ class VariableValues {
   Fractional ComputeSumOfPrimalInfeasibilities() const;
 
   // Updates the variable during a simplex pivot:
-  // - step * direction is substracted from the basic variables value.
+  // - step * direction is subtracted from the basic variables value.
   // - step is added to the entering column value.
   void UpdateOnPivoting(const ScatteredColumn& direction, ColIndex entering_col,
                         Fractional step);
@@ -100,19 +111,26 @@ class VariableValues {
   // update_basic_variables is true. The update is done in an incremental way
   // and is thus more efficient than calling afterwards
   // RecomputeBasicVariableValues() and RecomputeDualPrices().
-  void UpdateGivenNonBasicVariables(const std::vector<ColIndex>& cols_to_update,
+  void UpdateGivenNonBasicVariables(absl::Span<const ColIndex> cols_to_update,
                                     bool update_basic_variables);
 
   // Functions dealing with the primal-infeasible basic variables. A basic
   // variable is primal-infeasible if its infeasibility is stricly greater than
-  // the primal feasibility tolerance. These are exactly the dual "prices" and
-  // are just used during the dual simplex.
+  // the primal feasibility tolerance. These are exactly the dual "prices" once
+  // recalled by the norms. This is only used during the dual simplex.
   //
   // This information is only available after a call to RecomputeDualPrices()
   // and has to be kept in sync by calling UpdateDualPrices() for the rows that
   // changed values.
-  void RecomputeDualPrices();
-  void UpdateDualPrices(const std::vector<RowIndex>& row);
+  //
+  // TODO(user): On some problem like stp3d.mps or pds-100.mps, using different
+  // price like abs(infeasibility) / squared_norms give better result. Some
+  // solver switch according to a criteria like all entry are +1/-1, the column
+  // have no more than 24 non-zero and the average column size is no more than
+  // 6! Understand and implement some variant of this? I think the gain is
+  // mainly because of using sparser vectors?
+  void RecomputeDualPrices(bool put_more_importance_on_norm = false);
+  void UpdateDualPrices(absl::Span<const RowIndex> row);
 
   // The primal phase I objective is related to the primal infeasible
   // information above. The cost of a basic column will be 1 if the variable is
@@ -133,13 +151,12 @@ class VariableValues {
   // It is important that the infeasibility is always computed in the same
   // way. So the code should always use these functions that returns a positive
   // value when the variable is out of bounds.
-  Fractional GetUpperBoundInfeasibility(ColIndex col) const {
-    return variable_values_[col] -
-           variables_info_.GetVariableUpperBounds()[col];
-  }
-  Fractional GetLowerBoundInfeasibility(ColIndex col) const {
-    return variables_info_.GetVariableLowerBounds()[col] -
-           variable_values_[col];
+  Fractional GetColInfeasibility(ColIndex col,
+                                 DenseRow::ConstView variable_values,
+                                 DenseRow::ConstView lower_bounds,
+                                 DenseRow::ConstView upper_bounds) const {
+    return std::max(variable_values[col] - upper_bounds[col],
+                    lower_bounds[col] - variable_values[col]);
   }
 
   // Input problem data.
@@ -148,6 +165,10 @@ class VariableValues {
   const RowToColMapping& basis_;
   const VariablesInfo& variables_info_;
   const BasisFactorization& basis_factorization_;
+
+  // This is set by RecomputeDualPrices() so that UpdateDualPrices() use
+  // the same formula.
+  bool put_more_importance_on_norm_ = false;
 
   // The dual prices are a normalized version of the primal infeasibility.
   DualEdgeNorms* dual_edge_norms_;
@@ -161,8 +182,6 @@ class VariableValues {
 
   // A temporary scattered column that is always reset to all zero after use.
   ScatteredColumn initially_all_zero_scratchpad_;
-
-  DISALLOW_COPY_AND_ASSIGN(VariableValues);
 };
 
 template <typename Rows>
@@ -171,12 +190,17 @@ bool VariableValues::UpdatePrimalPhaseICosts(const Rows& rows,
   SCOPED_TIME_STAT(&stats_);
   bool changed = false;
   const Fractional tolerance = parameters_.primal_feasibility_tolerance();
+  const DenseRow::ConstView variable_values = variable_values_.const_view();
+  const DenseRow::ConstView lower_bounds =
+      variables_info_.GetVariableLowerBounds().const_view();
+  const DenseRow::ConstView upper_bounds =
+      variables_info_.GetVariableUpperBounds().const_view();
   for (const RowIndex row : rows) {
     const ColIndex col = basis_[row];
     Fractional new_cost = 0.0;
-    if (GetUpperBoundInfeasibility(col) > tolerance) {
+    if (variable_values[col] - upper_bounds[col] > tolerance) {
       new_cost = 1.0;
-    } else if (GetLowerBoundInfeasibility(col) > tolerance) {
+    } else if (lower_bounds[col] - variable_values[col] > tolerance) {
       new_cost = -1.0;
     }
     if (new_cost != (*objective)[col]) {
@@ -190,4 +214,4 @@ bool VariableValues::UpdatePrimalPhaseICosts(const Rows& rows,
 }  // namespace glop
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_GLOP_VARIABLE_VALUES_H_
+#endif  // ORTOOLS_GLOP_VARIABLE_VALUES_H_

@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,14 +13,35 @@
 
 #include "ortools/bop/bop_ls.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
+#include <memory>
+#include <string>
+#include <vector>
 
-#include "absl/memory/memory.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/meta/type_traits.h"
+#include "absl/random/bit_gen_ref.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "ortools/base/logging.h"
 #include "ortools/base/strong_vector.h"
+#include "ortools/bop/bop_base.h"
+#include "ortools/bop/bop_parameters.pb.h"
+#include "ortools/bop/bop_solution.h"
+#include "ortools/bop/bop_types.h"
 #include "ortools/bop/bop_util.h"
-#include "ortools/sat/boolean_problem.h"
+#include "ortools/sat/boolean_problem.pb.h"
+#include "ortools/sat/sat_base.h"
+#include "ortools/sat/sat_solver.h"
+#include "ortools/util/strong_integers.h"
+#include "ortools/util/time_limit.h"
 
 namespace operations_research {
 namespace bop {
@@ -33,7 +54,7 @@ using ::operations_research::sat::LinearObjective;
 // LocalSearchOptimizer
 //------------------------------------------------------------------------------
 
-LocalSearchOptimizer::LocalSearchOptimizer(const std::string& name,
+LocalSearchOptimizer::LocalSearchOptimizer(absl::string_view name,
                                            int max_num_decisions,
                                            absl::BitGenRef random,
                                            sat::SatSolver* sat_propagator)
@@ -44,7 +65,7 @@ LocalSearchOptimizer::LocalSearchOptimizer(const std::string& name,
       assignment_iterator_(),
       random_(random) {}
 
-LocalSearchOptimizer::~LocalSearchOptimizer() {}
+LocalSearchOptimizer::~LocalSearchOptimizer() = default;
 
 bool LocalSearchOptimizer::ShouldBeRun(
     const ProblemState& problem_state) const {
@@ -59,7 +80,7 @@ BopOptimizerBase::Status LocalSearchOptimizer::Optimize(
   learned_info->Clear();
 
   if (assignment_iterator_ == nullptr) {
-    assignment_iterator_ = absl::make_unique<LocalSearchAssignmentIterator>(
+    assignment_iterator_ = std::make_unique<LocalSearchAssignmentIterator>(
         problem_state, max_num_decisions_,
         parameters.max_num_broken_constraints_in_ls(), random_, &sat_wrapper_);
   }
@@ -302,7 +323,7 @@ void AssignmentAndConstraintFeasibilityMaintainer::
 }
 
 void AssignmentAndConstraintFeasibilityMaintainer::Assign(
-    const std::vector<sat::Literal>& literals) {
+    absl::Span<const sat::Literal> literals) {
   for (const sat::Literal& literal : literals) {
     const VariableIndex var(literal.Variable().value());
     const bool value = literal.IsPositive();
@@ -550,7 +571,7 @@ ConstraintIndex OneFlipConstraintRepairer::ConstraintToRepair() const {
 TermIndex OneFlipConstraintRepairer::NextRepairingTerm(
     ConstraintIndex ct_index, TermIndex init_term_index,
     TermIndex start_term_index) const {
-  const absl::StrongVector<TermIndex, ConstraintTerm>& terms =
+  const util_intops::StrongVector<TermIndex, ConstraintTerm>& terms =
       by_constraint_matrix_[ct_index];
   const int64_t constraint_value = maintainer_.ConstraintValue(ct_index);
   const int64_t lb = maintainer_.ConstraintLowerBound(ct_index);
@@ -602,13 +623,13 @@ sat::Literal OneFlipConstraintRepairer::GetFlip(ConstraintIndex ct_index,
 }
 
 void OneFlipConstraintRepairer::SortTermsOfEachConstraints(int num_variables) {
-  absl::StrongVector<VariableIndex, int64_t> objective(num_variables, 0);
+  util_intops::StrongVector<VariableIndex, int64_t> objective(num_variables, 0);
   for (const ConstraintTerm& term :
        by_constraint_matrix_[AssignmentAndConstraintFeasibilityMaintainer::
                                  kObjectiveConstraint]) {
     objective[term.var] = std::abs(term.weight);
   }
-  for (absl::StrongVector<TermIndex, ConstraintTerm>& terms :
+  for (util_intops::StrongVector<TermIndex, ConstraintTerm>& terms :
        by_constraint_matrix_) {
     std::sort(terms.begin(), terms.end(),
               [&objective](const ConstraintTerm& a, const ConstraintTerm& b) {
@@ -628,6 +649,7 @@ void SatWrapper::BacktrackAll() { sat_solver_->Backtrack(0); }
 std::vector<sat::Literal> SatWrapper::FullSatTrail() const {
   std::vector<sat::Literal> propagated_literals;
   const sat::Trail& trail = sat_solver_->LiteralTrail();
+  propagated_literals.reserve(trail.Index());
   for (int trail_index = 0; trail_index < trail.Index(); ++trail_index) {
     propagated_literals.push_back(trail[trail_index]);
   }
@@ -644,7 +666,7 @@ int SatWrapper::ApplyDecision(sat::Literal decision_literal,
   const int old_decision_level = sat_solver_->CurrentDecisionLevel();
   const int new_trail_index =
       sat_solver_->EnqueueDecisionAndBackjumpOnConflict(decision_literal);
-  if (sat_solver_->IsModelUnsat()) {
+  if (sat_solver_->ModelIsUnsat()) {
     return old_decision_level + 1;
   }
 
@@ -882,7 +904,7 @@ bool LocalSearchAssignmentIterator::NewStateIsInTranspositionTable(
     sat::Literal l) {
   if (search_nodes_.size() + 1 > kStoredMaxDecisions) return false;
 
-  // Fill the transposition table element, i.e the array 'a' of decisions.
+  // Fill the transposition table element, i.e. the array 'a' of decisions.
   std::array<int32_t, kStoredMaxDecisions> a;
   InitializeTranspositionTableKey(&a);
   a[search_nodes_.size()] = l.SignedValue();
@@ -900,7 +922,7 @@ void LocalSearchAssignmentIterator::InsertInTranspositionTable() {
   // If there is more decision that kStoredMaxDecisions, do nothing.
   if (search_nodes_.size() > kStoredMaxDecisions) return;
 
-  // Fill the transposition table element, i.e the array 'a' of decisions.
+  // Fill the transposition table element, i.e. the array 'a' of decisions.
   std::array<int32_t, kStoredMaxDecisions> a;
   InitializeTranspositionTableKey(&a);
   std::sort(a.begin(), a.begin() + search_nodes_.size());

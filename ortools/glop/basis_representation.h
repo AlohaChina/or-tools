@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,8 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_GLOP_BASIS_REPRESENTATION_H_
-#define OR_TOOLS_GLOP_BASIS_REPRESENTATION_H_
+#ifndef ORTOOLS_GLOP_BASIS_REPRESENTATION_H_
+#define ORTOOLS_GLOP_BASIS_REPRESENTATION_H_
+
+#include <string>
+#include <vector>
 
 #include "ortools/base/logging.h"
 #include "ortools/glop/lu_factorization.h"
@@ -52,6 +55,11 @@ namespace glop {
 class EtaMatrix {
  public:
   EtaMatrix(ColIndex eta_col, const ScatteredColumn& direction);
+
+  // This type is neither copyable nor movable.
+  EtaMatrix(const EtaMatrix&) = delete;
+  EtaMatrix& operator=(const EtaMatrix&) = delete;
+
   virtual ~EtaMatrix();
 
   // Solves the system y.E = c, 'c' beeing the initial value of 'y'.
@@ -97,8 +105,6 @@ class EtaMatrix {
   // stored in eta_col_coefficient_ instead.
   DenseColumn eta_coeff_;
   SparseColumn sparse_eta_coeff_;
-
-  DISALLOW_COPY_AND_ASSIGN(EtaMatrix);
 };
 
 // An eta factorization corresponds to the product of k eta matrices,
@@ -109,6 +115,11 @@ class EtaMatrix {
 class EtaFactorization {
  public:
   EtaFactorization();
+
+  // This type is neither copyable nor movable.
+  EtaFactorization(const EtaFactorization&) = delete;
+  EtaFactorization& operator=(const EtaFactorization&) = delete;
+
   virtual ~EtaFactorization();
 
   // Deletes all eta matrices.
@@ -133,8 +144,6 @@ class EtaFactorization {
 
  private:
   std::vector<EtaMatrix*> eta_matrix_;
-
-  DISALLOW_COPY_AND_ASSIGN(EtaFactorization);
 };
 
 // A basis factorization is the product of an eta factorization and
@@ -152,6 +161,11 @@ class BasisFactorization {
  public:
   BasisFactorization(const CompactSparseMatrix* compact_matrix,
                      const RowToColMapping* basis);
+
+  // This type is neither copyable nor movable.
+  BasisFactorization(const BasisFactorization&) = delete;
+  BasisFactorization& operator=(const BasisFactorization&) = delete;
+
   virtual ~BasisFactorization();
 
   // Sets the parameters for this component.
@@ -293,6 +307,13 @@ class BasisFactorization {
   // solve and each factorization.
   double DeterministicTime() const;
 
+  // Returns the number of updates since last refactorization.
+  int NumUpdates() const { return num_updates_; }
+
+  EntryIndex NumberOfEntriesInLU() const {
+    return lu_factorization_.NumberOfEntries();
+  }
+
  private:
   // Called by ForceRefactorization() or Refactorize() or Initialize().
   Status ComputeFactorization();
@@ -376,11 +397,9 @@ class BasisFactorization {
   // mutable because the Solve() functions are const but need to update this.
   double last_factorization_deterministic_time_ = 0.0;
   mutable double deterministic_time_;
-
-  DISALLOW_COPY_AND_ASSIGN(BasisFactorization);
 };
 
 }  // namespace glop
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_GLOP_BASIS_REPRESENTATION_H_
+#endif  // ORTOOLS_GLOP_BASIS_REPRESENTATION_H_

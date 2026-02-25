@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2010-2021 Google LLC
+# Copyright 2010-2025 Google LLC
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 # [START program]
 """Simple Constraint optimization example."""
 
@@ -23,27 +24,28 @@ def main():
     """Entry point of the program."""
     # Instantiate the solver.
     # [START solver]
-    solver = pywrapcp.Solver('CPSimple')
+    solver = pywrapcp.Solver("CPSimple")
     # [END solver]
 
     # Create the variables.
     # [START variables]
     num_vals = 3
-    x = solver.IntVar(0, num_vals - 1, 'x')
-    y = solver.IntVar(0, num_vals - 1, 'y')
-    z = solver.IntVar(0, num_vals - 1, 'z')
+    x = solver.IntVar(0, num_vals - 1, "x")
+    y = solver.IntVar(0, num_vals - 1, "y")
+    z = solver.IntVar(0, num_vals - 1, "z")
     # [END variables]
 
     # Constraint 0: x != y.
     # [START constraints]
     solver.Add(x != y)
-    print('Number of constraints: ', solver.Constraints())
+    print("Number of constraints: ", solver.Constraints())
     # [END constraints]
 
     # Solve the problem.
     # [START solve]
-    decision_builder = solver.Phase([x, y, z], solver.CHOOSE_FIRST_UNBOUND,
-                                    solver.ASSIGN_MIN_VALUE)
+    decision_builder = solver.Phase(
+        [x, y, z], solver.CHOOSE_FIRST_UNBOUND, solver.ASSIGN_MIN_VALUE
+    )
     # [END solve]
 
     # Print solution on console.
@@ -52,21 +54,21 @@ def main():
     solver.NewSearch(decision_builder)
     while solver.NextSolution():
         count += 1
-        solution = 'Solution {}:\n'.format(count)
+        solution = f"Solution {count}:\n"
         for var in [x, y, z]:
-            solution += ' {} = {}'.format(var.Name(), var.Value())
+            solution += f" {var.Name()} = {var.Value()}"
         print(solution)
     solver.EndSearch()
-    print('Number of solutions found: ', count)
+    print(f"Number of solutions found: {count}")
     # [END print_solution]
 
     # [START advanced]
-    print('Advanced usage:')
-    print('Problem solved in ', solver.WallTime(), 'ms')
-    print('Memory usage: ', pywrapcp.Solver.MemoryUsage(), 'bytes')
+    print("Advanced usage:")
+    print(f"Problem solved in {solver.WallTime()}ms")
+    print(f"Memory usage: {pywrapcp.Solver.MemoryUsage()}bytes")
     # [END advanced]
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 # [END program]

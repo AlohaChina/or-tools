@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,34 +13,43 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/base/attributes.h"
-#include "ortools/base/hash.h"
-#include "ortools/base/integral_types.h"
+#include "absl/log/check.h"
 #include "ortools/base/logging.h"
 #include "ortools/glop/lp_solver.h"
 #include "ortools/glop/parameters.pb.h"
 #include "ortools/linear_solver/glop_utils.h"
 #include "ortools/linear_solver/linear_solver.h"
+#include "ortools/linear_solver/proto_solver/glop_proto_solver.h"
 #include "ortools/lp_data/lp_data.h"
 #include "ortools/lp_data/lp_types.h"
 #include "ortools/port/proto_utils.h"
+#include "ortools/util/lazy_mutable_copy.h"
 #include "ortools/util/time_limit.h"
-
 namespace operations_research {
-
-namespace {}  // Anonymous namespace
 
 class GLOPInterface : public MPSolverInterface {
  public:
-  explicit GLOPInterface(MPSolver* const solver);
+  explicit GLOPInterface(MPSolver* solver);
   ~GLOPInterface() override;
 
   // ----- Solve -----
   MPSolver::ResultStatus Solve(const MPSolverParameters& param) override;
   bool InterruptSolve() override;
+
+  // ----- Directly solve proto is supported ---
+  bool SupportsDirectlySolveProto(std::atomic<bool>* interrupt) const override {
+    return true;
+  }
+  MPSolutionResponse DirectlySolveProto(LazyMutableCopy<MPModelRequest> request,
+                                        std::atomic<bool>* interrupt) override {
+    return GlopSolveProto(std::move(request), interrupt);
+  }
 
   // ----- Model modifications and extraction -----
   void Reset() override;
@@ -48,13 +57,12 @@ class GLOPInterface : public MPSolverInterface {
   void SetVariableBounds(int index, double lb, double ub) override;
   void SetVariableInteger(int index, bool integer) override;
   void SetConstraintBounds(int index, double lb, double ub) override;
-  void AddRowConstraint(MPConstraint* const ct) override;
-  void AddVariable(MPVariable* const var) override;
-  void SetCoefficient(MPConstraint* const constraint,
-                      const MPVariable* const variable, double new_value,
-                      double old_value) override;
-  void ClearConstraint(MPConstraint* const constraint) override;
-  void SetObjectiveCoefficient(const MPVariable* const variable,
+  void AddRowConstraint(MPConstraint* ct) override;
+  void AddVariable(MPVariable* var) override;
+  void SetCoefficient(MPConstraint* constraint, const MPVariable* variable,
+                      double new_value, double old_value) override;
+  void ClearConstraint(MPConstraint* constraint) override;
+  void SetObjectiveCoefficient(const MPVariable* variable,
                                double coefficient) override;
   void SetObjectiveOffset(double value) override;
   void ClearObjective() override;
@@ -146,7 +154,7 @@ MPSolver::ResultStatus GLOPInterface::Solve(const MPSolverParameters& param) {
   result_status_ = GlopToMPSolverResultStatus(status);
   objective_value_ = lp_solver_.GetObjectiveValue();
 
-  const size_t num_vars = solver_->variables_.size();
+  const int num_vars = solver_->variables_.size();
   column_status_.resize(num_vars, MPSolver::FREE);
   for (int var_id = 0; var_id < num_vars; ++var_id) {
     MPVariable* const var = solver_->variables_[var_id];
@@ -165,7 +173,7 @@ MPSolver::ResultStatus GLOPInterface::Solve(const MPSolverParameters& param) {
     column_status_.at(var_id) = GlopToMPSolverVariableStatus(variable_status);
   }
 
-  const size_t num_constraints = solver_->constraints_.size();
+  const int num_constraints = solver_->constraints_.size();
   row_status_.resize(num_constraints, MPSolver::FREE);
   for (int ct_id = 0; ct_id < num_constraints; ++ct_id) {
     MPConstraint* const ct = solver_->constraints_[ct_id];
@@ -261,8 +269,7 @@ bool GLOPInterface::IsLP() const { return true; }
 bool GLOPInterface::IsMIP() const { return false; }
 
 std::string GLOPInterface::SolverVersion() const {
-  // TODO(user): Decide how to version glop. Add a GetVersion() to LPSolver.
-  return "Glop-0.0";
+  return glop::LPSolver::GlopVersion();
 }
 
 void* GLOPInterface::underlying_solver() { return &lp_solver_; }
@@ -426,9 +433,16 @@ void GLOPInterface::NonIncrementalChange() {
   sync_status_ = MUST_RELOAD;
 }
 
-// Register GLOP in the global linear solver factory.
-MPSolverInterface* BuildGLOPInterface(MPSolver* const solver) {
-  return new GLOPInterface(solver);
-}
+namespace {
+
+// See MpSolverInterfaceFactoryRepository for details.
+const void* const kRegisterGlop ABSL_ATTRIBUTE_UNUSED = [] {
+  MPSolverInterfaceFactoryRepository::GetInstance()->Register(
+      [](MPSolver* const solver) { return new GLOPInterface(solver); },
+      MPSolver::GLOP_LINEAR_PROGRAMMING);
+  return nullptr;
+}();
+
+}  // namespace
 
 }  // namespace operations_research

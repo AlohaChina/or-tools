@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,20 +11,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_SAT_ALL_DIFFERENT_H_
-#define OR_TOOLS_SAT_ALL_DIFFERENT_H_
+#ifndef ORTOOLS_SAT_ALL_DIFFERENT_H_
+#define ORTOOLS_SAT_ALL_DIFFERENT_H_
 
 #include <cstdint>
 #include <functional>
 #include <utility>
 #include <vector>
 
-#include "absl/container/flat_hash_map.h"
-#include "ortools/base/integral_types.h"
-#include "ortools/base/macros.h"
+#include "absl/log/check.h"
+#include "absl/types/span.h"
+#include "ortools/base/logging.h"
+#include "ortools/sat/enforcement.h"
+#include "ortools/sat/enforcement_helper.h"
 #include "ortools/sat/integer.h"
+#include "ortools/sat/integer_base.h"
 #include "ortools/sat/model.h"
 #include "ortools/sat/sat_base.h"
+#include "ortools/sat/util.h"
+#include "ortools/util/bitset.h"
+#include "ortools/util/strong_integers.h"
 
 namespace operations_research {
 namespace sat {
@@ -33,7 +39,7 @@ namespace sat {
 // encodes all the variables and simply enforces a <= 1 constraint on each
 // possible values.
 std::function<void(Model*)> AllDifferentBinary(
-    const std::vector<IntegerVariable>& vars);
+    absl::Span<const IntegerVariable> vars);
 
 // Enforces that the given tuple of variables takes different values.
 // Same as AllDifferentBinary() but use a different propagator that only enforce
@@ -44,9 +50,10 @@ std::function<void(Model*)> AllDifferentBinary(
 // this will not remove already taken values from inside a domain, but it will
 // propagates more the domain bounds.
 std::function<void(Model*)> AllDifferentOnBounds(
-    const std::vector<IntegerVariable>& vars);
+    absl::Span<const IntegerVariable> vars);
 std::function<void(Model*)> AllDifferentOnBounds(
-    const std::vector<AffineExpression>& expressions);
+    absl::Span<const Literal> enforcement_literals,
+    absl::Span<const AffineExpression> expressions);
 
 // This constraint forces all variables to take different values. This is meant
 // to be used as a complement to an alldifferent decomposition like
@@ -59,14 +66,19 @@ std::function<void(Model*)> AllDifferentOnBounds(
 //
 // This will fully encode variables.
 std::function<void(Model*)> AllDifferentAC(
-    const std::vector<IntegerVariable>& variables);
+    absl::Span<const IntegerVariable> variables);
 
 // Implementation of AllDifferentAC().
 class AllDifferentConstraint : PropagatorInterface {
  public:
-  AllDifferentConstraint(std::vector<IntegerVariable> variables,
-                         IntegerEncoder* encoder, Trail* trail,
-                         IntegerTrail* integer_trail);
+  AllDifferentConstraint(absl::Span<const IntegerVariable> variables,
+                         Model* model);
+
+  // In a circuit, the successor of all node must be "different".
+  // Thus this propagator can also be used in this context.
+  AllDifferentConstraint(int num_nodes, absl::Span<const int> tails,
+                         absl::Span<const int> heads,
+                         absl::Span<const Literal> literals, Model* model);
 
   bool Propagate() final;
   void RegisterWith(GenericLiteralWatcher* watcher);
@@ -82,27 +94,23 @@ class AllDifferentConstraint : PropagatorInterface {
   // or manipulate it to create what-if scenarios without modifying successor_.
   bool MakeAugmentingPath(int start);
 
-  // Accessors to the cache of literals.
-  inline LiteralIndex VariableLiteralIndexOf(int x, int64_t value);
-  inline bool VariableHasPossibleValue(int x, int64_t value);
-
   // This caches all literals of the fully encoded variables.
   // Values of a given variable are 0-indexed using offsets variable_min_value_,
   // the set of all values is globally offset using offset min_all_values_.
   // TODO(user): compare this encoding to a sparser hash_map encoding.
   const int num_variables_;
   const std::vector<IntegerVariable> variables_;
-  int64_t min_all_values_;
-  int64_t num_all_values_;
-  std::vector<int64_t> variable_min_value_;
-  std::vector<int64_t> variable_max_value_;
-  std::vector<std::vector<LiteralIndex>> variable_literal_index_;
+
+  // Note that we remap all value into [0, num_values_) in a "dense" way.
+  std::vector<std::vector<std::pair<int, Literal>>>
+      variable_to_possible_values_;
+  int64_t num_values_;
 
   // Internal state of MakeAugmentingPath().
   // value_to_variable_ and variable_to_value_ represent the current assignment;
   // -1 means not assigned. Otherwise,
   // variable_to_value_[var] = value <=> value_to_variable_[value] = var.
-  std::vector<std::vector<int>> successor_;
+  CompactVectorVector<int> successor_;
   std::vector<bool> value_visited_;
   std::vector<bool> variable_visited_;
   std::vector<int> value_to_variable_;
@@ -127,7 +135,7 @@ class AllDifferentConstraint : PropagatorInterface {
   // part in the alternating cycle, and filter with only the SCC decomposition.
   // When num_variables_ == num_all_values_, the dummy node is useless,
   // we add it anyway to simplify the code.
-  std::vector<std::vector<int>> residual_graph_successors_;
+  CompactVectorVector<int> residual_graph_successors_;
   std::vector<int> component_number_;
 
   Trail* trail_;
@@ -137,10 +145,10 @@ class AllDifferentConstraint : PropagatorInterface {
 // Implements the all different bound consistent propagator with explanation.
 // That is, given n affine expressions that must take different values, this
 // propagates the bounds of each expression as much as possible. The key is to
-// detect the so called Hall interval which are interval of size k that contains
-// the domain of k expressinos. Because all the variables must take different
-// values, we can deduce that the domain of the other variables cannot contains
-// such Hall interval.
+// detect the so called Hall intervals which are intervals of size k that
+// contain the domain of k expressions. Because all the variables must take
+// different values, we can deduce that the domain of the other variables cannot
+// contain such Hall interval.
 //
 // We use a "fast" O(n log n) algorithm.
 //
@@ -149,11 +157,16 @@ class AllDifferentConstraint : PropagatorInterface {
 // https://cs.uwaterloo.ca/~vanbeek/Publications/ijcai03_TR.pdf
 class AllDifferentBoundsPropagator : public PropagatorInterface {
  public:
-  AllDifferentBoundsPropagator(const std::vector<AffineExpression>& expressions,
-                               IntegerTrail* integer_trail);
+  AllDifferentBoundsPropagator(absl::Span<const Literal> enforcement_literals,
+                               absl::Span<const AffineExpression> expressions,
+                               Model* model);
+
+  // This type is neither copyable nor movable.
+  AllDifferentBoundsPropagator(const AllDifferentBoundsPropagator&) = delete;
+  AllDifferentBoundsPropagator& operator=(const AllDifferentBoundsPropagator&) =
+      delete;
 
   bool Propagate() final;
-  void RegisterWith(GenericLiteralWatcher* watcher);
 
  private:
   // We locally cache the lb/ub for faster sorting and to guarantee some
@@ -164,6 +177,8 @@ class AllDifferentBoundsPropagator : public PropagatorInterface {
     IntegerValue ub;
   };
 
+  int RegisterWith(GenericLiteralWatcher* watcher);
+
   // Fills integer_reason_ with the reason why we have the given hall interval.
   void FillHallReason(IntegerValue hall_lb, IntegerValue hall_ub);
 
@@ -172,7 +187,7 @@ class AllDifferentBoundsPropagator : public PropagatorInterface {
   // them.
   bool PropagateLowerBounds();
   bool PropagateLowerBoundsInternal(IntegerValue min_lb,
-                                    absl::Span<CachedBounds> vars);
+                                    absl::Span<CachedBounds> bounds);
 
   // Internally, we will maintain a set of non-consecutive integer intervals of
   // the form [start, end]. Each point (i.e. IntegerValue) of such interval will
@@ -199,31 +214,30 @@ class AllDifferentBoundsPropagator : public PropagatorInterface {
 
   IntegerValue GetValue(int index) const { return base_ + IntegerValue(index); }
 
-  IntegerTrail* integer_trail_;
+  const IntegerTrail& integer_trail_;
+  EnforcementHelper& enforcement_helper_;
+  EnforcementId enforcement_id_;
 
   // These vector will be either sorted by lb or by -ub.
   std::vector<CachedBounds> bounds_;
   std::vector<CachedBounds> negated_bounds_;
 
-  // The list of Hall intervalls detected so far, sorted.
+  // The list of Hall intervals detected so far, sorted.
   std::vector<IntegerValue> hall_starts_;
   std::vector<IntegerValue> hall_ends_;
 
   // Non-consecutive intervals related data-structures.
   IntegerValue base_;
-  std::vector<int> indices_to_clear_;
   std::vector<int> index_to_start_index_;
   std::vector<int> index_to_end_index_;
-  std::vector<bool> index_is_present_;
+  SparseBitset<int> index_is_present_;
   std::vector<AffineExpression> index_to_expr_;
 
   // Temporary integer reason.
   std::vector<IntegerLiteral> integer_reason_;
-
-  DISALLOW_COPY_AND_ASSIGN(AllDifferentBoundsPropagator);
 };
 
 }  // namespace sat
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_SAT_ALL_DIFFERENT_H_
+#endif  // ORTOOLS_SAT_ALL_DIFFERENT_H_

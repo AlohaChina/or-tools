@@ -1,4 +1,4 @@
-// Copyright 2010-2021 Google LLC
+// Copyright 2010-2025 Google LLC
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -11,8 +11,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef OR_TOOLS_MATH_OPT_CORE_SPARSE_COLLECTION_MATCHERS_H_
-#define OR_TOOLS_MATH_OPT_CORE_SPARSE_COLLECTION_MATCHERS_H_
+#ifndef ORTOOLS_MATH_OPT_CORE_SPARSE_COLLECTION_MATCHERS_H_
+#define ORTOOLS_MATH_OPT_CORE_SPARSE_COLLECTION_MATCHERS_H_
 
 #include <cstdint>
 #include <initializer_list>
@@ -21,8 +21,8 @@
 #include <utility>
 #include <vector>
 
-#include "testing/base/public/gmock.h"
-#include "testing/base/public/gunit.h"
+#include "gtest/gtest.h"
+#include "ortools/base/gmock.h"
 #include "ortools/math_opt/core/sparse_vector_view.h"
 #include "ortools/math_opt/sparse_containers.pb.h"
 
@@ -82,4 +82,4 @@ MATCHER_P(SparseDoubleMatrixMatcher, coefficients, "") {
 }  // namespace math_opt
 }  // namespace operations_research
 
-#endif  // OR_TOOLS_MATH_OPT_CORE_SPARSE_COLLECTION_MATCHERS_H_
+#endif  // ORTOOLS_MATH_OPT_CORE_SPARSE_COLLECTION_MATCHERS_H_
